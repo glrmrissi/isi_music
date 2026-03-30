@@ -59,3 +59,10 @@ pub fn cache_path() -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("token.json"))
 }
+
+pub fn log_path() -> Result<PathBuf> {
+    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+    let dir = base.join("isi-music");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join("isi-music.log"))
+}

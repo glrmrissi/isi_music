@@ -200,6 +200,7 @@ impl SpotifyClient {
             repeat: self.repeat_state,
             progress_ms,
             duration_ms,
+            volume: 100,
         })
     }
 

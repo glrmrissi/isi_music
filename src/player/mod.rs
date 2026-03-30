@@ -8,7 +8,7 @@ use librespot_core::{
 use librespot_playback::{
     audio_backend,
     config::{AudioFormat, PlayerConfig},
-    mixer::NoOpVolume,
+    mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
 use std::sync::Arc;
@@ -24,9 +24,11 @@ pub enum PlayerNotification {
 
 pub struct NativePlayer {
     player: Arc<LibrespotPlayer>,
+    mixer: Arc<dyn Mixer>,
     queue: Vec<String>,
     current_index: Option<usize>,
     pub is_playing: bool,
+    pub volume: u8, // 0–100
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
 }
 
@@ -45,10 +47,14 @@ impl NativePlayer {
         let backend = audio_backend::find(None)
             .context("No audio backend found")?;
 
+        let mixer_fn = mixer::find(None).context("No mixer found")?;
+        let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
+        let volume_getter = soft_mixer.get_soft_volume();
+
         let player = LibrespotPlayer::new(
             PlayerConfig::default(),
             session,
-            Box::new(NoOpVolume),
+            volume_getter,
             move || backend(None, audio_format),
         );
 
@@ -86,9 +92,11 @@ impl NativePlayer {
 
         Ok(Self {
             player,
+            mixer: soft_mixer,
             queue: Vec::new(),
             current_index: None,
             is_playing: false,
+            volume: 100,
             event_rx: notif_rx,
         })
     }
@@ -151,5 +159,20 @@ impl NativePlayer {
 
     pub fn current_index(&self) -> Option<usize> {
         self.current_index
+    }
+
+    pub fn volume_up(&mut self) {
+        self.volume = self.volume.saturating_add(5).min(100);
+        self.apply_volume();
+    }
+
+    pub fn volume_down(&mut self) {
+        self.volume = self.volume.saturating_sub(5);
+        self.apply_volume();
+    }
+
+    fn apply_volume(&self) {
+        let v = (self.volume as u32 * 65535 / 100) as u16;
+        self.mixer.set_volume(v);
     }
 }

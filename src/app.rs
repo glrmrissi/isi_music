@@ -21,6 +21,7 @@ pub struct App {
     ui: Ui,
     state: UiState,
     last_poll: Instant,
+    last_tick: Instant,
     should_quit: bool,
 }
 
@@ -67,29 +68,76 @@ impl App {
             ui: Ui::new(),
             state,
             last_poll: Instant::now(),
+            last_tick: Instant::now(),
             should_quit: false,
         })
     }
 
-    pub async fn run(&mut self) -> Result<()> {
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+   pub async fn run<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+    self.last_tick = Instant::now();
 
-        let result = self.event_loop(&mut terminal).await;
+    loop {
+        let now = Instant::now();
+        let delta_time = now.duration_since(self.last_tick).as_millis() as u64;
+        self.last_tick = now;
 
-        disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
-        terminal.show_cursor()?;
+        let mut needs_sync = false; 
 
-        result
+        if let Some(player) = &mut self.player {
+            while let Ok(notif) = player.event_rx.try_recv() {
+                match notif {
+                    PlayerNotification::TrackEnded => {
+                        if player.next() {
+                            needs_sync = true; 
+                        } else {
+                            self.state.playback.is_playing = false;
+                        }
+                    }
+                    PlayerNotification::Playing => self.state.playback.is_playing = true,
+                    PlayerNotification::Paused => self.state.playback.is_playing = false,
+                    PlayerNotification::TrackUnavailable => {
+                        self.state.status_msg = Some("Track unavailable (Premium required)".to_string());
+                        self.state.playback.is_playing = false;
+                    }
+                }
+            }
+            self.state.playback.is_playing = player.is_playing;
+            self.state.playback.volume = player.volume;
+        } 
+
+        if needs_sync {
+            self.sync_track_selection();
+        }
+
+        terminal.draw(|f| {
+            self.ui.render(f, &mut self.state);
+        })?;
+
+        if crossterm::event::poll(std::time::Duration::from_millis(100))? {
+            if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
+                if key_event.code == crossterm::event::KeyCode::Char('q') {
+                    break;
+                }
+                self.handle_key(key_event.code, key_event.modifiers).await?;
+            }
+        }
+
+        if self.state.playback.is_playing {
+            if self.state.playback.progress_ms + delta_time < self.state.playback.duration_ms {
+                self.state.playback.progress_ms += delta_time;
+            } else if self.player.is_none() {
+                self.state.playback.is_playing = false;
+                self.state.playback.progress_ms = self.state.playback.duration_ms;
+            }
+        }
+
+        if self.should_quit {
+            break;
+        }
     }
+
+    Ok(())
+}
 
     async fn event_loop(
         &mut self,
@@ -128,6 +176,7 @@ impl App {
             }
             if let Some(player) = &self.player {
                 self.state.playback.is_playing = player.is_playing;
+                self.state.playback.volume = player.volume;
             }
 
             // Periodic polling — only fetches Spotify metadata when no native player
@@ -156,6 +205,21 @@ impl App {
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
 
+        // Search mode: most keys feed into the query
+        if self.state.search_active {
+            match code {
+                KeyCode::Esc => self.state.cancel_search(),
+                KeyCode::Enter => self.handle_enter().await,
+                KeyCode::Up | KeyCode::Char('k') => self.state.nav_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.state.nav_down(),
+                KeyCode::Backspace => self.state.search_pop(),
+                KeyCode::Tab => self.state.switch_focus(),
+                KeyCode::Char(c) => self.state.search_push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
+
         match (code, modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.should_quit = true;
@@ -166,6 +230,8 @@ impl App {
             (KeyCode::Tab, _) => self.state.switch_focus(),
 
             (KeyCode::Enter, _) => self.handle_enter().await,
+
+            (KeyCode::Char('/'), _) => self.state.start_search(),
 
             (KeyCode::Char(' '), _) => {
                 if let Some(player) = &mut self.player {
@@ -200,6 +266,19 @@ impl App {
                 match self.spotify.save_current_track().await {
                     Ok(_) => self.state.status_msg = Some("♥ Liked!".to_string()),
                     Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
+                }
+            }
+            // Volume control
+            (KeyCode::Char('+'), _) | (KeyCode::Char('='), _) => {
+                if let Some(player) = &mut self.player {
+                    player.volume_up();
+                    self.state.playback.volume = player.volume;
+                }
+            }
+            (KeyCode::Char('-'), _) => {
+                if let Some(player) = &mut self.player {
+                    player.volume_down();
+                    self.state.playback.volume = player.volume;
                 }
             }
 
