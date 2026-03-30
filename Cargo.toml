@@ -1,0 +1,50 @@
+[package]
+name = "isi-music"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "isi-music"
+path = "src/main.rs"
+
+[patch.crates-io]
+librespot-core = { path = "patches/librespot-core" }
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Spotify API
+rspotify = { version = "0.16", features = ["client-reqwest"] }
+
+# Spotify Connect / native audio
+librespot-core = "0.8"
+librespot-playback = { version = "0.8", features = ["rodio-backend"] }
+
+# .env support (desenvolvimento)
+dotenvy = "0.15"
+
+# URL parsing (OAuth callback)
+url = "2"
+
+# Diretórios XDG (config/cache do usuário)
+dirs = "5"
+
+# Config file
+toml = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
