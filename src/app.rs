@@ -115,9 +115,6 @@ impl App {
 
         if crossterm::event::poll(std::time::Duration::from_millis(100))? {
             if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
-                if key_event.code == crossterm::event::KeyCode::Char('q') {
-                    break;
-                }
                 self.handle_key(key_event.code, key_event.modifiers).await?;
             }
         }
@@ -128,6 +125,14 @@ impl App {
             } else if self.player.is_none() {
                 self.state.playback.is_playing = false;
                 self.state.playback.progress_ms = self.state.playback.duration_ms;
+            }
+
+            // Animate disc and marquee
+            self.state.spin_angle += delta_time as f64 * 0.003;
+            self.state.marquee_ms += delta_time;
+            if self.state.marquee_ms >= 120 {
+                self.state.marquee_offset += (self.state.marquee_ms / 120) as usize;
+                self.state.marquee_ms %= 120;
             }
         }
 
@@ -209,7 +214,35 @@ impl App {
         if self.state.search_active {
             match code {
                 KeyCode::Esc => self.state.cancel_search(),
-                KeyCode::Enter => self.handle_enter().await,
+                KeyCode::Enter => {
+                    let query = self.state.search_query.trim().to_string();
+                    if query.is_empty() {
+                        self.state.cancel_search();
+                    } else {
+                        self.state.status_msg = Some(format!("Searching \"{query}\"..."));
+                        match self.spotify.search_tracks(&query).await {
+                            Ok(tracks) => {
+                                let count = tracks.len();
+                                self.state.tracks = tracks;
+                                self.state.track_list.select(if count == 0 { None } else { Some(0) });
+                                // Use a sentinel so render_tracks knows a search ran (not an empty playlist)
+                                self.state.active_playlist_uri = Some(format!("search:{query}"));
+                                self.state.status_msg = if count == 0 {
+                                    Some(format!("No results for \"{query}\""))
+                                } else {
+                                    Some(format!("{count} results for \"{query}\""))
+                                };
+                                self.state.search_active = false;
+                                self.state.focus = crate::ui::Focus::Tracks;
+                            }
+                            Err(e) => {
+                                self.state.status_msg = Some(format!("Search error: {e:#}"));
+                                self.state.search_active = false;
+                                tracing::error!("Search failed for \"{query}\": {e:#}");
+                            }
+                        }
+                    }
+                }
                 KeyCode::Up | KeyCode::Char('k') => self.state.nav_up(),
                 KeyCode::Down | KeyCode::Char('j') => self.state.nav_down(),
                 KeyCode::Backspace => self.state.search_pop(),
@@ -294,13 +327,29 @@ impl App {
                 if let Some(playlist) = self.state.selected_playlist() {
                     let id = playlist.id.clone();
                     let name = playlist.name.clone();
+                    let uri = playlist.uri.clone();
                     self.state.status_msg = Some(format!("Loading {name}..."));
-                    match self.spotify.fetch_playlist_tracks(&id).await {
+                    let result = if id == "liked_songs" {
+                        self.spotify
+                            .fetch_liked_tracks()
+                            .await
+                            .map(|(tracks, total)| {
+                                // Update the liked songs entry with the real count
+                                if let Some(entry) = self.state.playlists.iter_mut().find(|p| p.id == "liked_songs") {
+                                    entry.total_tracks = total;
+                                }
+                                tracks
+                            })
+                    } else {
+                        self.spotify.fetch_playlist_tracks(&id).await
+                    };
+                    match result {
                         Ok(tracks) => {
                             self.state.tracks = tracks;
                             if !self.state.tracks.is_empty() {
                                 self.state.track_list.select(Some(0));
                             }
+                            self.state.active_playlist_uri = Some(uri);
                             self.state.status_msg = None;
                             self.state.switch_focus();
                         }
@@ -327,11 +376,21 @@ impl App {
                         }
                     } else {
                         // Fallback: control via Spotify API
-                        if let Some(playlist_uri) = self.state.active_playlist_uri.clone() {
-                            let track_uri = self.state.tracks[idx].uri.clone();
-                            if let Err(e) = self.spotify.play_in_context(&playlist_uri, &track_uri).await {
-                                self.state.status_msg = Some(format!("Error: {e}"));
-                            }
+                        let track_uri = self.state.tracks[idx].uri.clone();
+                        let is_playlist = self.state.active_playlist_uri
+                            .as_deref()
+                            .map(|u| !u.starts_with("search:") && u != "liked_songs")
+                            .unwrap_or(false);
+
+                        let result = if is_playlist {
+                            let uri = self.state.active_playlist_uri.clone().unwrap();
+                            self.spotify.play_in_context(&uri, &track_uri).await
+                        } else {
+                            self.spotify.play_track_uri(&track_uri).await
+                        };
+
+                        if let Err(e) = result {
+                            self.state.status_msg = Some(format!("Error: {e}"));
                         }
                     }
                 }

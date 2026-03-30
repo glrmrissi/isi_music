@@ -29,6 +29,7 @@ impl SpotifyAuth {
             redirect_uri: format!("http://127.0.0.1:{CALLBACK_PORT}/callback"),
             scopes: scopes!(
                 "streaming",
+                "user-read-private",
                 "user-read-playback-state",
                 "user-modify-playback-state",
                 "user-read-currently-playing",
