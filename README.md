@@ -6,7 +6,7 @@
 
 A terminal-based Spotify player written in Rust. Uses librespot for native audio playback — no browser, no Electron, just your terminal.
 
-![demo placeholder](https://via.placeholder.com/800x400?text=isi_music+demo)
+<img width="1915" height="1031" alt="image" src="https://github.com/user-attachments/assets/ff4de1b1-488f-4d9c-8e8f-411c7990c0c7" />
 
 ## Features
 
