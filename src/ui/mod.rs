@@ -939,14 +939,14 @@ impl Ui {
         let content = Line::from(vec![
             Span::styled(
                 fmt_duration(pb.progress_ms),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC),
+                Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
             ),
             Span::raw(" "),
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::raw(" "),
             Span::styled(
                 fmt_duration(pb.duration_ms),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC),
+                Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
             ),
         ]);
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);

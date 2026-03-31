@@ -60,6 +60,28 @@ pub fn cache_path() -> Result<PathBuf> {
     Ok(dir.join("token.json"))
 }
 
+pub fn volume_path() -> Result<PathBuf> {
+    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+    let dir = base.join("isi-music");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join("volume"))
+}
+
+pub fn load_volume() -> u8 {
+    volume_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|v| v.min(100))
+        .unwrap_or(100)
+}
+
+pub fn save_volume(volume: u8) {
+    if let Ok(p) = volume_path() {
+        let _ = std::fs::write(p, volume.to_string());
+    }
+}
+
 pub fn log_path() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("Could not determine cache directory")?;
     let dir = base.join("isi-music");

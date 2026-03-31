@@ -11,6 +11,7 @@ use librespot_playback::{
     mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
+use crate::config;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -90,15 +91,18 @@ impl NativePlayer {
             }
         });
 
-        Ok(Self {
+        let volume = config::load_volume();
+        let mut instance = Self {
             player,
             mixer: soft_mixer,
             queue: Vec::new(),
             current_index: None,
             is_playing: false,
-            volume: 100,
+            volume,
             event_rx: notif_rx,
-        })
+        };
+        instance.apply_volume();
+        Ok(instance)
     }
 
     pub fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
@@ -164,11 +168,13 @@ impl NativePlayer {
     pub fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
         self.apply_volume();
+        config::save_volume(self.volume);
     }
 
     pub fn volume_down(&mut self) {
         self.volume = self.volume.saturating_sub(5);
         self.apply_volume();
+        config::save_volume(self.volume);
     }
 
     pub fn seek(&self, position_ms: u32) {
