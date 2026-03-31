@@ -479,42 +479,47 @@ impl Ui {
         if inner.width == 0 || inner.height == 0 { return; }
 
         let title_seed = pb.title.chars().map(|c| c as u32).sum::<u32>() as f64;
-        let t = pb.progress_ms as f64 / 60.0;
+        let t = pb.progress_ms as f64 / 400.0;
+        let w = inner.width as f64;
+
+        // Sub-cell precision: each cell = 8 units (▁▂▃▄▅▆▇█)
+        let partial_chars = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
 
         for x in 0..inner.width {
             let x_f = x as f64;
+            // Each column has a fixed frequency/phase from its position — no traveling wave
+            let freq  = 0.5 + (x_f / w) * 3.0 + (x_f * 0.37 + title_seed * 0.01).sin() * 0.5;
+            let phase = x_f * 2.1 + title_seed * 0.07;
 
             let amplitude = if pb.is_playing {
-                let wave1 = (t * 1.2 + x_f * 0.8 + title_seed * 0.1).sin().abs();
-                let wave2 = (t * 2.5 + x_f * 0.3 + title_seed * 0.5).cos().abs();
-                let wave3 = (t * 0.5 + x_f * 1.2).sin().abs();
-                (wave1 * 0.4) + (wave2 * 0.4) + (wave3 * 0.2)
+                let a = (t * freq + phase).sin().abs();
+                let b = (t * freq * 0.53 + phase + 1.3).cos().abs();
+                let c = (t * freq * 1.7 + phase * 0.4).sin().abs();
+                (a * 0.5 + b * 0.3 + c * 0.2).clamp(0.03, 1.0)
             } else {
-                0.05
+                0.03
             };
 
-            let total_pixels = (inner.height * 4) as f64;
-            let target_h = (amplitude * total_pixels).clamp(1.0, total_pixels) as u16;
+            // Convert amplitude to units (height * 8 for sub-cell resolution)
+            let max_units = inner.height * 8;
+            let bar_units = ((amplitude * max_units as f64) as u16).min(max_units);
+            let full_cells = bar_units / 8;
+            let partial    = (bar_units % 8) as usize;
 
             for y in 0..inner.height {
                 let pos_x = inner.x + x;
                 let pos_y = inner.y + inner.height - 1 - y;
 
-                let cell_bottom_pixel = (y * 4) as u16;
-                let pixels_in_this_cell = target_h.saturating_sub(cell_bottom_pixel).clamp(0, 4);
-
-                let ch = match pixels_in_this_cell {
-                    4 => '⣿',
-                    3 => '⡷',
-                    2 => '⠶',
-                    1 => '⠤',
-                    _ => ' ',
+                let ch = if y < full_cells {
+                    '█'
+                } else if y == full_cells && partial > 0 {
+                    partial_chars[partial]
+                } else {
+                    continue; // empty — skip writing to buffer
                 };
 
-                if ch != ' ' {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((pos_x, pos_y)) {
-                        cell.set_char(ch).set_fg(Color::Green);
-                    }
+                if let Some(cell) = frame.buffer_mut().cell_mut((pos_x, pos_y)) {
+                    cell.set_char(ch).set_fg(Color::Green);
                 }
             }
         }
