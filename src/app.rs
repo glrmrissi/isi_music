@@ -110,8 +110,9 @@ impl App {
                         PlayerNotification::Playing  => self.state.playback.is_playing = true,
                         PlayerNotification::Paused   => self.state.playback.is_playing = false,
                         PlayerNotification::TrackUnavailable => {
-                            self.state.status_msg = Some("Track unavailable (Premium required)".to_string());
-                            self.state.playback.is_playing = false;
+                            self.state.status_msg = Some("Track unavailable, skipping...".to_string());
+                            if player.next() { needs_sync = true; }
+                            else { self.state.playback.is_playing = false; }
                         }
                     }
                 }
