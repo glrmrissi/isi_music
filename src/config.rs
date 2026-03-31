@@ -46,11 +46,30 @@ impl AppConfig {
             .ok()
             .or_else(|| self.spotify.client_secret.clone())
     }
+
+    pub fn save(&self) -> Result<()> {
+        let path = config_path()?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    pub fn needs_setup(&self) -> bool {
+        self.get_client_id().is_none() || self.get_client_secret().is_none()
+    }
 }
 
 pub fn config_path() -> Result<PathBuf> {
     let base = dirs::config_dir().context("Could not determine config directory")?;
     Ok(base.join("isi-music").join("config.toml"))
+}
+
+pub fn env_path() -> Result<PathBuf> {
+    let base = dirs::config_dir().context("Could not determine config directory")?;
+    Ok(base.join("isi-music").join(".env"))
 }
 
 pub fn cache_path() -> Result<PathBuf> {

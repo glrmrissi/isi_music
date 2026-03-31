@@ -70,7 +70,8 @@ impl SpotifyAuth {
 
         let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
             <html><body><h2>isi-music authorized!</h2>\
-            <p>You can close this tab.</p></body></html>";
+            <p>You can close this tab.</p>\
+            <script>window.close();</script></body></html>";
         stream.write_all(response.as_bytes()).await?;
 
         Self::extract_code_from_request(&request)

@@ -524,16 +524,16 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(if state.search_active { Color::Yellow } else { Color::DarkGray }));
+            .border_style(Style::default().fg(if state.search_active { Color::Green } else { Color::DarkGray }));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let content = if state.search_active {
             Line::from(vec![
-                Span::styled("   Search: ", Style::default().fg(Color::Yellow)),
+                Span::styled("   Search: ", Style::default().fg(Color::Green)),
                 Span::styled(&state.search_query, Style::default().fg(Color::White)),
-                Span::styled("█", Style::default().fg(Color::Yellow).add_modifier(Modifier::SLOW_BLINK)),
+                Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
             ])
         } else if !pb.title.is_empty() {
             Line::from(vec![
@@ -977,7 +977,7 @@ impl Ui {
 
     fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let content = if let Some(msg) = &state.status_msg {
-            Line::from(Span::styled(msg.clone(), Style::default().fg(Color::Yellow)))
+            Line::from(Span::styled(msg.clone(), Style::default().fg(Color::Green)))
         } else if state.focus == Focus::Search {
             Line::from(Span::styled(
                 " [TAB] Switch panel  [↑↓] Navigate  [ENTER] Select  [ESC] Close search ",
