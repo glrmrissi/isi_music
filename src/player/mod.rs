@@ -25,10 +25,20 @@ pub enum PlayerNotification {
     Paused,
 }
 
+pub struct QueuedTrack {
+    pub uri: String,
+    pub name: String,
+    pub artist: String,
+    pub duration_ms: u64,
+}
+
 pub struct NativePlayer {
     player: Arc<LibrespotPlayer>,
     mixer: Arc<dyn Mixer>,
     queue: Vec<String>,
+    pub user_queue: Vec<QueuedTrack>,
+    /// Set after next() plays from user_queue; caller should read and clear
+    pub playing_queued: Option<QueuedTrack>,
     current_index: Option<usize>,
     pub is_playing: bool,
     pub volume: u8, // 0–100
@@ -98,6 +108,8 @@ impl NativePlayer {
             player,
             mixer: soft_mixer,
             queue: Vec::new(),
+            user_queue: Vec::new(),
+            playing_queued: None,
             current_index: None,
             is_playing: false,
             volume,
@@ -112,6 +124,14 @@ impl NativePlayer {
         self.play_at(start_index);
     }
 
+    pub fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) {
+        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms });
+    }
+
+    pub fn user_queue(&self) -> &[QueuedTrack] {
+        &self.user_queue
+    }
+
     pub fn play_at(&mut self, index: usize) {
         let Some(uri) = self.queue.get(index) else {
             warn!("Index {index} out of queue bounds");
@@ -124,6 +144,7 @@ impl NativePlayer {
                 self.player.load(spotify_uri, true, 0);
                 self.current_index = Some(index);
                 self.is_playing = true;
+                self.playing_queued = None;
                 // Tell glibc to return freed pages (decoder/buffer from previous track) to the OS
                 #[cfg(target_os = "linux")]
                 unsafe { libc::malloc_trim(0); }
@@ -147,6 +168,24 @@ impl NativePlayer {
     }
 
     pub fn next(&mut self) -> bool {
+        self.playing_queued = None;
+        // User queue has priority
+        if !self.user_queue.is_empty() {
+            let track = self.user_queue.remove(0);
+            match SpotifyUri::from_uri(&track.uri) {
+                Ok(spotify_uri) => {
+                    info!("Playing from user queue: {}", track.uri);
+                    self.player.stop();
+                    self.player.load(spotify_uri, true, 0);
+                    self.is_playing = true;
+                    #[cfg(target_os = "linux")]
+                    unsafe { libc::malloc_trim(0); }
+                    self.playing_queued = Some(track);
+                    return true;
+                }
+                Err(e) => error!("Invalid URI in user queue: {e}"),
+            }
+        }
         if let Some(idx) = self.current_index {
             let next = idx + 1;
             if next < self.queue.len() {

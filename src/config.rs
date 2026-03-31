@@ -14,8 +14,6 @@ pub struct LastfmConfig {
     pub api_key: Option<String>,
     pub api_secret: Option<String>,
     pub session_key: Option<String>,
-    #[serde(default)]
-    pub declined: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

@@ -111,7 +111,10 @@ impl App {
                 self.state.playback.volume = player.volume;
             }
 
-            if needs_sync { self.sync_track_selection(); }
+            if needs_sync {
+                self.sync_track_selection();
+                self.sync_queue_display();
+            }
 
             terminal.draw(|f| self.ui.render(f, &mut self.state))?;
 
@@ -280,10 +283,38 @@ impl App {
                     let _ = self.spotify.toggle_playback().await;
                 }
             }
+            (KeyCode::Char('a'), _) => {
+                let track = self.state.track_list.selected()
+                    .and_then(|i| self.state.tracks.get(i))
+                    .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms));
+                if let Some((uri, name, artist, duration_ms)) = track {
+                    if let Some(player) = &mut self.player {
+                        player.add_to_queue(uri, name.clone(), artist, duration_ms);
+                        self.state.status_msg = Some(format!("+ {name} added to queue"));
+                        self.sync_queue_display();
+                    }
+                }
+            }
+
+            (KeyCode::Delete, _) if self.state.focus == Focus::Queue => {
+                if let Some(idx) = self.state.queue_list.selected() {
+                    if let Some(player) = &mut self.player {
+                        if idx < player.user_queue().len() {
+                            player.user_queue.remove(idx);
+                            self.sync_queue_display();
+                            let new_sel = if self.state.queue_items.is_empty() { None }
+                                else { Some(idx.min(self.state.queue_items.len() - 1)) };
+                            self.state.queue_list.select(new_sel);
+                        }
+                    }
+                }
+            }
+
             (KeyCode::Char('n'), _) => {
                 if let Some(player) = &mut self.player {
                     player.next();
                     self.sync_track_selection();
+                    self.sync_queue_display();
                 } else {
                     let _ = self.spotify.next_track().await;
                 }
@@ -604,6 +635,7 @@ impl App {
                     None => {}
                 }
             }
+            Focus::Queue => {}
         }
     }
 
@@ -703,6 +735,18 @@ impl App {
     }
 
     fn sync_track_selection(&mut self) {
+        // If we just played a user_queue track, update playback from that
+        let queued = self.player.as_mut().and_then(|p| p.playing_queued.take());
+        if let Some(qt) = queued {
+            self.state.playback.title = qt.name;
+            self.state.playback.artist = qt.artist;
+            self.state.playback.album = String::new();
+            self.state.playback.duration_ms = qt.duration_ms;
+            self.state.playback.progress_ms = 0;
+            self.state.playback.is_playing = true;
+            self.on_track_started();
+            return;
+        }
         if let Some(player) = &self.player {
             if let Some(idx) = player.current_index() {
                 self.state.track_list.select(Some(idx));
@@ -715,6 +759,15 @@ impl App {
                     self.on_track_started();
                 }
             }
+        }
+    }
+
+    fn sync_queue_display(&mut self) {
+        if let Some(player) = &self.player {
+            self.state.queue_items = player.user_queue()
+                .iter()
+                .map(|t| (t.name.clone(), t.artist.clone()))
+                .collect();
         }
     }
 }

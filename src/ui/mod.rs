@@ -48,6 +48,7 @@ pub enum Focus {
     Playlists,
     Tracks,
     Search,
+    Queue,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -206,6 +207,9 @@ pub struct UiState {
     pub shows_total: u32,
     // Right panel: Search
     pub search_results: Option<SearchResults>,
+    // Queue panel
+    pub queue_items: Vec<(String, String)>, // (name, artist)
+    pub queue_list: ListState,
     // Playback
     pub playback: PlaybackState,
     pub status_msg: Option<String>,
@@ -245,6 +249,8 @@ impl UiState {
             shows_offset: 0,
             shows_total: 0,
             search_results: None,
+            queue_items: Vec::new(),
+            queue_list: ListState::default(),
             playback: PlaybackState::default(),
             status_msg: None,
             search_query: String::new(),
@@ -309,6 +315,7 @@ impl UiState {
                 _ => scroll_up(&mut self.track_list, self.tracks.len()),
             },
             Focus::Search    => { if let Some(sr) = &mut self.search_results { sr.nav_up(); } }
+            Focus::Queue     => scroll_up(&mut self.queue_list, self.queue_items.len()),
         }
     }
 
@@ -328,6 +335,7 @@ impl UiState {
                 _ => scroll_down(&mut self.track_list, self.tracks.len()),
             },
             Focus::Search    => { if let Some(sr) = &mut self.search_results { sr.nav_down(); } }
+            Focus::Queue     => scroll_down(&mut self.queue_list, self.queue_items.len()),
         }
     }
 
@@ -342,6 +350,7 @@ impl UiState {
                 _ => { if !self.tracks.is_empty() { self.track_list.select(Some(0)); } }
             },
             Focus::Search => { if let Some(sr) = &mut self.search_results { if sr.current_len() > 0 { sr.current_list_mut().select(Some(0)); } } }
+            Focus::Queue  => { if !self.queue_items.is_empty() { self.queue_list.select(Some(0)); } }
         }
     }
 
@@ -356,16 +365,18 @@ impl UiState {
                 _ => { let n = self.tracks.len(); if n > 0 { self.track_list.select(Some(n - 1)); } }
             },
             Focus::Search => { if let Some(sr) = &mut self.search_results { let n = sr.current_len(); if n > 0 { sr.current_list_mut().select(Some(n - 1)); } } }
+            Focus::Queue  => { let n = self.queue_items.len(); if n > 0 { self.queue_list.select(Some(n - 1)); } }
         }
     }
 
-    /// Tab: Library → Playlists → Tracks/Search → Library
+    /// Tab: Library → Playlists → Tracks → Queue → Library
     pub fn switch_focus(&mut self) {
         self.search_active = false;
         self.focus = match self.focus {
             Focus::Library   => Focus::Playlists,
             Focus::Playlists => if self.search_results.is_some() { Focus::Search } else { Focus::Tracks },
-            Focus::Tracks | Focus::Search => Focus::Library,
+            Focus::Tracks    => Focus::Queue,
+            Focus::Queue | Focus::Search => Focus::Library,
         };
     }
 
@@ -420,18 +431,18 @@ impl Ui {
             .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
             .split(root[1]);
 
-        // Left panel: Library (top 6 rows) + Playlists (rest)
+        // Left panel: Library (top 6 rows) + Playlists (rest) + Queue (bottom 8 rows)
         let left_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(6), Constraint::Min(0)])
+            .constraints([Constraint::Length(6), Constraint::Min(0), Constraint::Length(8)])
             .split(main_cols[0]);
 
         self.render_visualizer(frame, &state.playback, top_cols[0]);
         self.render_header(frame, state, top_cols[1]);
         self.render_library(frame, state, left_rows[0]);
         self.render_playlists(frame, state, left_rows[1]);
+        self.render_queue(frame, state, left_rows[2]);
 
-        // Right panel: 4-panel search, welcome, or content
         if state.search_results.is_some() {
             self.render_search_panels(frame, state, main_cols[1]);
         } else {
@@ -973,6 +984,47 @@ impl Ui {
         );
     }
 
+    // ── Queue ─────────────────────────────────────────────────────────────────
+
+    fn render_queue(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let focused = state.focus == Focus::Queue;
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" 󰲸 Queue ")
+            .title_bottom(Line::from(Span::styled(
+                format!(" {} tracks ", state.queue_items.len()),
+                Style::default().fg(Color::DarkGray),
+            )))
+            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+
+        if state.queue_items.is_empty() {
+            frame.render_widget(
+                Paragraph::new("  Queue empty — press [A] on a track to add")
+                    .block(block)
+                    .style(Style::default().fg(Color::DarkGray)),
+                area,
+            );
+            return;
+        }
+
+        let items: Vec<ListItem> = state.queue_items.iter().enumerate().map(|(idx, (name, artist))| {
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:>2}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name.clone(), Style::default().fg(Color::White)),
+                Span::styled(format!("  󰠃 {}", artist), Style::default().fg(Color::DarkGray)),
+            ]))
+        }).collect();
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_symbol("  ");
+
+        frame.render_stateful_widget(list, area, &mut state.queue_list);
+    }
+
     // ── Help / Status ─────────────────────────────────────────────────────────
 
     fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
@@ -988,9 +1040,14 @@ impl Ui {
                 " [ESC] Cancel  [ENTER] Search  [Type] Query ",
                 Style::default().fg(Color::DarkGray),
             ))
+        } else if state.focus == Focus::Queue {
+            Line::from(Span::styled(
+                " [↑↓] Navigate  [DEL] Remove from queue  [TAB] Focus  [A] Add track ",
+                Style::default().fg(Color::DarkGray),
+            ))
         } else {
             Line::from(Span::styled(
-                " [hjkl/↑↓] Navigate  [SPACE] Play/Pause  [N/P] Skip  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [TAB] Focus  [Q] Quit ",
+                " [hjkl/↑↓] Navigate  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [TAB] Focus  [Q] Quit ",
                 Style::default().fg(Color::DarkGray),
             ))
         };

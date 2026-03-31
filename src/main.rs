@@ -116,18 +116,16 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     let mut cfg = config::AppConfig::load()?;
-    if cfg.needs_setup() {
-        run_setup(&mut cfg)?;
+
+    // Handle subcommands before entering TUI
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("setup-lastfm") {
+        run_lastfm_setup(&mut cfg).await?;
+        return Ok(());
     }
 
-    if cfg.lastfm.api_key.is_none() && cfg.lastfm.session_key.is_none() && !cfg.lastfm.declined {
-        let ans = prompt("Configure Last.fm scrobbling? [y/N]: ");
-        if ans.trim().eq_ignore_ascii_case("y") {
-            run_lastfm_setup(&mut cfg).await?;
-        } else {
-            cfg.lastfm.declined = true;
-            cfg.save()?;
-        }
+    if cfg.needs_setup() {
+        run_setup(&mut cfg)?;
     }
 
     let log_path = config::log_path()?;
