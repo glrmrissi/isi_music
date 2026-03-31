@@ -41,6 +41,14 @@ pub struct AlbumSummary {
     pub total_tracks: u32,
 }
 
+pub struct ShowSummary {
+    pub id: String,
+    pub name: String,
+    pub publisher: String,
+    pub uri: String,
+    pub total_episodes: u32,
+}
+
 pub struct FullSearchResults {
     pub tracks: Vec<TrackSummary>,
     pub artists: Vec<ArtistSummary>,
@@ -425,5 +433,172 @@ impl SpotifyClient {
             }
         }
         Ok(())
+    }
+
+    pub async fn fetch_saved_albums(&self, offset: u32) -> Result<(Vec<AlbumSummary>, u32)> {
+        let page = self
+            .client
+            .current_user_saved_albums_manual(None, Some(20), Some(offset))
+            .await?;
+        let total = page.total;
+        let mut albums = Vec::new();
+        for saved in page.items {
+            let album = saved.album;
+            let artist = album
+                .artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let id = album.id.id().to_owned();
+            let uri = album.id.uri();
+            let total_tracks = album.tracks.total;
+            albums.push(AlbumSummary {
+                id,
+                name: album.name,
+                artist,
+                uri,
+                total_tracks,
+            });
+        }
+        Ok((albums, total))
+    }
+
+    pub async fn fetch_followed_artists(&self) -> Result<Vec<ArtistSummary>> {
+        let page = self
+            .client
+            .current_user_followed_artists(None, Some(50))
+            .await?;
+        let mut artists = Vec::new();
+        for artist in page.items {
+            let name = artist.name;
+            let uri = artist.id.uri();
+            let genres = artist.genres.iter().take(2).map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+            artists.push(ArtistSummary { name, uri, genres });
+        }
+        Ok(artists)
+    }
+
+    pub async fn fetch_artist_top_tracks(&self, artist_id: &str) -> Result<Vec<TrackSummary>> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("https://api.spotify.com/v1/artists/{artist_id}/top-tracks"))
+            .bearer_auth(&token)
+            .query(&[("market", "from_token")])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let mut tracks = Vec::new();
+
+        if let Some(items) = json["tracks"].as_array() {
+            for item in items {
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let artist = item["artists"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                let album = item["album"]["name"].as_str().unwrap_or("").to_string();
+                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+            }
+        }
+
+        Ok(tracks)
+    }
+
+    pub async fn fetch_saved_shows(&self, offset: u32) -> Result<(Vec<ShowSummary>, u32)> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let offset_str = offset.to_string();
+        let client = reqwest::Client::new();
+        let response = client
+            .get("https://api.spotify.com/v1/me/shows")
+            .bearer_auth(&token)
+            .query(&[("limit", "20"), ("offset", &offset_str)])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        let mut shows = Vec::new();
+
+        if let Some(items) = json["items"].as_array() {
+            for item in items {
+                let show = &item["show"];
+                let id = show["id"].as_str().unwrap_or("").to_string();
+                let name = show["name"].as_str().unwrap_or("Unknown").to_string();
+                let publisher = show["publisher"].as_str().unwrap_or("").to_string();
+                let uri = show["uri"].as_str().unwrap_or("").to_string();
+                let total_episodes = show["total_episodes"].as_u64().unwrap_or(0) as u32;
+                shows.push(ShowSummary { id, name, publisher, uri, total_episodes });
+            }
+        }
+
+        Ok((shows, total))
+    }
+
+    pub async fn fetch_show_episodes(&self, show_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let offset_str = offset.to_string();
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("https://api.spotify.com/v1/shows/{show_id}/episodes"))
+            .bearer_auth(&token)
+            .query(&[("limit", "20"), ("offset", &offset_str)])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        let mut tracks = Vec::new();
+
+        if let Some(items) = json["items"].as_array() {
+            for item in items {
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let description = item["description"].as_str().unwrap_or("").to_string();
+                let artist = if description.len() > 60 {
+                    format!("{}…", &description[..60])
+                } else {
+                    description
+                };
+                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri });
+            }
+        }
+
+        Ok((tracks, total))
     }
 }

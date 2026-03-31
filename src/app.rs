@@ -6,7 +6,7 @@ use tracing::warn;
 
 use crate::player::{NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
-use crate::ui::{Focus, SearchPanel, SearchResults, Ui, UiState};
+use crate::ui::{ActiveContent, Focus, SearchPanel, SearchResults, Ui, UiState};
 
 pub struct App {
     spotify: SpotifyClient,
@@ -206,6 +206,12 @@ impl App {
                 self.should_quit = true;
             }
 
+            (KeyCode::Up, KeyModifiers::CONTROL)   => self.state.nav_first(),
+            (KeyCode::Down, KeyModifiers::CONTROL) => {
+                self.state.nav_last();
+                self.maybe_load_more().await;
+            }
+
             (KeyCode::Up, _) | (KeyCode::Char('k'), _) => self.state.nav_up(),
             (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                 self.state.nav_down();
@@ -298,6 +304,7 @@ impl App {
                                 self.state.active_playlist_uri = Some("liked_songs".to_string());
                                 self.state.active_playlist_id = Some("liked_songs".to_string());
                                 self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                self.state.active_content = ActiveContent::Tracks;
                                 self.state.search_results = None;
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
@@ -305,10 +312,53 @@ impl App {
                             Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
-                    _ => {
-                        let names = ["Albums", "Artists", "Podcasts"];
-                        self.state.status_msg = Some(format!("{} — coming soon", names[idx - 1]));
+                    1 => { // Albums
+                        self.state.status_msg = Some("Loading saved albums…".to_string());
+                        match self.spotify.fetch_saved_albums(0).await {
+                            Ok((albums, total)) => {
+                                self.state.albums = albums;
+                                self.state.albums_total = total;
+                                self.state.albums_offset = self.state.albums.len() as u32;
+                                self.state.album_list.select(if self.state.albums.is_empty() { None } else { Some(0) });
+                                self.state.active_content = ActiveContent::Albums;
+                                self.state.search_results = None;
+                                self.state.status_msg = None;
+                                self.state.focus = Focus::Tracks;
+                            }
+                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                        }
                     }
+                    2 => { // Artists
+                        self.state.status_msg = Some("Loading followed artists…".to_string());
+                        match self.spotify.fetch_followed_artists().await {
+                            Ok(artists) => {
+                                self.state.artists = artists;
+                                self.state.artist_list.select(if self.state.artists.is_empty() { None } else { Some(0) });
+                                self.state.active_content = ActiveContent::Artists;
+                                self.state.search_results = None;
+                                self.state.status_msg = None;
+                                self.state.focus = Focus::Tracks;
+                            }
+                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                        }
+                    }
+                    3 => { // Podcasts
+                        self.state.status_msg = Some("Loading saved podcasts…".to_string());
+                        match self.spotify.fetch_saved_shows(0).await {
+                            Ok((shows, total)) => {
+                                self.state.shows = shows;
+                                self.state.shows_total = total;
+                                self.state.shows_offset = self.state.shows.len() as u32;
+                                self.state.show_list.select(if self.state.shows.is_empty() { None } else { Some(0) });
+                                self.state.active_content = ActiveContent::Shows;
+                                self.state.search_results = None;
+                                self.state.status_msg = None;
+                                self.state.focus = Focus::Tracks;
+                            }
+                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                        }
+                    }
+                    _ => {}
                 }
             }
 
@@ -326,6 +376,7 @@ impl App {
                             self.state.active_playlist_uri = Some(uri.clone());
                             self.state.active_playlist_id = Some(id.clone());
                             self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                            self.state.active_content = ActiveContent::Tracks;
                             self.state.search_results = None;
                             self.state.status_msg = None;
                             self.state.focus = Focus::Tracks;
@@ -336,32 +387,102 @@ impl App {
             }
 
             Focus::Tracks => {
-                if let Some(idx) = self.state.selected_track_index() {
-                    if let Some(player) = &mut self.player {
-                        let uris: Vec<String> = self.state.tracks.iter().map(|t| t.uri.clone()).collect();
-                        player.set_queue(uris, idx);
-                        if let Some(track) = self.state.tracks.get(idx) {
-                            self.state.playback.title = track.name.clone();
-                            self.state.playback.artist = track.artist.clone();
-                            self.state.playback.album = track.album.clone();
-                            self.state.playback.duration_ms = track.duration_ms;
-                            self.state.playback.progress_ms = 0;
-                            self.state.playback.is_playing = true;
+                match &self.state.active_content {
+                    ActiveContent::Albums => {
+                        if let Some(idx) = self.state.selected_album_index() {
+                            if let Some(album) = self.state.albums.get(idx) {
+                                let id = album.id.clone();
+                                let name = album.name.clone();
+                                self.state.status_msg = Some(format!("Loading {name}…"));
+                                match self.spotify.fetch_album_tracks(&id, 0).await {
+                                    Ok((tracks, total)) => {
+                                        self.state.tracks = tracks;
+                                        self.state.tracks_total = total;
+                                        self.state.tracks_offset = self.state.tracks.len() as u32;
+                                        self.state.active_playlist_uri = Some(format!("album:{id}"));
+                                        self.state.active_playlist_id = Some(format!("album:{id}"));
+                                        self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                        self.state.active_content = ActiveContent::Tracks;
+                                        self.state.status_msg = None;
+                                    }
+                                    Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                }
+                            }
                         }
-                    } else {
-                        let track_uri = self.state.tracks[idx].uri.clone();
-                        let is_playlist = self.state.active_playlist_uri
-                            .as_deref()
-                            .map(|u| u != "liked_songs" && !u.starts_with("search:"))
-                            .unwrap_or(false);
-                        let result = if is_playlist {
-                            let uri = self.state.active_playlist_uri.clone().unwrap();
-                            self.spotify.play_in_context(&uri, &track_uri).await
-                        } else {
-                            self.spotify.play_track_uri(&track_uri).await
-                        };
-                        if let Err(e) = result {
-                            self.state.status_msg = Some(format!("Error: {e}"));
+                    }
+                    ActiveContent::Artists => {
+                        if let Some(idx) = self.state.selected_artist_index() {
+                            if let Some(artist) = self.state.artists.get(idx) {
+                                let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
+                                let name = artist.name.clone();
+                                self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
+                                match self.spotify.fetch_artist_top_tracks(&id).await {
+                                    Ok(tracks) => {
+                                        self.state.tracks = tracks;
+                                        self.state.tracks_total = self.state.tracks.len() as u32;
+                                        self.state.tracks_offset = self.state.tracks.len() as u32;
+                                        self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                                        self.state.active_playlist_id = Some(format!("artist:{id}"));
+                                        self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                        self.state.active_content = ActiveContent::Tracks;
+                                        self.state.status_msg = None;
+                                    }
+                                    Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                }
+                            }
+                        }
+                    }
+                    ActiveContent::Shows => {
+                        if let Some(idx) = self.state.selected_show_index() {
+                            if let Some(show) = self.state.shows.get(idx) {
+                                let id = show.id.clone();
+                                let name = show.name.clone();
+                                self.state.status_msg = Some(format!("Loading {name}…"));
+                                match self.spotify.fetch_show_episodes(&id, 0).await {
+                                    Ok((tracks, total)) => {
+                                        self.state.tracks = tracks;
+                                        self.state.tracks_total = total;
+                                        self.state.tracks_offset = self.state.tracks.len() as u32;
+                                        self.state.active_playlist_uri = Some(format!("show:{id}"));
+                                        self.state.active_playlist_id = Some(format!("show:{id}"));
+                                        self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                        self.state.active_content = ActiveContent::Tracks;
+                                        self.state.status_msg = None;
+                                    }
+                                    Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                }
+                            }
+                        }
+                    }
+                    ActiveContent::Tracks | ActiveContent::None => {
+                        if let Some(idx) = self.state.selected_track_index() {
+                            if let Some(player) = &mut self.player {
+                                let uris: Vec<String> = self.state.tracks.iter().map(|t| t.uri.clone()).collect();
+                                player.set_queue(uris, idx);
+                                if let Some(track) = self.state.tracks.get(idx) {
+                                    self.state.playback.title = track.name.clone();
+                                    self.state.playback.artist = track.artist.clone();
+                                    self.state.playback.album = track.album.clone();
+                                    self.state.playback.duration_ms = track.duration_ms;
+                                    self.state.playback.progress_ms = 0;
+                                    self.state.playback.is_playing = true;
+                                }
+                            } else {
+                                let track_uri = self.state.tracks[idx].uri.clone();
+                                let is_playlist = self.state.active_playlist_uri
+                                    .as_deref()
+                                    .map(|u| u != "liked_songs" && !u.starts_with("search:"))
+                                    .unwrap_or(false);
+                                let result = if is_playlist {
+                                    let uri = self.state.active_playlist_uri.clone().unwrap();
+                                    self.spotify.play_in_context(&uri, &track_uri).await
+                                } else {
+                                    self.spotify.play_track_uri(&track_uri).await
+                                };
+                                if let Err(e) = result {
+                                    self.state.status_msg = Some(format!("Error: {e}"));
+                                }
+                            }
                         }
                     }
                 }
@@ -409,6 +530,7 @@ impl App {
                                     self.state.active_playlist_uri = Some(format!("album:{uri}"));
                                     self.state.active_playlist_id = Some(format!("album:{id}"));
                                     self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                    self.state.active_content = ActiveContent::Tracks;
                                     self.state.search_results = None;
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
@@ -431,6 +553,7 @@ impl App {
                                     self.state.active_playlist_uri = Some(uri);
                                     self.state.active_playlist_id = Some(id);
                                     self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                    self.state.active_content = ActiveContent::Tracks;
                                     self.state.search_results = None;
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
@@ -450,6 +573,42 @@ impl App {
 
     /// Load next page of tracks for the active context.
     async fn maybe_load_more(&mut self) {
+        // Handle album list pagination
+        if self.state.active_content == ActiveContent::Albums {
+            let selected = self.state.album_list.selected().unwrap_or(0);
+            let len = self.state.albums.len();
+            if len > 0 && selected >= len.saturating_sub(3) && len < self.state.albums_total as usize {
+                let offset = self.state.albums_offset;
+                match self.spotify.fetch_saved_albums(offset).await {
+                    Ok((mut new_albums, total)) => {
+                        self.state.albums_total = total;
+                        self.state.albums_offset += new_albums.len() as u32;
+                        self.state.albums.append(&mut new_albums);
+                    }
+                    Err(e) => self.state.status_msg = Some(format!("Load more error: {e}")),
+                }
+            }
+            return;
+        }
+
+        // Handle show list pagination
+        if self.state.active_content == ActiveContent::Shows {
+            let selected = self.state.show_list.selected().unwrap_or(0);
+            let len = self.state.shows.len();
+            if len > 0 && selected >= len.saturating_sub(3) && len < self.state.shows_total as usize {
+                let offset = self.state.shows_offset;
+                match self.spotify.fetch_saved_shows(offset).await {
+                    Ok((mut new_shows, total)) => {
+                        self.state.shows_total = total;
+                        self.state.shows_offset += new_shows.len() as u32;
+                        self.state.shows.append(&mut new_shows);
+                    }
+                    Err(e) => self.state.status_msg = Some(format!("Load more error: {e}")),
+                }
+            }
+            return;
+        }
+
         if self.state.tracks_loading { return; }
         let selected = self.state.track_list.selected().unwrap_or(0);
         let len = self.state.tracks.len();

@@ -1,4 +1,4 @@
 mod auth;
 mod client;
 
-pub use client::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, SpotifyClient, TrackSummary};
+pub use client::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, SpotifyClient, TrackSummary};
