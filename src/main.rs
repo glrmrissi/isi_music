@@ -1,8 +1,3 @@
-use mimalloc::MiMalloc;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
-
 use anyhow::Result;
 use crossterm::{
     execute,
@@ -125,10 +120,13 @@ async fn main() -> Result<()> {
         run_setup(&mut cfg)?;
     }
 
-    if cfg.lastfm.api_key.is_none() || cfg.lastfm.session_key.is_none() {
+    if cfg.lastfm.api_key.is_none() && cfg.lastfm.session_key.is_none() && !cfg.lastfm.declined {
         let ans = prompt("Configure Last.fm scrobbling? [y/N]: ");
         if ans.trim().eq_ignore_ascii_case("y") {
             run_lastfm_setup(&mut cfg).await?;
+        } else {
+            cfg.lastfm.declined = true;
+            cfg.save()?;
         }
     }
 

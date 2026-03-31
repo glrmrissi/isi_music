@@ -47,8 +47,8 @@ serde_json = "1"
 # MD5 (Last.fm API signature)
 md5 = "0.7"
 
-# Memory allocator (returns pages to OS aggressively, avoids glibc fragmentation)
-mimalloc = { version = "0.1", default-features = false }
+# OS memory management
+libc = "0.2"
 
 # Error handling
 anyhow = "1"

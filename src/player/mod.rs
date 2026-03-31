@@ -13,6 +13,8 @@ use librespot_playback::{
 };
 use crate::config;
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use libc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -122,6 +124,9 @@ impl NativePlayer {
                 self.player.load(spotify_uri, true, 0);
                 self.current_index = Some(index);
                 self.is_playing = true;
+                // Tell glibc to return freed pages (decoder/buffer from previous track) to the OS
+                #[cfg(target_os = "linux")]
+                unsafe { libc::malloc_trim(0); }
             }
             Err(e) => error!("Invalid URI '{uri}': {e}"),
         }

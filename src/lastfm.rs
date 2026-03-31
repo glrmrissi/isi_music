@@ -47,15 +47,23 @@ impl LastfmClient {
         struct Resp { session: Session }
         #[derive(Deserialize)]
         struct Session { key: String }
+        #[derive(Deserialize)]
+        struct ApiError { message: String }
 
-        let resp = http
+        let body = http
             .post("https://ws.audioscrobbler.com/2.0/")
             .form(&params)
             .send()
             .await?
-            .json::<Resp>()
-            .await
-            .context("Last.fm auth failed — check your API key/secret and credentials")?;
+            .text()
+            .await?;
+
+        if let Ok(err) = serde_json::from_str::<ApiError>(&body) {
+            return Err(anyhow::anyhow!("Last.fm: {}", err.message));
+        }
+
+        let resp = serde_json::from_str::<Resp>(&body)
+            .context("Last.fm auth failed — unexpected response")?;
 
         Ok(resp.session.key)
     }
