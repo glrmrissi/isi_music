@@ -58,6 +58,7 @@ pub struct FullSearchResults {
 
 pub struct SpotifyClient {
     client: AuthCodeSpotify,
+    http: reqwest::Client,
     shuffle_state: bool,
     repeat_state: RepeatState,
 }
@@ -92,6 +93,7 @@ impl SpotifyClient {
         info!("Authenticated with Spotify");
         Ok(Self {
             client,
+            http: reqwest::Client::new(),
             shuffle_state: false,
             repeat_state: RepeatState::Off,
         })
@@ -304,7 +306,7 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let client = reqwest::Client::new();
+        let client = &self.http;
         let request = client
             .get("https://api.spotify.com/v1/search")
             .bearer_auth(&token)
@@ -389,7 +391,7 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
-        let client = reqwest::Client::new();
+        let client = &self.http;
         let response = client
             .get(format!("https://api.spotify.com/v1/albums/{album_id}/tracks"))
             .bearer_auth(&token)
@@ -485,7 +487,7 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let client = reqwest::Client::new();
+        let client = &self.http;
         let response = client
             .get(format!("https://api.spotify.com/v1/artists/{artist_id}/top-tracks"))
             .bearer_auth(&token)
@@ -526,7 +528,7 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
-        let client = reqwest::Client::new();
+        let client = &self.http;
         let response = client
             .get("https://api.spotify.com/v1/me/shows")
             .bearer_auth(&token)
@@ -566,7 +568,7 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
-        let client = reqwest::Client::new();
+        let client = &self.http;
         let response = client
             .get(format!("https://api.spotify.com/v1/shows/{show_id}/episodes"))
             .bearer_auth(&token)

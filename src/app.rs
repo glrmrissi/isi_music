@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -12,7 +13,7 @@ use crate::ui::{ActiveContent, Focus, SearchPanel, SearchResults, Ui, UiState};
 pub struct App {
     spotify: SpotifyClient,
     player: Option<NativePlayer>,
-    lastfm: Option<LastfmClient>,
+    lastfm: Option<Arc<LastfmClient>>,
     ui: Ui,
     state: UiState,
     last_tick: Instant,
@@ -29,7 +30,7 @@ impl App {
     pub async fn new() -> Result<Self> {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
-            (Some(k), Some(s), Some(sk)) => Some(LastfmClient::new(k.clone(), s.clone(), sk.clone())),
+            (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(k.clone(), s.clone(), sk.clone()))),
             _ => None,
         };
 

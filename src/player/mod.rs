@@ -53,7 +53,7 @@ impl NativePlayer {
         let volume_getter = soft_mixer.get_soft_volume();
 
         let player = LibrespotPlayer::new(
-            PlayerConfig::default(),
+            PlayerConfig { gapless: false, ..PlayerConfig::default() },
             session,
             volume_getter,
             move || backend(None, audio_format),
@@ -118,6 +118,7 @@ impl NativePlayer {
         match SpotifyUri::from_uri(uri) {
             Ok(spotify_uri) => {
                 info!("Loading URI: {uri}");
+                self.player.stop();
                 self.player.load(spotify_uri, true, 0);
                 self.current_index = Some(index);
                 self.is_playing = true;
