@@ -171,6 +171,10 @@ impl NativePlayer {
         self.apply_volume();
     }
 
+    pub fn seek(&self, position_ms: u32) {
+        self.player.seek(position_ms);
+    }
+
     fn apply_volume(&self) {
         let v = (self.volume as u32 * 65535 / 100) as u16;
         self.mixer.set_volume(v);

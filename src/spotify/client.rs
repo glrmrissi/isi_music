@@ -27,6 +27,27 @@ pub struct TrackSummary {
     pub uri: String,
 }
 
+pub struct ArtistSummary {
+    pub name: String,
+    pub uri: String,
+    pub genres: String,
+}
+
+pub struct AlbumSummary {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub uri: String,
+    pub total_tracks: u32,
+}
+
+pub struct FullSearchResults {
+    pub tracks: Vec<TrackSummary>,
+    pub artists: Vec<ArtistSummary>,
+    pub albums: Vec<AlbumSummary>,
+    pub playlists: Vec<PlaylistSummary>,
+}
+
 pub struct SpotifyClient {
     client: AuthCodeSpotify,
     shuffle_state: bool,
@@ -74,42 +95,32 @@ impl SpotifyClient {
         guard.as_ref().map(|t| t.access_token.clone())
     }
 
-    pub async fn fetch_liked_tracks(&self) -> Result<(Vec<TrackSummary>, u32)> {
-        let mut all = Vec::new();
-        let mut offset = 0u32;
-        let mut total = 0u32;
-        loop {
-            let page = self
-                .client
-                .current_user_saved_tracks_manual(None, Some(50), Some(offset))
-                .await?;
-            total = page.total;
-            let fetched = page.items.len() as u32;
-            for saved in page.items {
-                let track = saved.track;
-                let artist = track
-                    .artists
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let duration_ms =
-                    track.duration.num_milliseconds().try_into().unwrap_or(0u64);
-                let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
-                all.push(TrackSummary {
-                    name: track.name,
-                    artist,
-                    album: track.album.name,
-                    duration_ms,
-                    uri,
-                });
-            }
-            if page.next.is_none() || fetched == 0 {
-                break;
-            }
-            offset += fetched;
+    pub async fn fetch_liked_tracks(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        let page = self
+            .client
+            .current_user_saved_tracks_manual(None, Some(50), Some(offset))
+            .await?;
+        let total = page.total;
+        let mut tracks = Vec::new();
+        for saved in page.items {
+            let track = saved.track;
+            let artist = track
+                .artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let duration_ms = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
+            let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
+            tracks.push(TrackSummary {
+                name: track.name,
+                artist,
+                album: track.album.name,
+                duration_ms,
+                uri,
+            });
         }
-        Ok((all, total))
+        Ok((tracks, total))
     }
 
     pub async fn play_track_uri(&self, track_uri: &str) -> Result<()> {
@@ -123,12 +134,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
-        let mut all = vec![PlaylistSummary {
-            id: "liked_songs".to_string(),
-            uri: "liked_songs".to_string(),
-            name: "Liked Songs".to_string(),
-            total_tracks: 0,
-        }];
+        let mut all = Vec::new();
         let mut offset = 0u32;
         loop {
             let page = self
@@ -152,43 +158,35 @@ impl SpotifyClient {
         Ok(all)
     }
 
-    pub async fn fetch_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<TrackSummary>> {
+    pub async fn fetch_playlist_tracks(&self, playlist_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
         let id = PlaylistId::from_id(playlist_id)
             .map_err(|e| anyhow::anyhow!("Invalid playlist ID: {e}"))?;
-        let mut all = Vec::new();
-        let mut offset = 0u32;
-        loop {
-            let page = self
-                .client
-                .playlist_items_manual(id.clone(), None, None, Some(50), Some(offset))
-                .await?;
-            let fetched = page.items.len() as u32;
-            for item in page.items {
-                if let Some(PlayableItem::Track(track)) = item.track {
-                    let artist = track
-                        .artists
-                        .iter()
-                        .map(|a| a.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let duration_ms =
-                        track.duration.num_milliseconds().try_into().unwrap_or(0u64);
-                    let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
-                    all.push(TrackSummary {
-                        name: track.name,
-                        artist,
-                        album: track.album.name,
-                        duration_ms,
-                        uri,
-                    });
-                }
+        let page = self
+            .client
+            .playlist_items_manual(id, None, None, Some(50), Some(offset))
+            .await?;
+        let total = page.total;
+        let mut tracks = Vec::new();
+        for item in page.items {
+            if let Some(PlayableItem::Track(track)) = item.track {
+                let artist = track
+                    .artists
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let duration_ms = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
+                let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
+                tracks.push(TrackSummary {
+                    name: track.name,
+                    artist,
+                    album: track.album.name,
+                    duration_ms,
+                    uri,
+                });
             }
-            if page.next.is_none() || fetched == 0 {
-                break;
-            }
-            offset += fetched;
         }
-        Ok(all)
+        Ok((tracks, total))
     }
 
     pub async fn play_in_context(&self, playlist_uri: &str, track_uri: &str) -> Result<()> {
@@ -292,13 +290,11 @@ impl SpotifyClient {
         Ok(())
     }
 
-    pub async fn search_tracks(&self, query: &str) -> Result<Vec<TrackSummary>> {
+    pub async fn search_all(&self, query: &str) -> Result<FullSearchResults> {
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
-
-        info!("search_tracks: query={:?} token_len={}", query, token.len());
 
         let client = reqwest::Client::new();
         let request = client
@@ -306,49 +302,117 @@ impl SpotifyClient {
             .bearer_auth(&token)
             .query(&[
                 ("q", query),
-                ("type", "track"),
-                ("limit", "10"),
+                ("type", "track,artist,album,playlist"),
+                ("limit", "8"),
             ])
             .build()?;
 
-        info!("search_tracks: request url={}", request.url());
-
         let response = client.execute(request).await?;
-
         let status = response.status();
-        info!("search_tracks: response status={}", status);
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            tracing::error!("search_tracks: error body={}", body);
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
-        let body = response.text().await?;
-        info!("search_tracks: response body (first 300 chars)={:.300}", body);
-        let json: serde_json::Value = serde_json::from_str(&body)?;
-        let mut tracks = Vec::new();
+        let json: serde_json::Value = response.json().await?;
 
+        let mut tracks = Vec::new();
         if let Some(items) = json["tracks"]["items"].as_array() {
             for item in items {
                 let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let artists = item["artists"]
+                let artist = item["artists"]
                     .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| x["name"].as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
+                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
                 let album = item["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist: artists, album, duration_ms, uri });
+                tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
             }
         }
 
-        Ok(tracks)
+        let mut artists = Vec::new();
+        if let Some(items) = json["artists"]["items"].as_array() {
+            for item in items {
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                let genres = item["genres"]
+                    .as_array()
+                    .map(|g| g.iter().filter_map(|x| x.as_str()).take(2).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                artists.push(ArtistSummary { name, uri, genres });
+            }
+        }
+
+        let mut albums = Vec::new();
+        if let Some(items) = json["albums"]["items"].as_array() {
+            for item in items {
+                let id = item["id"].as_str().unwrap_or("").to_string();
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let artist = item["artists"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                let total_tracks = item["total_tracks"].as_u64().unwrap_or(0) as u32;
+                albums.push(AlbumSummary { id, name, artist, uri, total_tracks });
+            }
+        }
+
+        let mut playlists = Vec::new();
+        if let Some(items) = json["playlists"]["items"].as_array() {
+            for item in items {
+                let id = item["id"].as_str().unwrap_or("").to_string();
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                let total_tracks = item["tracks"]["total"].as_u64().unwrap_or(0) as u32;
+                playlists.push(PlaylistSummary { id, name, uri, total_tracks });
+            }
+        }
+
+        Ok(FullSearchResults { tracks, artists, albums, playlists })
+    }
+
+    pub async fn fetch_album_tracks(&self, album_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let offset_str = offset.to_string();
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("https://api.spotify.com/v1/albums/{album_id}/tracks"))
+            .bearer_auth(&token)
+            .query(&[("limit", "50"), ("offset", &offset_str)])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        let mut tracks = Vec::new();
+
+        if let Some(items) = json["items"].as_array() {
+            for item in items {
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let artist = item["artists"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri });
+            }
+        }
+
+        Ok((tracks, total))
     }
 
     pub async fn save_current_track(&self) -> Result<()> {
