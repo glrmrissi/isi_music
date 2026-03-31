@@ -9,6 +9,7 @@ use std::io::{self, Write};
 
 mod app;
 mod config;
+mod lastfm;
 mod player;
 mod spotify;
 mod ui;
@@ -51,6 +52,58 @@ fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
     Ok(())
 }
 
+async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
+    println!();
+    println!("Last.fm setup");
+    println!("────────────────────────────────────────");
+    println!("Create an API account at: https://www.last.fm/api/account/create");
+    println!();
+
+    let api_key = loop {
+        let v = prompt("API Key: ");
+        if !v.is_empty() { break v; }
+        println!("Cannot be empty.");
+    };
+    let api_secret = loop {
+        let v = prompt("API Secret: ");
+        if !v.is_empty() { break v; }
+        println!("Cannot be empty.");
+    };
+    let username = loop {
+        let v = prompt("Last.fm username: ");
+        if !v.is_empty() { break v; }
+        println!("Cannot be empty.");
+    };
+    let password = loop {
+        let v = prompt("Last.fm password: ");
+        if !v.is_empty() { break v; }
+        println!("Cannot be empty.");
+    };
+
+    print!("Authenticating with Last.fm...");
+    io::stdout().flush().ok();
+
+    match lastfm::LastfmClient::authenticate(&api_key, &api_secret, &username, &password).await {
+        Ok(session_key) => {
+            cfg.lastfm.api_key = Some(api_key);
+            cfg.lastfm.api_secret = Some(api_secret);
+            cfg.lastfm.session_key = Some(session_key);
+            cfg.save()?;
+            println!(" OK");
+            println!("Last.fm scrobbling enabled!");
+            println!();
+        }
+        Err(e) => {
+            println!(" FAILED");
+            println!("Error: {e:#}");
+            println!("Skipping Last.fm setup.");
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Reset any leftover terminal state from a previous crash
@@ -65,6 +118,13 @@ async fn main() -> Result<()> {
     let mut cfg = config::AppConfig::load()?;
     if cfg.needs_setup() {
         run_setup(&mut cfg)?;
+    }
+
+    if cfg.lastfm.api_key.is_none() || cfg.lastfm.session_key.is_none() {
+        let ans = prompt("Configure Last.fm scrobbling? [y/N]: ");
+        if ans.trim().eq_ignore_ascii_case("y") {
+            run_lastfm_setup(&mut cfg).await?;
+        }
     }
 
     let log_path = config::log_path()?;

@@ -1,9 +1,10 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
+use crate::lastfm::LastfmClient;
 use crate::player::{NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
 use crate::ui::{ActiveContent, Focus, SearchPanel, SearchResults, Ui, UiState};
@@ -11,6 +12,7 @@ use crate::ui::{ActiveContent, Focus, SearchPanel, SearchResults, Ui, UiState};
 pub struct App {
     spotify: SpotifyClient,
     player: Option<NativePlayer>,
+    lastfm: Option<LastfmClient>,
     ui: Ui,
     state: UiState,
     last_tick: Instant,
@@ -18,10 +20,19 @@ pub struct App {
     // Seek hold detection
     last_seek_time: Option<Instant>,
     seek_hold_count: u32,
+    // Scrobbling state
+    scrobble_sent: bool,
+    track_start_unix: u64,
 }
 
 impl App {
     pub async fn new() -> Result<Self> {
+        let cfg = crate::config::AppConfig::load().unwrap_or_default();
+        let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
+            (Some(k), Some(s), Some(sk)) => Some(LastfmClient::new(k.clone(), s.clone(), sk.clone())),
+            _ => None,
+        };
+
         let mut spotify = SpotifyClient::new().await?;
 
         let player = match spotify.get_access_token().await {
@@ -58,12 +69,15 @@ impl App {
         Ok(Self {
             spotify,
             player,
+            lastfm,
             ui: Ui::new(),
             state,
             last_tick: Instant::now(),
             should_quit: false,
             last_seek_time: None,
             seek_hold_count: 0,
+            scrobble_sent: false,
+            track_start_unix: 0,
         })
     }
 
@@ -120,6 +134,25 @@ impl App {
                 if self.state.marquee_ms >= 120 {
                     self.state.marquee_offset += (self.state.marquee_ms / 120) as usize;
                     self.state.marquee_ms %= 120;
+                }
+
+                // Scrobble: must have played >= 30s AND >= 50% of duration (max 4 min)
+                if !self.scrobble_sent {
+                    let progress = self.state.playback.progress_ms;
+                    let duration = self.state.playback.duration_ms;
+                    let threshold = (duration / 2).min(4 * 60 * 1000);
+                    if progress >= 30_000 && progress >= threshold {
+                        if let Some(lfm) = self.lastfm.clone() {
+                            let artist = self.state.playback.artist.clone();
+                            let track = self.state.playback.title.clone();
+                            let ts = self.track_start_unix;
+                            let dur = duration;
+                            tokio::spawn(async move {
+                                lfm.scrobble(&artist, &track, ts, dur).await;
+                            });
+                        }
+                        self.scrobble_sent = true;
+                    }
                 }
             }
 
@@ -466,6 +499,7 @@ impl App {
                                     self.state.playback.duration_ms = track.duration_ms;
                                     self.state.playback.progress_ms = 0;
                                     self.state.playback.is_playing = true;
+                                    self.on_track_started();
                                 }
                             } else {
                                 let track_uri = self.state.tracks[idx].uri.clone();
@@ -508,6 +542,7 @@ impl App {
                                             self.state.playback.duration_ms = t.duration_ms;
                                             self.state.playback.progress_ms = 0;
                                             self.state.playback.is_playing = true;
+                                            self.on_track_started();
                                         }
                                     }
                                 }
@@ -568,6 +603,23 @@ impl App {
                     None => {}
                 }
             }
+        }
+    }
+
+    fn on_track_started(&mut self) {
+        self.scrobble_sent = false;
+        self.track_start_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        if let Some(lfm) = self.lastfm.clone() {
+            let artist = self.state.playback.artist.clone();
+            let track = self.state.playback.title.clone();
+            let duration = self.state.playback.duration_ms;
+            tokio::spawn(async move {
+                lfm.update_now_playing(&artist, &track, duration).await;
+            });
         }
     }
 
@@ -659,6 +711,7 @@ impl App {
                     self.state.playback.album = track.album.clone();
                     self.state.playback.duration_ms = track.duration_ms;
                     self.state.playback.progress_ms = 0;
+                    self.on_track_started();
                 }
             }
         }

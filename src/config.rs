@@ -5,6 +5,15 @@ use std::path::PathBuf;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub spotify: SpotifyConfig,
+    #[serde(default)]
+    pub lastfm: LastfmConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct LastfmConfig {
+    pub api_key: Option<String>,
+    pub api_secret: Option<String>,
+    pub session_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
