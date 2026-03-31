@@ -8,7 +8,7 @@ use tracing::warn;
 use crate::lastfm::LastfmClient;
 use crate::player::{NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
-use crate::ui::{ActiveContent, Focus, SearchPanel, SearchResults, Ui, UiState};
+use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, Ui, UiState};
 
 pub struct App {
     spotify: SpotifyClient,
@@ -24,6 +24,10 @@ pub struct App {
     // Scrobbling state
     scrobble_sent: bool,
     track_start_unix: u64,
+    // Album art
+    current_track_uri: String,
+    last_art_uri: String,
+    album_art_pending: Option<tokio::sync::oneshot::Receiver<Option<Vec<u8>>>>,
 }
 
 impl App {
@@ -79,6 +83,9 @@ impl App {
             seek_hold_count: 0,
             scrobble_sent: false,
             track_start_unix: 0,
+            current_track_uri: String::new(),
+            last_art_uri: String::new(),
+            album_art_pending: None,
         })
     }
 
@@ -115,6 +122,22 @@ impl App {
                 self.sync_track_selection();
                 self.sync_queue_display();
             }
+
+            // Poll album art background fetch
+            if let Some(rx) = &mut self.album_art_pending {
+                if let Ok(result) = rx.try_recv() {
+                    self.album_art_pending = None;
+                    if let Some(bytes) = result {
+                        self.state.album_art = Some(AlbumArtData {
+                            raw: bytes,
+                            pixels: vec![],
+                            width: 0,
+                            height: 0,
+                        });
+                    }
+                }
+            }
+            self.maybe_fetch_album_art().await;
 
             terminal.draw(|f| self.ui.render(f, &mut self.state))?;
 
@@ -329,6 +352,16 @@ impl App {
             }
             (KeyCode::Char('s'), _) => { let _ = self.spotify.toggle_shuffle().await; }
             (KeyCode::Char('r'), _) => { let _ = self.spotify.cycle_repeat().await; }
+            (KeyCode::Char('c'), _) if modifiers != KeyModifiers::CONTROL => {
+                self.state.show_album_art = !self.state.show_album_art;
+                if self.state.show_album_art {
+                    // Reset so maybe_fetch_album_art triggers a new fetch
+                    self.last_art_uri.clear();
+                } else {
+                    self.state.album_art = None;
+                    self.album_art_pending = None;
+                }
+            }
             (KeyCode::Char('l'), _) => {
                 match self.spotify.save_current_track().await {
                     Ok(_)  => self.state.status_msg = Some("♥ Liked!".to_string()),
@@ -531,6 +564,7 @@ impl App {
                                     self.state.playback.duration_ms = track.duration_ms;
                                     self.state.playback.progress_ms = 0;
                                     self.state.playback.is_playing = true;
+                                    self.current_track_uri = track.uri.clone();
                                     self.on_track_started();
                                 }
                             } else {
@@ -564,6 +598,7 @@ impl App {
                         if let Some(track_uri) = uri {
                             if let Some(player) = &mut self.player {
                                 // load just this track into queue
+                                self.current_track_uri = track_uri.clone();
                                 player.set_queue(vec![track_uri], 0);
                                 if let Some(sr) = &self.state.search_results {
                                     if let Some(idx) = sr.track_list.selected() {
@@ -645,6 +680,10 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+
+        // Reset album art so maybe_fetch_album_art will kick off a new fetch
+        self.state.album_art = None;
+        self.album_art_pending = None;
 
         if let Some(lfm) = self.lastfm.clone() {
             let artist = self.state.playback.artist.clone();
@@ -734,6 +773,56 @@ impl App {
         }
     }
 
+    async fn maybe_fetch_album_art(&mut self) {
+        if !self.state.show_album_art
+            || self.current_track_uri.is_empty()
+            || self.current_track_uri == self.last_art_uri
+            || self.album_art_pending.is_some()
+        {
+            return;
+        }
+        let uri = self.current_track_uri.clone();
+        let Some(token) = self.spotify.get_access_token().await else { return };
+        let http = self.spotify.http_client();
+        self.last_art_uri = uri.clone();
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.album_art_pending = Some(rx);
+
+        tokio::spawn(async move {
+            let Some(track_id) = uri.strip_prefix("spotify:track:").map(|s| s.to_string()) else {
+                let _ = tx.send(None);
+                return;
+            };
+            let Ok(resp) = http
+                .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
+                .bearer_auth(&token)
+                .send().await
+            else {
+                let _ = tx.send(None);
+                return;
+            };
+            let Ok(json) = resp.json::<serde_json::Value>().await else {
+                let _ = tx.send(None);
+                return;
+            };
+            // Use the largest image (first) for better quality in terminal
+            let Some(url) = json["album"]["images"].as_array()
+                .and_then(|imgs| imgs.first())
+                .and_then(|img| img["url"].as_str())
+                .map(|s| s.to_string())
+            else {
+                let _ = tx.send(None);
+                return;
+            };
+            let bytes = match http.get(&url).send().await {
+                Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
+                Err(_) => None,
+            };
+            let _ = tx.send(bytes);
+        });
+    }
+
     fn sync_track_selection(&mut self) {
         // If we just played a user_queue track, update playback from that
         let queued = self.player.as_mut().and_then(|p| p.playing_queued.take());
@@ -744,6 +833,7 @@ impl App {
             self.state.playback.duration_ms = qt.duration_ms;
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
+            self.current_track_uri = qt.uri;
             self.on_track_started();
             return;
         }
@@ -756,6 +846,7 @@ impl App {
                     self.state.playback.album = track.album.clone();
                     self.state.playback.duration_ms = track.duration_ms;
                     self.state.playback.progress_ms = 0;
+                    self.current_track_uri = track.uri.clone();
                     self.on_track_started();
                 }
             }

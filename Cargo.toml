@@ -50,6 +50,9 @@ md5 = "0.7"
 # OS memory management
 libc = "0.2"
 
+# Image processing (album art)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
 # Error handling
 anyhow = "1"
 thiserror = "2"

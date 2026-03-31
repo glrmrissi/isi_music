@@ -10,6 +10,17 @@ use std::f64::consts::TAU;
 
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 
+// ── Album Art ─────────────────────────────────────────────────────────────────
+
+pub struct AlbumArtData {
+    /// Pre-processed halfblock pixels: (top_r, top_g, top_b, bot_r, bot_g, bot_b)
+    pub pixels: Vec<(u8, u8, u8, u8, u8, u8)>,
+    pub width: u16,  // terminal columns
+    pub height: u16, // terminal rows (each = 2 pixel rows)
+    /// Raw image bytes for re-processing on terminal resize
+    pub raw: Vec<u8>,
+}
+
 // ── Playback State ────────────────────────────────────────────────────────────
 
 pub struct PlaybackState {
@@ -210,6 +221,9 @@ pub struct UiState {
     // Queue panel
     pub queue_items: Vec<(String, String)>, // (name, artist)
     pub queue_list: ListState,
+    // Album art
+    pub show_album_art: bool,
+    pub album_art: Option<AlbumArtData>,
     // Playback
     pub playback: PlaybackState,
     pub status_msg: Option<String>,
@@ -251,6 +265,8 @@ impl UiState {
             search_results: None,
             queue_items: Vec::new(),
             queue_list: ListState::default(),
+            show_album_art: true,
+            album_art: None,
             playback: PlaybackState::default(),
             status_msg: None,
             search_query: String::new(),
@@ -431,29 +447,39 @@ impl Ui {
             .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
             .split(root[1]);
 
-        // Left panel: Library (top 6 rows) + Playlists (rest) + Queue (bottom 8 rows)
+        // Left panel: Library + Playlists + (Album art if enabled)
+        let art_h = if state.show_album_art { Constraint::Length(16) } else { Constraint::Length(0) };
         let left_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(6), Constraint::Min(0), Constraint::Length(8)])
+            .constraints([Constraint::Length(6), Constraint::Min(0), art_h])
             .split(main_cols[0]);
+
+        // Right panel: content (top) + queue (bottom 8 rows)
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(8)])
+            .split(main_cols[1]);
 
         self.render_visualizer(frame, &state.playback, top_cols[0]);
         self.render_header(frame, state, top_cols[1]);
         self.render_library(frame, state, left_rows[0]);
         self.render_playlists(frame, state, left_rows[1]);
-        self.render_queue(frame, state, left_rows[2]);
+        if state.show_album_art {
+            self.render_album_art(frame, state, left_rows[2]);
+        }
 
         if state.search_results.is_some() {
-            self.render_search_panels(frame, state, main_cols[1]);
+            self.render_search_panels(frame, state, right_rows[0]);
         } else {
             match &state.active_content {
-                ActiveContent::None    => self.render_welcome(frame, main_cols[1]),
-                ActiveContent::Tracks  => self.render_tracks(frame, state, main_cols[1]),
-                ActiveContent::Albums  => self.render_albums(frame, state, main_cols[1]),
-                ActiveContent::Artists => self.render_artists(frame, state, main_cols[1]),
-                ActiveContent::Shows   => self.render_shows(frame, state, main_cols[1]),
+                ActiveContent::None    => self.render_welcome(frame, right_rows[0]),
+                ActiveContent::Tracks  => self.render_tracks(frame, state, right_rows[0]),
+                ActiveContent::Albums  => self.render_albums(frame, state, right_rows[0]),
+                ActiveContent::Artists => self.render_artists(frame, state, right_rows[0]),
+                ActiveContent::Shows   => self.render_shows(frame, state, right_rows[0]),
             }
         }
+        self.render_queue(frame, state, right_rows[1]);
 
         let playback_row = Layout::default()
             .direction(Direction::Horizontal)
@@ -989,6 +1015,63 @@ impl Ui {
         );
     }
 
+    // ── Album Art ─────────────────────────────────────────────────────────────
+
+    fn render_album_art(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" 󰋩 Cover ")
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner.width == 0 || inner.height == 0 { return; }
+
+        match &mut state.album_art {
+            None => {
+                frame.render_widget(
+                    Paragraph::new("").style(Style::default().fg(Color::DarkGray)),
+                    inner,
+                );
+            }
+            Some(art) => {
+                // Re-process if container size changed (e.g. terminal resize)
+                if art.width != inner.width || art.height != inner.height {
+                    if let Ok(img) = image::load_from_memory(&art.raw) {
+                        let (w, h) = (inner.width as u32, inner.height as u32);
+                        let resized = img.resize_exact(w, h * 2, image::imageops::FilterType::Lanczos3);
+                        let rgb = resized.to_rgb8();
+                        art.pixels = (0..h).flat_map(|row| {
+                            let rgb = &rgb;
+                            (0..w).map(move |col| {
+                                let t = rgb.get_pixel(col, row * 2);
+                                let b = rgb.get_pixel(col, row * 2 + 1);
+                                (t[0], t[1], t[2], b[0], b[1], b[2])
+                            })
+                        }).collect();
+                        art.width = inner.width;
+                        art.height = inner.height;
+                    }
+                }
+
+                for row in 0..art.height.min(inner.height) {
+                    for col in 0..art.width.min(inner.width) {
+                        let idx = row as usize * art.width as usize + col as usize;
+                        if let Some(&(tr, tg, tb, br, bg, bb)) = art.pixels.get(idx) {
+                            if let Some(cell) = frame.buffer_mut().cell_mut((inner.x + col, inner.y + row)) {
+                                cell.set_char('▀')
+                                    .set_fg(Color::Rgb(tr, tg, tb))
+                                    .set_bg(Color::Rgb(br, bg, bb));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── Queue ─────────────────────────────────────────────────────────────────
 
     fn render_queue(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -1052,7 +1135,7 @@ impl Ui {
             ))
         } else {
             Line::from(Span::styled(
-                " [hjkl/↑↓] Navigate  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [TAB] Focus  [Q] Quit ",
+                " [hjkl/↑↓] Navigate  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [C] Cover  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [TAB] Focus  [Q] Quit ",
                 Style::default().fg(Color::DarkGray),
             ))
         };

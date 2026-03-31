@@ -603,4 +603,25 @@ impl SpotifyClient {
 
         Ok((tracks, total))
     }
+
+    /// Return a cheap clone of the inner HTTP client (reqwest::Client is Arc-backed).
+    pub fn http_client(&self) -> reqwest::Client {
+        self.http.clone()
+    }
+
+    /// Fetch the smallest album art URL for a track URI (spotify:track:<id>).
+    pub async fn fetch_track_art_url(&self, track_uri: &str) -> Option<String> {
+        let track_id = track_uri.strip_prefix("spotify:track:")?;
+        let token = self.get_access_token().await?;
+        let json: serde_json::Value = self.http
+            .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
+            .bearer_auth(&token)
+            .send().await.ok()?
+            .json().await.ok()?;
+        // images are sorted largest→smallest; last() is smallest (64×64)
+        json["album"]["images"].as_array()?
+            .last()
+            .and_then(|img| img["url"].as_str())
+            .map(|s| s.to_string())
+    }
 }
