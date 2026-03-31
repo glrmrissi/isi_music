@@ -126,7 +126,7 @@ impl SpotifyClient {
         let mut all = vec![PlaylistSummary {
             id: "liked_songs".to_string(),
             uri: "liked_songs".to_string(),
-            name: "♥ Liked Songs".to_string(),
+            name: "Liked Songs".to_string(),
             total_tracks: 0,
         }];
         let mut offset = 0u32;
