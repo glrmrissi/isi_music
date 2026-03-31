@@ -1,7 +1,7 @@
 # isi_music
 
 [![Release](https://img.shields.io/github/v/release/glrmrissi/isi_music?style=flat-square&color=1DB954&label=version)](https://github.com/glrmrissi/isi_music/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/release.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/release.yml)
+[![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square)](LICENSE)
 
 A terminal-based Spotify player written in Rust. Uses librespot for native audio playback — no browser, no Electron, just your terminal.
