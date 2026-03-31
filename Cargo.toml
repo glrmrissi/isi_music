@@ -47,6 +47,9 @@ serde_json = "1"
 # MD5 (Last.fm API signature)
 md5 = "0.7"
 
+# RNG (shuffle)
+rand = "0.8"
+
 # OS memory management
 libc = "0.2"
 

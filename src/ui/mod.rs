@@ -577,6 +577,11 @@ impl Ui {
                 Span::styled(&state.search_query, Style::default().fg(Color::White)),
                 Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
             ])
+        } else if state.search_results.is_some() {
+            Line::from(vec![
+                Span::styled(" 󰍉  Search Results", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled("  [TAB] switch panel  [ENTER] open  [ESC] close", Style::default().fg(Color::DarkGray)),
+            ])
         } else if !pb.title.is_empty() {
             Line::from(vec![
                 Span::styled(" 󰓇  ", Style::default().fg(Color::Green)),
@@ -1135,7 +1140,7 @@ impl Ui {
             ))
         } else {
             Line::from(Span::styled(
-                " [hjkl/↑↓] Navigate  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [C] Cover  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [TAB] Focus  [Q] Quit ",
+                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Q] Quit ",
                 Style::default().fg(Color::DarkGray),
             ))
         };

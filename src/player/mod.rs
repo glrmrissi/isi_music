@@ -13,10 +13,14 @@ use librespot_playback::{
 };
 use crate::config;
 use std::sync::Arc;
+use rand::seq::SliceRandom;
 #[cfg(target_os = "linux")]
 use libc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum RepeatMode { #[default] Off, Track, Queue }
 
 pub enum PlayerNotification {
     TrackEnded,
@@ -42,6 +46,8 @@ pub struct NativePlayer {
     current_index: Option<usize>,
     pub is_playing: bool,
     pub volume: u8, // 0–100
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
 }
 
@@ -113,6 +119,8 @@ impl NativePlayer {
             current_index: None,
             is_playing: false,
             volume,
+            shuffle: false,
+            repeat: RepeatMode::Off,
             event_rx: notif_rx,
         };
         instance.apply_volume();
@@ -169,6 +177,13 @@ impl NativePlayer {
 
     pub fn next(&mut self) -> bool {
         self.playing_queued = None;
+        // Track repeat: re-play the same track
+        if self.repeat == RepeatMode::Track {
+            if let Some(idx) = self.current_index {
+                self.play_at(idx);
+                return true;
+            }
+        }
         // User queue has priority
         if !self.user_queue.is_empty() {
             let track = self.user_queue.remove(0);
@@ -187,9 +202,21 @@ impl NativePlayer {
             }
         }
         if let Some(idx) = self.current_index {
-            let next = idx + 1;
-            if next < self.queue.len() {
+            let len = self.queue.len();
+            let next = if self.shuffle && len > 1 {
+                let mut rng = rand::thread_rng();
+                let mut candidates: Vec<usize> = (0..len).filter(|&i| i != idx).collect();
+                *candidates.choose(&mut rng).unwrap_or(&((idx + 1) % len))
+            } else {
+                idx + 1
+            };
+            if next < len {
                 self.play_at(next);
+                return true;
+            }
+            // End of queue — wrap around if repeat Queue
+            if self.repeat == RepeatMode::Queue && len > 0 {
+                self.play_at(0);
                 return true;
             }
         }
@@ -204,6 +231,18 @@ impl NativePlayer {
             }
         }
         false
+    }
+
+    pub fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+    }
+
+    pub fn cycle_repeat(&mut self) {
+        self.repeat = match self.repeat {
+            RepeatMode::Off   => RepeatMode::Queue,
+            RepeatMode::Queue => RepeatMode::Track,
+            RepeatMode::Track => RepeatMode::Off,
+        };
     }
 
     pub fn current_index(&self) -> Option<usize> {

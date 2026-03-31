@@ -6,7 +6,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 use crate::lastfm::LastfmClient;
-use crate::player::{NativePlayer, PlayerNotification};
+use crate::player::{NativePlayer, PlayerNotification, RepeatMode};
+use rspotify::model::RepeatState;
 use crate::spotify::SpotifyClient;
 use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, Ui, UiState};
 
@@ -116,6 +117,12 @@ impl App {
                 }
                 self.state.playback.is_playing = player.is_playing;
                 self.state.playback.volume = player.volume;
+                self.state.playback.shuffle = player.shuffle;
+                self.state.playback.repeat = match player.repeat {
+                    RepeatMode::Off   => RepeatState::Off,
+                    RepeatMode::Queue => RepeatState::Context,
+                    RepeatMode::Track => RepeatState::Track,
+                };
             }
 
             if needs_sync {
@@ -350,8 +357,22 @@ impl App {
                     let _ = self.spotify.prev_track().await;
                 }
             }
-            (KeyCode::Char('s'), _) => { let _ = self.spotify.toggle_shuffle().await; }
-            (KeyCode::Char('r'), _) => { let _ = self.spotify.cycle_repeat().await; }
+            (KeyCode::Char('s'), _) => {
+                if let Some(player) = &mut self.player {
+                    player.toggle_shuffle();
+                    self.state.playback.shuffle = player.shuffle;
+                }
+            }
+            (KeyCode::Char('r'), _) => {
+                if let Some(player) = &mut self.player {
+                    player.cycle_repeat();
+                    self.state.playback.repeat = match player.repeat {
+                        RepeatMode::Off   => RepeatState::Off,
+                        RepeatMode::Queue => RepeatState::Context,
+                        RepeatMode::Track => RepeatState::Track,
+                    };
+                }
+            }
             (KeyCode::Char('c'), _) if modifiers != KeyModifiers::CONTROL => {
                 self.state.show_album_art = !self.state.show_album_art;
                 if self.state.show_album_art {
