@@ -78,8 +78,13 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
         api_key, token
     );
 
-    println!("\nPlease authorize isi-music in your browser:");
-    println!("URL: {}", auth_url);
+    println!("\nOpening Last.fm authorization in your browser...");
+    if open::that(&auth_url).is_err() {
+        println!("Could not open browser automatically. Please visit:");
+        println!("URL: {}", auth_url);
+    } else {
+        println!("URL: {}", auth_url);
+    }
     println!("\nAfter authorizing, return here and press ENTER.");
     
     let mut _unused = String::new();
@@ -156,6 +161,18 @@ QUEUE MANAGEMENT
 SETUP
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
+
+LAST.FM SCROBBLING
+  Run `isi-music setup-lastfm` to enable scrobbling.
+  The setup will:
+    1. Ask for your Last.fm API Key and API Secret
+       (create an app at https://www.last.fm/api/account/create)
+    2. Open the Last.fm authorization page in your browser
+    3. Wait for you to authorize, then obtain a session key
+    4. Save credentials to ~/.config/isi-music/config.toml
+  Once configured, isi-music will:
+    - Send \"now playing\" updates when a track starts
+    - Scrobble tracks after 50% of the song has been played
 
 AUTH
   Uses PKCE — only client_id is needed (no client_secret)

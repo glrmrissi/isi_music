@@ -1543,6 +1543,7 @@ dependencies = [
  "librespot-playback",
  "md5",
  "mpris-server",
+ "open",
  "rand 0.8.5",
  "ratatui",
  "ratatui-image",

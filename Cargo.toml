@@ -48,6 +48,9 @@ serde_json = "1"
 # MD5 (Last.fm API signature)
 md5 = "0.7"
 
+# Open URLs in default browser
+open = "5"
+
 # RNG (shuffle)
 rand = "0.8"
 
