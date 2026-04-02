@@ -12,12 +12,13 @@ A terminal-based Spotify player written in Rust. Uses librespot for native audio
 
 - Native audio playback via librespot (no Spotify app required)
 - Full-text search across tracks, albums, artists, playlists, and podcasts
-- Queue management with drag-free ordering
+- Queue management
 - Shuffle and repeat modes (off / queue / track)
-- Album art rendered with half-block characters in the terminal
+- Album art rendered via Kitty / Sixel / half-block (auto-detected)
 - Audio visualizer
 - Last.fm scrobbling
-- Keyboard-driven interface
+- Keyboard-driven TUI interface
+- **Daemon mode** — keep music playing after closing the terminal, control via CLI
 
 > **Requires Spotify Premium** — librespot needs a Premium account for audio streaming.
 
@@ -136,18 +137,66 @@ http://127.0.0.1:8888/callback
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Cycle between panels |
-| `Enter` | Play selected / confirm |
+| `Tab` / `hjkl` / `↑↓` | Navigate panels |
+| `Enter` | Play selected / open album or artist |
 | `Space` | Play / pause |
-| `n` | Next track |
-| `p` | Previous track |
+| `n` / `p` | Next / previous track |
 | `s` | Toggle shuffle |
-| `r` | Cycle repeat mode |
+| `r` | Cycle repeat (off → queue → track) |
 | `+` / `-` | Volume up / down |
-| `/` | Focus search |
-| `q` | Add to queue |
-| `Esc` | Back / cancel |
-| `Ctrl+C` | Quit |
+| `←` / `→` | Seek ±5 s (hold for ±10 s) |
+| `/` | Search Spotify |
+| `a` | Add track to queue |
+| `c` | Toggle album art panel |
+| `z` | Toggle fullscreen player |
+| `l` | Like current track |
+| `Backspace` | Back to previous search results |
+| `Esc` | Close search / exit fullscreen |
+| `q` / `Ctrl+C` | Quit |
+
+---
+
+## Daemon Mode
+
+Run isi-music in the background — music keeps playing after the terminal is closed.
+
+```bash
+# Start the daemon (detaches from terminal automatically)
+isi-music --daemon
+
+# Load a playlist and play
+isi-music --play spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+
+# Load all liked songs and play
+isi-music --liked
+
+# List loaded tracks with their ID
+isi-music --ls
+#    0  Karma Police — Radiohead
+# ▶  1  Creep — Radiohead
+#    2  Fake Plastic Trees — Radiohead
+
+# Play a specific track by ID
+isi-music --play-id 2
+
+# Playback controls
+isi-music --toggle       # play / pause
+isi-music --next         # next track
+isi-music --prev         # previous track
+isi-music --vol+         # volume +5%
+isi-music --vol-         # volume -5%
+isi-music --status       # ▶  Creep — Radiohead  |  1:23 / 3:58  |  vol 70%
+
+# Stop the daemon
+isi-music --quit-daemon
+```
+
+Daemon logs are written to `~/.local/share/isi-music/isi-music.log`.
+
+```bash
+# Clear the log file
+isi-music --clear-logs
+```
 
 ---
 

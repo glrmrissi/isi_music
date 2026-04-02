@@ -44,7 +44,7 @@ impl App {
         let mut spotify = SpotifyClient::new().await?;
 
         let player = match spotify.get_access_token().await {
-            Some(token) => match NativePlayer::new(token).await {
+            Some(token) => match NativePlayer::new(token, false).await {
                 Ok(p) => {
                     tracing::info!("Native player started");
                     Some(p)
@@ -141,13 +141,8 @@ impl App {
                     if let Some(bytes) = result {
                         let image_state = image::load_from_memory(&bytes).ok()
                             .map(|img| self.picker.new_resize_protocol(img));
-                        self.state.album_art = Some(AlbumArtData {
-                            raw: bytes,
-                            pixels: vec![],
-                            width: 0,
-                            height: 0,
-                            image_state,
-                        });
+                        // bytes dropped here — StatefulProtocol owns all pixel data
+                        self.state.album_art = Some(AlbumArtData { image_state });
                     }
                 }
             }
@@ -155,7 +150,9 @@ impl App {
 
             terminal.draw(|f| self.ui.render(f, &mut self.state))?;
 
-            if crossterm::event::poll(Duration::from_millis(100))? {
+            // Faster poll when playing (smooth visualizer + progress), slower when paused
+            let poll_ms = if self.state.playback.is_playing { 100 } else { 500 };
+            if crossterm::event::poll(Duration::from_millis(poll_ms))? {
                 if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
                     self.handle_key(key_event.code, key_event.modifiers).await?;
                 }

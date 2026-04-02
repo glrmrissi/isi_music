@@ -52,7 +52,8 @@ pub struct NativePlayer {
 }
 
 impl NativePlayer {
-    pub async fn new(access_token: String) -> Result<Self> {
+    /// `low_resource`: use 96kbps bitrate + smaller buffer (for daemon/background mode)
+    pub async fn new(access_token: String, low_resource: bool) -> Result<Self> {
         let session = Session::new(SessionConfig::default(), None);
         let credentials = Credentials::with_access_token(access_token);
         session
@@ -70,8 +71,13 @@ impl NativePlayer {
         let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
         let volume_getter = soft_mixer.get_soft_volume();
 
+        let bitrate = if low_resource {
+            librespot_playback::config::Bitrate::Bitrate96
+        } else {
+            librespot_playback::config::Bitrate::Bitrate320
+        };
         let player = LibrespotPlayer::new(
-            PlayerConfig { gapless: false, ..PlayerConfig::default() },
+            PlayerConfig { gapless: false, bitrate, ..PlayerConfig::default() },
             session,
             volume_getter,
             move || backend(None, audio_format),

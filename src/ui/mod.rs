@@ -14,13 +14,7 @@ use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSum
 // ── Album Art ─────────────────────────────────────────────────────────────────
 
 pub struct AlbumArtData {
-    /// Pre-processed halfblock pixels: (top_r, top_g, top_b, bot_r, bot_g, bot_b)
-    pub pixels: Vec<(u8, u8, u8, u8, u8, u8)>,
-    pub width: u16,  // terminal columns
-    pub height: u16, // terminal rows (each = 2 pixel rows)
-    /// Raw image bytes for re-processing on terminal resize
-    pub raw: Vec<u8>,
-    /// High-quality render state (kitty/sixel/halfblocks via ratatui-image)
+    /// Render state (kitty/sixel/halfblocks via ratatui-image; handles resize automatically)
     pub image_state: Option<StatefulProtocol>,
 }
 
@@ -562,18 +556,16 @@ impl Ui {
         let partial_chars = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
 
         for x in 0..inner.width {
-            let x_f = x as f64;
-            // Each column has a fixed frequency/phase from its position — no traveling wave
-            let freq  = 0.5 + (x_f / w) * 3.0 + (x_f * 0.37 + title_seed * 0.01).sin() * 0.5;
-            let phase = x_f * 2.1 + title_seed * 0.07;
-
             let amplitude = if pb.is_playing {
+                let x_f = x as f64;
+                let freq  = 0.5 + (x_f / w) * 3.0 + (x_f * 0.37 + title_seed * 0.01).sin() * 0.5;
+                let phase = x_f * 2.1 + title_seed * 0.07;
                 let a = (t * freq + phase).sin().abs();
                 let b = (t * freq * 0.53 + phase + 1.3).cos().abs();
                 let c = (t * freq * 1.7 + phase * 0.4).sin().abs();
                 (a * 0.5 + b * 0.3 + c * 0.2).clamp(0.03, 1.0)
             } else {
-                0.03
+                0.03 // flat bars when paused — skip all sin/cos
             };
 
             // Convert amplitude to units (height * 8 for sub-cell resolution)
