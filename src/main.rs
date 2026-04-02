@@ -32,6 +32,7 @@ fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("────────────────────────────────────────");
     println!("Create a Spotify app at: https://developer.spotify.com/dashboard");
     println!("Set the redirect URI to: http://127.0.0.1:8888/callback");
+    println!("No client secret needed — isi-music uses PKCE authentication.");
     println!();
 
     let client_id = loop {
@@ -39,14 +40,8 @@ fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
         if !v.is_empty() { break v; }
         println!("Cannot be empty.");
     };
-    let client_secret = loop {
-        let v = prompt("Client Secret: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
 
     cfg.spotify.client_id = Some(client_id);
-    cfg.spotify.client_secret = Some(client_secret);
     cfg.save()?;
 
     println!();
@@ -154,6 +149,11 @@ QUEUE MANAGEMENT
 SETUP
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
+
+AUTH
+  Uses PKCE — only client_id is needed (no client_secret)
+  Register at https://developer.spotify.com/dashboard
+  Set redirect URI to http://127.0.0.1:8888/callback
 
 FILES
   Config   ~/.config/isi-music/config.toml

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use rspotify::{
-    AuthCodeSpotify,
+    AuthCodePkceSpotify,
     clients::{BaseClient, OAuthClient},
     model::{
         ArtistId, Id, LibraryId, Offset, PlayContextId, PlayableItem, PlaylistId,
@@ -63,7 +63,7 @@ pub struct FullSearchResults {
 }
 
 pub struct SpotifyClient {
-    client: AuthCodeSpotify,
+    client: AuthCodePkceSpotify,
     http: reqwest::Client,
     shuffle_state: bool,
     repeat_state: RepeatState,
@@ -72,7 +72,7 @@ pub struct SpotifyClient {
 
 impl SpotifyClient {
     pub async fn new() -> Result<Self> {
-        let client = SpotifyAuth::build_client()?;
+        let mut client = SpotifyAuth::build_client()?;
 
         let needs_auth = if client.read_token_cache(true).await.is_ok() {
             if client.current_user().await.is_err() {
@@ -88,7 +88,7 @@ impl SpotifyClient {
 
         if needs_auth {
             let url = client
-                .get_authorize_url(false)
+                .get_authorize_url(None)
                 .context("Failed to generate authorization URL")?;
             let code = SpotifyAuth::run_oauth_flow(&url).await?;
             client

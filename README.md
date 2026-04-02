@@ -111,24 +111,19 @@ The config file is created automatically at:
 - **Linux:** `~/.config/isi-music/config.toml`
 - **Windows:** `%APPDATA%\isi-music\config.toml`
 
-You need to register a Spotify app at [developer.spotify.com](https://developer.spotify.com/dashboard) and add your credentials:
+Register a Spotify app at [developer.spotify.com](https://developer.spotify.com/dashboard) and set the redirect URI to `http://127.0.0.1:8888/callback`.
+
+isi-music uses **PKCE authentication** — only the Client ID is needed. No client secret required.
 
 ```toml
 [spotify]
-client_id     = "your_client_id_here"
-client_secret = "your_client_secret_here"
+client_id = "your_client_id_here"
 
 # Optional: Last.fm scrobbling
 [lastfm]
 api_key    = "your_lastfm_api_key"
 api_secret = "your_lastfm_api_secret"
-username   = "your_lastfm_username"
-password   = "your_lastfm_password"
-```
-
-In your Spotify app dashboard, set the redirect URI to:
-```
-http://127.0.0.1:8888/callback
+session_key = "obtained_via_setup-lastfm"
 ```
 
 ---

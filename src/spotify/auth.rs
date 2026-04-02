@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use rspotify::{AuthCodeSpotify, Config, Credentials, OAuth, scopes};
+use rspotify::{AuthCodePkceSpotify, Config, Credentials, OAuth, scopes};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -12,19 +12,17 @@ const CALLBACK_PORT: u16 = 8888;
 pub struct SpotifyAuth;
 
 impl SpotifyAuth {
-    pub fn build_client() -> Result<AuthCodeSpotify> {
+    pub fn build_client() -> Result<AuthCodePkceSpotify> {
         let cfg = AppConfig::load()?;
 
         let client_id = cfg
             .get_client_id()
             .context("SPOTIFY_CLIENT_ID not found.\nSet it in ~/.config/isi-music/config.toml or as an environment variable.")?;
-        let client_secret = cfg
-            .get_client_secret()
-            .context("SPOTIFY_CLIENT_SECRET not found.\nSet it in ~/.config/isi-music/config.toml or as an environment variable.")?;
 
         let cache_path = config::cache_path()?;
 
-        let creds = Credentials::new(&client_id, &client_secret);
+        // PKCE: no client_secret needed — the app generates a one-time code_verifier
+        let creds = Credentials::new_pkce(&client_id);
         let oauth = OAuth {
             redirect_uri: format!("http://127.0.0.1:{CALLBACK_PORT}/callback"),
             scopes: scopes!(
@@ -48,7 +46,7 @@ impl SpotifyAuth {
             ..Default::default()
         };
 
-        Ok(AuthCodeSpotify::with_config(creds, oauth, rspotify_config))
+        Ok(AuthCodePkceSpotify::with_config(creds, oauth, rspotify_config))
     }
 
     /// Opens the browser and waits for the OAuth callback via local server.
