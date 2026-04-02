@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use rspotify::{
-    AuthCodePkceSpotify,
+    AuthCodePkceSpotify, Token,
     clients::{BaseClient, OAuthClient},
     model::{
         ArtistId, Id, LibraryId, Offset, PlayContextId, PlayableItem, PlaylistId,
@@ -74,13 +74,51 @@ impl SpotifyClient {
     pub async fn new() -> Result<Self> {
         let mut client = SpotifyAuth::build_client()?;
 
-        let needs_auth = if client.read_token_cache(true).await.is_ok() {
-            if client.current_user().await.is_err() {
-                warn!("Cached token is invalid, re-authenticating...");
-                let _ = std::fs::remove_file(config::cache_path()?);
-                true
-            } else {
-                false
+        // rspotify drops the refresh_token from token.json after every auto-refresh
+        // (Spotify omits it from the refresh response meaning "keep using the same one",
+        // but rspotify replaces the whole Token object). We persist it ourselves,
+        // exchange it for a fresh access_token via direct HTTP, write a valid token.json,
+        // and only fall back to full browser OAuth if the refresh_token is missing or revoked.
+        let saved_rt = config::load_refresh_token();
+
+        let needs_auth = if let Some(ref rt) = saved_rt {
+            match Self::exchange_refresh_token(rt).await {
+                Ok((access_token, expires_in_secs, new_rt)) => {
+                    // PKCE rotates the refresh_token on every exchange — persist the new one
+                    // immediately so the next launch uses the fresh token.
+                    let effective_rt = new_rt.as_deref().unwrap_or(rt.as_str());
+                    config::save_refresh_token(effective_rt);
+
+                    // Build a Token and set it directly in the client's in-memory slot.
+                    // (read_token_cache only returns the token, it does not set client.token.)
+                    use chrono::{Duration, Utc};
+                    use std::collections::HashSet;
+                    let expires_at = Utc::now() + Duration::try_seconds(expires_in_secs as i64)
+                        .unwrap_or_else(|| Duration::try_seconds(3600).unwrap());
+                    let scopes: HashSet<String> = [
+                        "streaming", "user-read-private", "user-library-read",
+                        "user-modify-playback-state", "user-read-playback-state",
+                        "user-read-currently-playing", "user-library-modify",
+                        "playlist-read-private", "playlist-modify-private",
+                        "playlist-modify-public",
+                    ].iter().map(|s| s.to_string()).collect();
+                    let token = Token {
+                        access_token,
+                        expires_in: Duration::try_seconds(expires_in_secs as i64)
+                            .unwrap_or_else(|| Duration::try_seconds(3600).unwrap()),
+                        expires_at: Some(expires_at),
+                        refresh_token: Some(effective_rt.to_string()),
+                        scopes,
+                    };
+                    if let Ok(mut guard) = client.token.lock().await {
+                        *guard = Some(token);
+                    }
+                    false // token loaded — no OAuth needed
+                }
+                Err(e) => {
+                    warn!("Refresh token exchange failed ({e}), re-authenticating...");
+                    true
+                }
             }
         } else {
             true
@@ -95,6 +133,17 @@ impl SpotifyClient {
                 .request_token(&code)
                 .await
                 .context("Failed to exchange code for token")?;
+        }
+
+        // Snapshot the refresh_token for future launches (rspotify may drop it later).
+        {
+            if let Ok(guard) = client.token.lock().await {
+                if let Some(token) = guard.as_ref() {
+                    if let Some(rt) = &token.refresh_token {
+                        config::save_refresh_token(rt);
+                    }
+                }
+            }
         }
 
         info!("Authenticated with Spotify");
@@ -596,16 +645,23 @@ impl SpotifyClient {
 
         let offset_str = offset.to_string();
         let client = &self.http;
+        let mut query = vec![("limit", "50"), ("offset", &offset_str)];
+        let market_owned;
+        if let Some(m) = &self.user_market {
+            market_owned = m.clone();
+            query.push(("market", &market_owned));
+        }
         let response = client
             .get(format!("https://api.spotify.com/v1/shows/{show_id}/episodes"))
             .bearer_auth(&token)
-            .query(&[("limit", "20"), ("offset", &offset_str)])
+            .query(&query)
             .send()
             .await?;
 
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            tracing::error!("fetch_show_episodes {status}: {body}");
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
@@ -617,10 +673,13 @@ impl SpotifyClient {
             for item in items {
                 let name = item["name"].as_str().unwrap_or("Unknown").to_string();
                 let description = item["description"].as_str().unwrap_or("").to_string();
-                let artist = if description.len() > 60 {
-                    format!("{}…", &description[..60])
-                } else {
-                    description
+                let artist = {
+                    let chars: Vec<char> = description.chars().collect();
+                    if chars.len() > 60 {
+                        format!("{}…", chars[..60].iter().collect::<String>())
+                    } else {
+                        description
+                    }
                 };
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
@@ -634,6 +693,43 @@ impl SpotifyClient {
     /// Return a cheap clone of the inner HTTP client (reqwest::Client is Arc-backed).
     pub fn http_client(&self) -> reqwest::Client {
         self.http.clone()
+    }
+
+    /// Exchange a refresh_token for a fresh access_token via Spotify's token endpoint.
+    /// Returns (access_token, expires_in_seconds, new_refresh_token).
+    /// PKCE flow always rotates the refresh_token — callers must save the new one.
+    async fn exchange_refresh_token(refresh_token: &str) -> Result<(String, u64, Option<String>)> {
+        let cfg = config::AppConfig::load()?;
+        let client_id = cfg.get_client_id()
+            .ok_or_else(|| anyhow::anyhow!("No client_id configured"))?;
+
+        let http = reqwest::Client::new();
+        let resp = http
+            .post("https://accounts.spotify.com/api/token")
+            .form(&[
+                ("grant_type",    "refresh_token"),
+                ("refresh_token", refresh_token),
+                ("client_id",     &client_id),
+            ])
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let json: serde_json::Value = resp.json().await?;
+
+        if !status.is_success() {
+            anyhow::bail!("token endpoint {status}: {}", json);
+        }
+
+        let access_token = json["access_token"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("no access_token in response"))?
+            .to_string();
+        let expires_in = json["expires_in"].as_u64().unwrap_or(3600);
+        // PKCE rotates the refresh_token on every exchange; capture it if present.
+        let new_rt = json["refresh_token"].as_str().map(|s| s.to_string());
+
+        Ok((access_token, expires_in, new_rt))
     }
 
     /// Fetch the smallest album art URL for a track URI (spotify:track:<id>).
@@ -652,3 +748,4 @@ impl SpotifyClient {
             .map(|s| s.to_string())
     }
 }
+

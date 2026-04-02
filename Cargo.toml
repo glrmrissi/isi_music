@@ -20,6 +20,7 @@ crossterm = "0.28"
 
 # Spotify API
 rspotify = { version = "0.16", features = ["client-reqwest"] }
+chrono = "0.4"
 
 # Spotify Connect / native audio
 librespot-core = "0.8"
