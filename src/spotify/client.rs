@@ -3,7 +3,8 @@ use rspotify::{
     AuthCodeSpotify,
     clients::{BaseClient, OAuthClient},
     model::{
-        Id, LibraryId, Offset, PlayContextId, PlayableItem, PlaylistId, RepeatState, TrackId,
+        ArtistId, Id, LibraryId, Offset, PlayContextId, PlayableItem, PlaylistId,
+        RepeatState, TrackId,
     },
 };
 use tracing::{info, warn};
@@ -28,6 +29,7 @@ pub struct TrackSummary {
 }
 
 pub struct ArtistSummary {
+    pub id: String,
     pub name: String,
     pub uri: String,
     pub genres: String,
@@ -54,6 +56,10 @@ pub struct FullSearchResults {
     pub artists: Vec<ArtistSummary>,
     pub albums: Vec<AlbumSummary>,
     pub playlists: Vec<PlaylistSummary>,
+    pub tracks_total: u32,
+    pub artists_total: u32,
+    pub albums_total: u32,
+    pub playlists_total: u32,
 }
 
 pub struct SpotifyClient {
@@ -61,6 +67,7 @@ pub struct SpotifyClient {
     http: reqwest::Client,
     shuffle_state: bool,
     repeat_state: RepeatState,
+    user_market: Option<String>,
 }
 
 impl SpotifyClient {
@@ -91,18 +98,36 @@ impl SpotifyClient {
         }
 
         info!("Authenticated with Spotify");
-        Ok(Self {
+        let mut spotify = Self {
             client,
             http: reqwest::Client::new(),
             shuffle_state: false,
             repeat_state: RepeatState::Off,
-        })
+            user_market: None,
+        };
+        spotify.user_market = spotify.fetch_user_market().await.ok();
+        Ok(spotify)
     }
 
     /// Returns the current access token for use with librespot.
     pub async fn get_access_token(&self) -> Option<String> {
         let guard = self.client.token.lock().await.ok()?;
         guard.as_ref().map(|t| t.access_token.clone())
+    }
+
+    async fn fetch_user_market(&self) -> Result<String> {
+        let token = self.get_access_token().await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let json: serde_json::Value = self.http
+            .get("https://api.spotify.com/v1/me")
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .json()
+            .await?;
+        json["country"].as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("No country in profile"))
     }
 
     pub async fn fetch_liked_tracks(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
@@ -301,25 +326,34 @@ impl SpotifyClient {
     }
 
     pub async fn search_all(&self, query: &str) -> Result<FullSearchResults> {
+        self.search_internal(query, "track,artist,album,playlist", 0, 10).await
+    }
+
+    pub async fn search_more(&self, query: &str, search_type: &str, offset: u32) -> Result<FullSearchResults> {
+        self.search_internal(query, search_type, offset, 10).await
+    }
+
+    async fn search_internal(&self, query: &str, search_type: &str, offset: u32, limit: u32) -> Result<FullSearchResults> {
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let client = &self.http;
-        let request = client
+        let offset_str = offset.to_string();
+        let limit_str = limit.to_string();
+        let response = self.http
             .get("https://api.spotify.com/v1/search")
             .bearer_auth(&token)
             .query(&[
                 ("q", query),
-                ("type", "track,artist,album,playlist"),
-                ("limit", "8"),
+                ("type", search_type),
+                ("limit", &limit_str),
+                ("offset", &offset_str),
             ])
-            .build()?;
+            .send()
+            .await?;
 
-        let response = client.execute(request).await?;
         let status = response.status();
-
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
@@ -328,60 +362,74 @@ impl SpotifyClient {
         let json: serde_json::Value = response.json().await?;
 
         let mut tracks = Vec::new();
-        if let Some(items) = json["tracks"]["items"].as_array() {
-            for item in items {
-                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let artist = item["artists"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_default();
-                let album = item["album"]["name"].as_str().unwrap_or("").to_string();
-                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
-                let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+        let mut tracks_total = 0u32;
+        if let Some(obj) = json["tracks"].as_object() {
+            tracks_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                for item in items {
+                    let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                    let artist = item["artists"].as_array()
+                        .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    let album = item["album"]["name"].as_str().unwrap_or("").to_string();
+                    let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
+                    let uri = item["uri"].as_str().unwrap_or("").to_string();
+                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+                }
             }
         }
 
         let mut artists = Vec::new();
-        if let Some(items) = json["artists"]["items"].as_array() {
-            for item in items {
-                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let uri = item["uri"].as_str().unwrap_or("").to_string();
-                let genres = item["genres"]
-                    .as_array()
-                    .map(|g| g.iter().filter_map(|x| x.as_str()).take(2).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_default();
-                artists.push(ArtistSummary { name, uri, genres });
+        let mut artists_total = 0u32;
+        if let Some(obj) = json["artists"].as_object() {
+            artists_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                for item in items {
+                    let id = item["id"].as_str().unwrap_or("").to_string();
+                    let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                    let uri = item["uri"].as_str().unwrap_or("").to_string();
+                    let genres = item["genres"].as_array()
+                        .map(|g| g.iter().filter_map(|x| x.as_str()).take(2).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    artists.push(ArtistSummary { id, name, uri, genres });
+                }
             }
         }
 
         let mut albums = Vec::new();
-        if let Some(items) = json["albums"]["items"].as_array() {
-            for item in items {
-                let id = item["id"].as_str().unwrap_or("").to_string();
-                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let artist = item["artists"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_default();
-                let uri = item["uri"].as_str().unwrap_or("").to_string();
-                let total_tracks = item["total_tracks"].as_u64().unwrap_or(0) as u32;
-                albums.push(AlbumSummary { id, name, artist, uri, total_tracks });
+        let mut albums_total = 0u32;
+        if let Some(obj) = json["albums"].as_object() {
+            albums_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                for item in items {
+                    let id = item["id"].as_str().unwrap_or("").to_string();
+                    let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                    let artist = item["artists"].as_array()
+                        .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    let uri = item["uri"].as_str().unwrap_or("").to_string();
+                    let total_tracks = item["total_tracks"].as_u64().unwrap_or(0) as u32;
+                    albums.push(AlbumSummary { id, name, artist, uri, total_tracks });
+                }
             }
         }
 
         let mut playlists = Vec::new();
-        if let Some(items) = json["playlists"]["items"].as_array() {
-            for item in items {
-                let id = item["id"].as_str().unwrap_or("").to_string();
-                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let uri = item["uri"].as_str().unwrap_or("").to_string();
-                let total_tracks = item["tracks"]["total"].as_u64().unwrap_or(0) as u32;
-                playlists.push(PlaylistSummary { id, name, uri, total_tracks });
+        let mut playlists_total = 0u32;
+        if let Some(obj) = json["playlists"].as_object() {
+            playlists_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                for item in items {
+                    let id = item["id"].as_str().unwrap_or("").to_string();
+                    let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                    let uri = item["uri"].as_str().unwrap_or("").to_string();
+                    let total_tracks = item["tracks"]["total"].as_u64().unwrap_or(0) as u32;
+                    playlists.push(PlaylistSummary { id, name, uri, total_tracks });
+                }
             }
         }
 
-        Ok(FullSearchResults { tracks, artists, albums, playlists })
+        Ok(FullSearchResults { tracks, artists, albums, playlists, tracks_total, artists_total, albums_total, playlists_total })
     }
 
     pub async fn fetch_album_tracks(&self, album_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
@@ -473,50 +521,29 @@ impl SpotifyClient {
             .await?;
         let mut artists = Vec::new();
         for artist in page.items {
+            let id = artist.id.id().to_string();
             let name = artist.name;
             let uri = artist.id.uri();
             let genres = artist.genres.iter().take(2).map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
-            artists.push(ArtistSummary { name, uri, genres });
+            artists.push(ArtistSummary { id, name, uri, genres });
         }
         Ok(artists)
     }
 
     pub async fn fetch_artist_top_tracks(&self, artist_id: &str) -> Result<Vec<TrackSummary>> {
-        let token = self
-            .get_access_token()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+        let id = ArtistId::from_id(artist_id)
+            .map_err(|e| anyhow::anyhow!("Invalid artist id: {e}"))?;
 
-        let client = &self.http;
-        let response = client
-            .get(format!("https://api.spotify.com/v1/artists/{artist_id}/top-tracks"))
-            .bearer_auth(&token)
-            .query(&[("market", "from_token")])
-            .send()
+        let full_tracks = self.client
+            .artist_top_tracks(id, None)
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
-        }
-
-        let json: serde_json::Value = response.json().await?;
-        let mut tracks = Vec::new();
-
-        if let Some(items) = json["tracks"].as_array() {
-            for item in items {
-                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let artist = item["artists"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_default();
-                let album = item["album"]["name"].as_str().unwrap_or("").to_string();
-                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
-                let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
-            }
-        }
+        let tracks = full_tracks.into_iter().map(|t| {
+            let artist = t.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+            let duration_ms = t.duration.num_milliseconds().try_into().unwrap_or(0u64);
+            let uri = t.id.map(|id| id.uri()).unwrap_or_default();
+            TrackSummary { name: t.name, artist, album: t.album.name, duration_ms, uri }
+        }).collect();
 
         Ok(tracks)
     }
