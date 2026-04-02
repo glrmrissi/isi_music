@@ -3,7 +3,6 @@ use ratatui_image::picker::Picker;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    event::{EnableMouseCapture, DisableMouseCapture},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
@@ -13,6 +12,8 @@ mod config;
 mod daemon;
 mod ipc;
 mod lastfm;
+#[cfg(feature = "mpris")]
+mod mpris;
 mod player;
 mod spotify;
 mod ui;
@@ -165,7 +166,7 @@ FILES
 fn main() -> Result<()> {
     // Reset any leftover terminal state from a previous crash
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
 
     if let Ok(env_path) = config::env_path() {
         dotenvy::from_path(&env_path).ok();
@@ -289,7 +290,7 @@ fn main() -> Result<()> {
 
             enable_raw_mode()?;
             let mut stdout = io::stdout();
-            execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+            execute!(stdout, EnterAlternateScreen)?;
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
@@ -297,11 +298,7 @@ fn main() -> Result<()> {
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;
-            execute!(
-                terminal.backend_mut(),
-                LeaveAlternateScreen,
-                DisableMouseCapture
-            )?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             terminal.show_cursor()?;
 
             if let Err(err) = res {

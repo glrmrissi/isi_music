@@ -8,6 +8,8 @@ use tracing::{info, warn};
 use crate::config::AppConfig;
 use crate::ipc::socket_path;
 use crate::lastfm::LastfmClient;
+#[cfg(feature = "mpris")]
+use crate::mpris::{MprisCmd, MprisState};
 use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
 
@@ -46,6 +48,13 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("No Spotify access token"))?;
     let mut player: Box<dyn AudioPlayer> = Box::new(NativePlayer::new(token, true).await?);
+
+    // MPRIS D-Bus (optional — gracefully degrades if D-Bus unavailable)
+    #[cfg(feature = "mpris")]
+    let mut mpris = match crate::mpris::spawn().await {
+        Ok(h) => { info!("MPRIS D-Bus server started"); Some(h) }
+        Err(e) => { warn!("MPRIS unavailable: {e}"); None }
+    };
 
     // IPC socket
     let sock = socket_path();
@@ -150,6 +159,48 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 let now = Instant::now();
                 let delta = now.duration_since(last_tick).as_millis() as u64;
                 last_tick = now;
+
+                // MPRIS: push state + handle incoming commands (media keys, playerctl)
+                #[cfg(feature = "mpris")]
+                if let Some(mpris) = &mut mpris {
+                    let idx = player.current_index();
+                    let (title, artist, duration_us) = idx
+                        .and_then(|i| track_list.get(i))
+                        .map(|t| (t.name.clone(), t.artist.clone(), t.duration_ms as i64 * 1000))
+                        .unwrap_or_default();
+                    mpris.update(MprisState {
+                        title,
+                        artist,
+                        album: String::new(),
+                        art_url: None,
+                        duration_us,
+                        position_us: progress_ms as i64 * 1000,
+                        volume: player.volume() as f64 / 100.0,
+                        is_playing: player.is_playing(),
+                        shuffle: player.shuffle(),
+                        repeat_track: player.repeat() == crate::player::RepeatMode::Track,
+                        repeat_queue: player.repeat() == crate::player::RepeatMode::Queue,
+                    });
+                    while let Ok(cmd) = mpris.cmd_rx.try_recv() {
+                        match cmd {
+                            MprisCmd::Play  => { player.play(); }
+                            MprisCmd::Pause => { player.pause(); }
+                            MprisCmd::Next  => {
+                                if player.next() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
+                            }
+                            MprisCmd::Prev  => {
+                                if player.prev() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
+                            }
+                            MprisCmd::Seek(us) => {
+                                progress_ms = (us / 1000) as u64;
+                                player.seek(progress_ms as u32);
+                            }
+                            MprisCmd::SetVolume(v) => {
+                                player.set_volume((v * 100.0).round() as u8);
+                            }
+                        }
+                    }
+                }
 
                 // Player events
                 while let Some(notif) = player.try_recv_event() {

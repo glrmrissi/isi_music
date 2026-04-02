@@ -61,6 +61,7 @@ pub trait AudioPlayer: Send {
     // ── Volume / mode ────────────────────────────────────────────────────────
     fn volume_up(&mut self);
     fn volume_down(&mut self);
+    fn set_volume(&mut self, volume: u8);
     fn toggle_shuffle(&mut self);
     fn cycle_repeat(&mut self);
 
@@ -340,6 +341,11 @@ impl AudioPlayer for NativePlayer {
 
     fn volume_up(&mut self) { self.volume_up(); }
     fn volume_down(&mut self) { self.volume_down(); }
+    fn set_volume(&mut self, volume: u8) {
+        self.volume = volume.min(100);
+        self.apply_volume();
+        config::save_volume(self.volume);
+    }
     fn toggle_shuffle(&mut self) { self.toggle_shuffle(); }
     fn cycle_repeat(&mut self) { self.cycle_repeat(); }
 
