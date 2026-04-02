@@ -10,6 +10,8 @@ use std::io::{self, Write};
 
 mod app;
 mod config;
+mod daemon;
+mod ipc;
 mod lastfm;
 mod player;
 mod spotify;
@@ -105,8 +107,62 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn print_help() {
+    println!("\
+isi-music — terminal Spotify player
+
+USAGE
+  isi-music               Launch the TUI player
+  isi-music [COMMAND]
+
+TUI KEYBINDINGS
+  Tab / hjkl / ↑↓     Navigate panels
+  Enter                Play selected track / open album or artist
+  Space                Play / pause
+  n / p                Next / previous track
+  s                    Toggle shuffle
+  r                    Cycle repeat  (off → queue → track)
+  + / -                Volume up / down
+  ←→                   Seek ±5 s  (hold for ±10 s)
+  /                    Search Spotify
+  a                    Add track to queue
+  c                    Toggle album art panel
+  z                    Toggle fullscreen player
+  l                    Like current track
+  Backspace            Back to previous search results
+  Esc                  Close search / exit fullscreen
+  q / Ctrl-C           Quit
+
+DAEMON MODE  (background playback — terminal can be closed)
+  isi-music --daemon                 Start daemon in background
+  isi-music --quit-daemon            Stop the daemon
+
+PLAYBACK CONTROL  (requires daemon running)
+  isi-music --toggle                 Play / pause
+  isi-music --next                   Next track
+  isi-music --prev                   Previous track
+  isi-music --vol+                   Volume +5 %
+  isi-music --vol-                   Volume -5 %
+  isi-music --status                 Show current track and progress
+
+QUEUE MANAGEMENT
+  isi-music --liked                  Load all liked songs and play
+  isi-music --play <spotify:playlist:ID>   Load a playlist and play
+  isi-music --ls                     List loaded tracks with their ID
+  isi-music --play-id <N>            Play track by ID (from --ls)
+
+SETUP
+  isi-music setup-lastfm             Configure Last.fm scrobbling
+  isi-music --clear-logs             Clear the log file
+
+FILES
+  Config   ~/.config/isi-music/config.toml
+  Log      ~/.local/share/isi-music/isi-music.log
+  Socket   $XDG_RUNTIME_DIR/isi-music.sock
+");
+}
+
+fn main() -> Result<()> {
     // Reset any leftover terminal state from a previous crash
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
@@ -117,57 +173,141 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     let mut cfg = config::AppConfig::load()?;
-
-    // Handle subcommands before entering TUI
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(|s| s.as_str()) == Some("setup-lastfm") {
-        run_lastfm_setup(&mut cfg).await?;
+    let arg1 = args.get(1).map(|s| s.as_str());
+
+    // ── Daemon: fork → detach from terminal → single-thread runtime ──────────
+    if arg1 == Some("--daemon") {
+        // Fork BEFORE building the tokio runtime (forking after is unsafe with threads)
+        let child_pid = unsafe { libc::fork() };
+        if child_pid < 0 {
+            anyhow::bail!("fork() failed");
+        }
+        if child_pid > 0 {
+            // Parent: tell the user the daemon PID and exit immediately
+            println!("isi-music daemon started (PID {child_pid})");
+            return Ok(());
+        }
+
+        // Child: create a new session so closing the terminal doesn't send SIGHUP
+        unsafe {
+            libc::setsid();
+            // Redirect stdin / stdout / stderr → /dev/null
+            let null = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+            if null >= 0 {
+                libc::dup2(null, 0);
+                libc::dup2(null, 1);
+                libc::dup2(null, 2);
+                libc::close(null);
+            }
+        }
+
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(daemon::run(cfg));
+    }
+
+    if arg1 == Some("--help") || arg1 == Some("-h") {
+        print_help();
         return Ok(());
     }
 
+    if arg1 == Some("--clear-logs") {
+        let path = config::log_path()?;
+        std::fs::write(&path, "")?;
+        println!("Logs cleared: {}", path.display());
+        return Ok(());
+    }
+
+    // ── IPC commands: tiny single-thread runtime ──────────────────────────────
+    let ipc_cmd: Option<String> = match arg1 {
+        Some(cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-"
+                    | "--status" | "--ls" | "--liked" | "--quit-daemon")) => {
+            let c = cmd.trim_start_matches('-');
+            Some(if c == "quit-daemon" { "quit".into() } else { c.into() })
+        }
+        Some("--play") => {
+            let uri = args.get(2).ok_or_else(|| anyhow::anyhow!(
+                "Usage: isi-music --play <spotify:playlist:ID>"
+            ))?;
+            Some(format!("play {uri}"))
+        }
+        Some("--play-id") => {
+            let id = args.get(2).ok_or_else(|| anyhow::anyhow!(
+                "Usage: isi-music --play-id <N>  (see: isi-music --ls)"
+            ))?;
+            Some(format!("play-id {id}"))
+        }
+        _ => None,
+    };
+
+    if let Some(cmd) = ipc_cmd {
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(ipc::send_command(&cmd))?;
+        println!("{response}");
+        return Ok(());
+    }
+
+    if arg1 == Some("setup-lastfm") {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(run_lastfm_setup(&mut cfg));
+    }
+
+    // ── TUI mode: multi-thread but capped at 2 workers ───────────────────────
     if cfg.needs_setup() {
         run_setup(&mut cfg)?;
     }
 
-    let log_path = config::log_path()?;
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let log_path = config::log_path()?;
+            let log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)?;
 
-    tracing_subscriber::fmt()
-        .with_writer(std::sync::Mutex::new(log_file))
-        .with_ansi(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("isi_music=debug".parse()?),
-        )
-        .init();
+            tracing_subscriber::fmt()
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false)
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("isi_music=debug".parse()?),
+                )
+                .init();
 
-    // Query terminal for image protocol support BEFORE entering raw mode
-    let picker = Picker::from_query_stdio()
-        .unwrap_or_else(|_| Picker::halfblocks());
+            // Query terminal for image protocol support BEFORE entering raw mode
+            let picker = Picker::from_query_stdio()
+                .unwrap_or_else(|_| Picker::halfblocks());
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+            enable_raw_mode()?;
+            let mut stdout = io::stdout();
+            execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+            let backend = CrosstermBackend::new(stdout);
+            let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(picker).await?;
-    let res = app.run(&mut terminal).await;
+            let mut app = App::new(picker).await?;
+            let res = app.run(&mut terminal).await;
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+            disable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
+            terminal.show_cursor()?;
 
-    if let Err(err) = res {
-        eprintln!("[Error]: {err:?}");
-    }
+            if let Err(err) = res {
+                eprintln!("[Error]: {err:?}");
+            }
 
-    Ok(())
+            Ok(())
+        })
 }
