@@ -69,21 +69,31 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
         if !v.is_empty() { break v; }
         println!("Cannot be empty.");
     };
-    let username = loop {
-        let v = prompt("Last.fm username: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
-    let password = loop {
-        let v = prompt("Last.fm password: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
 
-    print!("Authenticating with Last.fm...");
-    io::stdout().flush().ok();
+    println!("Requesting authorization token...");
+    let token = lastfm::LastfmClient::get_auth_token(&api_key).await?;
 
-    match lastfm::LastfmClient::authenticate(&api_key, &api_secret, &username, &password).await {
+    let auth_url = format!(
+        "https://www.last.fm/api/auth/?api_key={}&token={}",
+        api_key, token
+    );
+
+    println!("\nOpening Last.fm authorization in your browser...");
+    if open::that(&auth_url).is_err() {
+        println!("Could not open browser automatically. Please visit:");
+        println!("URL: {}", auth_url);
+    } else {
+        println!("URL: {}", auth_url);
+    }
+    println!("\nAfter authorizing, return here and press ENTER.");
+    
+    let mut _unused = String::new();
+    std::io::stdin().read_line(&mut _unused)?;
+
+    print!("Finalizing Last.fm authentication...");
+    std::io::stdout().flush().ok();
+
+    match lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
         Ok(session_key) => {
             cfg.lastfm.api_key = Some(api_key);
             cfg.lastfm.api_secret = Some(api_secret);
@@ -151,6 +161,18 @@ QUEUE MANAGEMENT
 SETUP
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
+
+LAST.FM SCROBBLING
+  Run `isi-music setup-lastfm` to enable scrobbling.
+  The setup will:
+    1. Ask for your Last.fm API Key and API Secret
+       (create an app at https://www.last.fm/api/account/create)
+    2. Open the Last.fm authorization page in your browser
+    3. Wait for you to authorize, then obtain a session key
+    4. Save credentials to ~/.config/isi-music/config.toml
+  Once configured, isi-music will:
+    - Send \"now playing\" updates when a track starts
+    - Scrobble tracks after 50% of the song has been played
 
 AUTH
   Uses PKCE — only client_id is needed (no client_secret)
@@ -281,7 +303,7 @@ fn main() -> Result<()> {
                 .with_ansi(false)
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("isi_music=debug".parse()?),
+                        .add_directive("isi_music=warn".parse()?),
                 )
                 .init();
 
