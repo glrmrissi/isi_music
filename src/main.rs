@@ -69,21 +69,26 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
         if !v.is_empty() { break v; }
         println!("Cannot be empty.");
     };
-    let username = loop {
-        let v = prompt("Last.fm username: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
-    let password = loop {
-        let v = prompt("Last.fm password: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
 
-    print!("Authenticating with Last.fm...");
-    io::stdout().flush().ok();
+    println!("Requesting authorization token...");
+    let token = lastfm::LastfmClient::get_auth_token(&api_key).await?;
 
-    match lastfm::LastfmClient::authenticate(&api_key, &api_secret, &username, &password).await {
+    let auth_url = format!(
+        "https://www.last.fm/api/auth/?api_key={}&token={}",
+        api_key, token
+    );
+
+    println!("\nPlease authorize isi-music in your browser:");
+    println!("URL: {}", auth_url);
+    println!("\nAfter authorizing, return here and press ENTER.");
+    
+    let mut _unused = String::new();
+    std::io::stdin().read_line(&mut _unused)?;
+
+    print!("Finalizing Last.fm authentication...");
+    std::io::stdout().flush().ok();
+
+    match lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
         Ok(session_key) => {
             cfg.lastfm.api_key = Some(api_key);
             cfg.lastfm.api_secret = Some(api_secret);
@@ -281,7 +286,7 @@ fn main() -> Result<()> {
                 .with_ansi(false)
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("isi_music=debug".parse()?),
+                        .add_directive("isi_music=warn".parse()?),
                 )
                 .init();
 

@@ -14,56 +14,69 @@ pub struct LastfmClient {
 
 impl LastfmClient {
     pub fn new(api_key: String, api_secret: String, session_key: String) -> Self {
-        Self { api_key, api_secret, session_key, http: Client::new() }
+        Self {
+            api_key,
+            api_secret,
+            session_key,
+            http: Client::new(),
+        }
     }
 
     fn sign(params: &BTreeMap<&str, String>, secret: &str) -> String {
         let mut s = String::new();
         for (k, v) in params {
-            s.push_str(k);
-            s.push_str(v);
+            if *k != "format" && *k != "callback" {
+                s.push_str(k);
+                s.push_str(v);
+            }
         }
         s.push_str(secret);
         format!("{:x}", md5::compute(s.as_bytes()))
     }
 
-    /// Authenticate via username/password (getMobileSession).
-    /// Returns the session key — store this, never ask again.
-    pub async fn authenticate(api_key: &str, api_secret: &str, username: &str, password: &str) -> Result<String> {
+    pub async fn get_auth_token(api_key: &str) -> Result<String> {
         let http = Client::new();
-        let password_md5 = format!("{:x}", md5::compute(password.as_bytes()));
+        let url = format!(
+            "https://ws.audioscrobbler.com/2.0/?method=auth.getToken&api_key={}&format=json",
+            api_key
+        );
 
+        #[derive(Deserialize)]
+        struct TokenResp {
+            token: String,
+        }
+
+        let resp: TokenResp = http.get(url).send().await?.json().await?;
+        Ok(resp.token)
+    }
+
+    pub async fn get_session(api_key: &str, api_secret: &str, token: &str) -> Result<String> {
         let mut params: BTreeMap<&str, String> = BTreeMap::new();
         params.insert("api_key", api_key.to_string());
-        params.insert("method", "auth.getMobileSession".to_string());
-        params.insert("password", password_md5);
-        params.insert("username", username.to_string());
+        params.insert("method", "auth.getSession".to_string());
+        params.insert("token", token.to_string());
 
         let api_sig = Self::sign(&params, api_secret);
         params.insert("api_sig", api_sig);
         params.insert("format", "json".to_string());
 
         #[derive(Deserialize)]
-        struct Resp { session: Session }
+        struct SessionResp {
+            session: Session,
+        }
         #[derive(Deserialize)]
-        struct Session { key: String }
-        #[derive(Deserialize)]
-        struct ApiError { message: String }
-
-        let body = http
-            .post("https://ws.audioscrobbler.com/2.0/")
-            .form(&params)
-            .send()
-            .await?
-            .text()
-            .await?;
-
-        if let Ok(err) = serde_json::from_str::<ApiError>(&body) {
-            return Err(anyhow::anyhow!("Last.fm: {}", err.message));
+        struct Session {
+            key: String,
         }
 
-        let resp = serde_json::from_str::<Resp>(&body)
-            .context("Last.fm auth failed — unexpected response")?;
+        let http = Client::new();
+        let resp: SessionResp = http
+            .get("https://ws.audioscrobbler.com/2.0/")
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
 
         Ok(resp.session.key)
     }
@@ -81,9 +94,15 @@ impl LastfmClient {
         params.insert("api_sig", api_sig);
         params.insert("format", "json".to_string());
 
-        match self.http.post("https://ws.audioscrobbler.com/2.0/").form(&params).send().await {
-            Ok(_) => info!("Last.fm: now playing {} - {}", artist, track),
-            Err(e) => warn!("Last.fm now playing failed: {e}"),
+        match self
+            .http
+            .post("https://ws.audioscrobbler.com/2.0/")
+            .form(&params)
+            .send()
+            .await
+        {
+            Ok(_) => info!("Last.fm: updated now playing: {} - {}", artist, track),
+            Err(e) => warn!("Last.fm: failed to update now playing: {e}"),
         }
     }
 
@@ -101,9 +120,15 @@ impl LastfmClient {
         params.insert("api_sig", api_sig);
         params.insert("format", "json".to_string());
 
-        match self.http.post("https://ws.audioscrobbler.com/2.0/").form(&params).send().await {
-            Ok(_) => info!("Last.fm: scrobbled {} - {}", artist, track),
-            Err(e) => warn!("Last.fm scrobble failed: {e}"),
+        match self
+            .http
+            .post("https://ws.audioscrobbler.com/2.0/")
+            .form(&params)
+            .send()
+            .await
+        {
+            Ok(_) => info!("Last.fm: scrobbled: {} - {}", artist, track),
+            Err(e) => warn!("Last.fm: failed to scrobble: {e}"),
         }
     }
 }

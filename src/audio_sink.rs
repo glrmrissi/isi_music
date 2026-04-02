@@ -19,6 +19,10 @@ pub struct AnalyzerSink {
     scratch: Vec<Complex<f32>>,
     /// Per-band running peak for independent normalization (decays slowly).
     band_peaks: Vec<f32>,
+    // Reusable scratch buffers to avoid per-frame heap allocations
+    chunk_buf: Vec<f32>,
+    magnitudes_buf: Vec<f32>,
+    new_bands_buf: Vec<f32>,
 }
 
 impl AnalyzerSink {
@@ -34,6 +38,9 @@ impl AnalyzerSink {
             fft_input: vec![Complex::default(); FFT_SIZE],
             scratch: vec![Complex::default(); scratch_len],
             band_peaks: vec![1e-6; N_BANDS],
+            chunk_buf: vec![0.0f32; FFT_SIZE],
+            magnitudes_buf: vec![0.0f32; FFT_SIZE / 2 - 1],
+            new_bands_buf: vec![0.0f32; N_BANDS],
         }
     }
 
@@ -46,16 +53,17 @@ impl AnalyzerSink {
         self.buffer.extend(mono);
 
         while self.buffer.len() >= FFT_SIZE {
-            let chunk: Vec<f32> = self.buffer.drain(..FFT_SIZE).collect();
-            self.compute_bands(&chunk);
+            self.chunk_buf.copy_from_slice(&self.buffer[..FFT_SIZE]);
+            self.buffer.drain(..FFT_SIZE);
+            self.compute_bands();
         }
     }
 
-    fn compute_bands(&mut self, samples: &[f32]) {
+    fn compute_bands(&mut self) {
         let n = FFT_SIZE as f32;
 
         // Noise gate
-        let frame_rms = (samples.iter().map(|x| x * x).sum::<f32>() / n).sqrt();
+        let frame_rms = (self.chunk_buf.iter().map(|x| x * x).sum::<f32>() / n).sqrt();
         if frame_rms < 5e-4 {
             if let Ok(mut bands) = self.bands.lock() {
                 for v in bands.iter_mut() { *v *= 0.90; }
@@ -64,7 +72,7 @@ impl AnalyzerSink {
         }
 
         // Hann window
-        for (i, (&s, c)) in samples.iter().zip(self.fft_input.iter_mut()).enumerate() {
+        for (i, (&s, c)) in self.chunk_buf.iter().zip(self.fft_input.iter_mut()).enumerate() {
             let w = 0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / (n - 1.0)).cos());
             *c = Complex::new(s * w, 0.0);
         }
@@ -72,24 +80,26 @@ impl AnalyzerSink {
         self.fft.process_with_scratch(&mut self.fft_input, &mut self.scratch);
 
         let half = FFT_SIZE / 2;
-        let magnitudes: Vec<f32> = self.fft_input[1..half].iter().map(|c| c.norm()).collect();
+        for (out, c) in self.magnitudes_buf.iter_mut().zip(self.fft_input[1..half].iter()) {
+            *out = c.norm();
+        }
 
         // Map FFT bins → N_BANDS (logarithmic, 20 Hz – Nyquist)
         let freq_per_bin = SAMPLE_RATE / FFT_SIZE as f32;
         let log_min = 20.0f32.log2();
         let log_max = (SAMPLE_RATE / 2.0).log2();
 
-        let mut new_bands = vec![0.0f32; N_BANDS];
+        for v in self.new_bands_buf.iter_mut() { *v = 0.0; }
         for band in 0..N_BANDS {
             let f_low  = 2.0f32.powf(log_min + (band       as f32 / N_BANDS as f32) * (log_max - log_min));
             let f_high = 2.0f32.powf(log_min + ((band + 1) as f32 / N_BANDS as f32) * (log_max - log_min));
             let bin_low  = (f_low  / freq_per_bin) as usize;
-            let bin_high = ((f_high / freq_per_bin) as usize).min(magnitudes.len().saturating_sub(1));
+            let bin_high = ((f_high / freq_per_bin) as usize).min(self.magnitudes_buf.len().saturating_sub(1));
 
-            new_bands[band] = if bin_low >= bin_high {
-                magnitudes.get(bin_low).copied().unwrap_or(0.0)
+            self.new_bands_buf[band] = if bin_low >= bin_high {
+                self.magnitudes_buf.get(bin_low).copied().unwrap_or(0.0)
             } else {
-                magnitudes[bin_low..=bin_high].iter().cloned().fold(0.0f32, f32::max)
+                self.magnitudes_buf[bin_low..=bin_high].iter().cloned().fold(0.0f32, f32::max)
             };
         }
 
@@ -97,18 +107,18 @@ impl AnalyzerSink {
         // The peak decays slowly so the scale adapts to the song over time.
         // This prevents bass from dominating just because it has more raw energy.
         for i in 0..N_BANDS {
-            if new_bands[i] > self.band_peaks[i] {
-                self.band_peaks[i] = new_bands[i];
+            if self.new_bands_buf[i] > self.band_peaks[i] {
+                self.band_peaks[i] = self.new_bands_buf[i];
             } else {
                 self.band_peaks[i] *= 0.9998; // ~30s half-life at 43 FFT frames/s
                 self.band_peaks[i] = self.band_peaks[i].max(1e-6);
             }
-            new_bands[i] = (new_bands[i] / self.band_peaks[i]).clamp(0.0, 1.0);
+            self.new_bands_buf[i] = (self.new_bands_buf[i] / self.band_peaks[i]).clamp(0.0, 1.0);
         }
 
         // Smooth: instant attack, fast decay
         if let Ok(mut bands) = self.bands.lock() {
-            for (cur, &next) in bands.iter_mut().zip(new_bands.iter()) {
+            for (cur, &next) in bands.iter_mut().zip(self.new_bands_buf.iter()) {
                 if next > *cur {
                     *cur = next;
                 } else {

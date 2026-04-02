@@ -119,11 +119,8 @@ impl NativePlayer {
         let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
         let volume_getter = soft_mixer.get_soft_volume();
 
-        let bitrate = if low_resource {
-            librespot_playback::config::Bitrate::Bitrate96
-        } else {
-            librespot_playback::config::Bitrate::Bitrate320
-        };
+        let bitrate = librespot_playback::config::Bitrate::Bitrate320;
+        
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
         let player = LibrespotPlayer::new(
