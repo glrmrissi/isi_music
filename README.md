@@ -247,6 +247,66 @@ bind = , XF86AudioPrev,  exec, playerctl previous
 
 ---
 
+## Last.fm Scrobbling
+
+isi-music supports automatic scrobbling via the [Last.fm API](https://www.last.fm/api).
+
+### Setup
+
+Run the interactive setup command:
+
+```bash
+isi-music setup-lastfm
+```
+
+The wizard will:
+
+1. Ask for your **API Key** and **API Secret** (create an app at [last.fm/api/account/create](https://www.last.fm/api/account/create))
+2. **Automatically open** the Last.fm authorization page in your browser
+3. Wait for you to grant access, then exchange the token for a session key
+4. Save everything to `~/.config/isi-music/config.toml`
+
+### How it works
+
+```
+┌──────────────┐  auth.getToken  ┌─────────────────┐
+│   isi_music  │ ──────────────► │  Last.fm API     │
+│              │ ◄────────────── │                  │
+│              │                 └─────────────────┘
+│              │   (browser)
+│              │ ──────────────► Last.fm auth page
+│              │   (user grants access)
+│              │
+│              │  auth.getSession ┌─────────────────┐
+│              │ ──────────────► │  Last.fm API     │
+│              │ ◄────────────── │  (session key)   │
+└──────────────┘                 └─────────────────┘
+```
+
+The signing algorithm (HMAC-MD5) signs every request by concatenating all non-`format`/`callback` parameters alphabetically, appending the API secret, and computing the MD5 hash.
+
+### Behaviour
+
+| Event | Last.fm call |
+|-------|-------------|
+| Track starts | `track.updateNowPlaying` |
+| Track reaches 50% playback | `track.scrobble` |
+
+### Config
+
+After setup, the config file will contain:
+
+```toml
+[lastfm]
+api_key     = "your_api_key"
+api_secret  = "your_api_secret"
+session_key = "obtained_automatically"
+```
+
+To disable scrobbling, remove the `[lastfm]` section or leave the fields empty.
+
+---
+
 ## License
 
 MIT
