@@ -8,6 +8,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
 
 mod app;
+mod audio_sink;
 mod config;
 mod daemon;
 mod ipc;

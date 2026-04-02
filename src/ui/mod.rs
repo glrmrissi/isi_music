@@ -6,8 +6,6 @@ use ratatui::{
     Frame,
 };
 use rspotify::model::RepeatState;
-use std::f64::consts::TAU;
-
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 
@@ -249,6 +247,8 @@ pub struct UiState {
     pub spin_angle: f64,
     pub marquee_offset: usize,
     pub marquee_ms: u64,
+    // Real-time audio spectrum (N_BANDS values, 0..1)
+    pub viz_bands: Vec<f32>,
 }
 
 impl UiState {
@@ -292,6 +292,7 @@ impl UiState {
             spin_angle: 0.0,
             marquee_offset: 0,
             marquee_ms: 0,
+            viz_bands: Vec::new(),
         }
     }
 
@@ -458,7 +459,7 @@ impl Ui {
                 .split(area);
             self.render_now_playing(frame, state, root[0]);
             self.render_progress(frame, &state.playback, root[1]);
-            self.render_visualizer(frame, &state.playback, root[2]);
+            self.render_visualizer(frame, &state.playback, &state.viz_bands, root[2]);
             self.render_help(frame, state, root[3]);
             return;
         }
@@ -502,7 +503,7 @@ impl Ui {
             self.render_now_playing(frame, state, right_rows[0]);
             self.render_queue(frame, state, right_rows[1]);
             self.render_progress(frame, &state.playback, root[2]);
-            self.render_visualizer(frame, &state.playback, root[3]);
+            self.render_visualizer(frame, &state.playback, &state.viz_bands, root[3]);
             self.render_help(frame, state, root[4]);
             return;
         }
@@ -540,7 +541,7 @@ impl Ui {
             .constraints([Constraint::Min(0), Constraint::Length(8)])
             .split(main_cols[1]);
 
-        self.render_visualizer(frame, &state.playback, top_cols[0]);
+        self.render_visualizer(frame, &state.playback, &state.viz_bands, top_cols[0]);
         self.render_header(frame, state, top_cols[1]);
         self.render_library(frame, state, left_rows[0]);
         self.render_playlists(frame, state, left_rows[1]);
@@ -578,7 +579,7 @@ impl Ui {
 
     // ── Visualizer (braille dots — 2× horizontal, 4× vertical resolution) ───────
 
-    fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, area: Rect) {
+    fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, viz_bands: &[f32], area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -589,27 +590,21 @@ impl Ui {
 
         if inner.width == 0 || inner.height == 0 { return; }
 
-        let title_seed = pb.title.chars().map(|c| c as u32).sum::<u32>() as f64;
-        let t = pb.progress_ms as f64 / 400.0;
-
         // Each terminal cell = 2 pixel columns × 4 pixel rows (braille grid).
         let px_cols = inner.width  as usize * 2;
         let px_rows = inner.height as usize * 4;
-        let w = px_cols as f64;
 
-        // Compute amplitude for every pixel column.
+        // Map each pixel column to a frequency band amplitude.
         let amplitudes: Vec<f64> = (0..px_cols).map(|px| {
-            if pb.is_playing {
-                let x_f  = px as f64;
-                let freq  = 0.5 + (x_f / w) * 3.0 + (x_f * 0.37 + title_seed * 0.01).sin() * 0.5;
-                let phase = x_f * 2.1 + title_seed * 0.07;
-                let a = (t * freq         + phase      ).sin().abs();
-                let b = (t * freq * 0.53  + phase + 1.3).cos().abs();
-                let c = (t * freq * 1.7   + phase * 0.4).sin().abs();
-                (a * 0.5 + b * 0.3 + c * 0.2).clamp(0.03, 1.0)
-            } else {
-                0.03
+            if !pb.is_playing {
+                return 0.0;
             }
+            if viz_bands.is_empty() {
+                return 0.05; // no data yet — show a thin baseline
+            }
+            // Map pixel column linearly across available bands
+            let band_idx = (px * viz_bands.len() / px_cols).min(viz_bands.len() - 1);
+            (viz_bands[band_idx] as f64).clamp(0.0, 1.0)
         }).collect();
 
         // Convert amplitudes to pixel heights (0..=px_rows).

@@ -2,7 +2,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
 use ratatui_image::picker::Picker;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -36,6 +36,8 @@ pub struct App {
     // MPRIS D-Bus integration
     #[cfg(feature = "mpris")]
     mpris: Option<MprisHandle>,
+    // Real-time audio band energies from AnalyzerSink
+    band_energies: Option<Arc<Mutex<Vec<f32>>>>,
 }
 
 impl App {
@@ -48,20 +50,21 @@ impl App {
 
         let mut spotify = SpotifyClient::new().await?;
 
-        let player = match spotify.get_access_token().await {
+        let (player, band_energies) = match spotify.get_access_token().await {
             Some(token) => match NativePlayer::new(token, false).await {
                 Ok(p) => {
                     tracing::info!("Native player started");
-                    Some(Box::new(p) as Box<dyn AudioPlayer>)
+                    let bands = p.band_energies();
+                    (Some(Box::new(p) as Box<dyn AudioPlayer>), bands)
                 }
                 Err(e) => {
                     warn!("Native player unavailable: {e:#}");
-                    None
+                    (None, None)
                 }
             },
             None => {
                 warn!("Token not available for native player");
-                None
+                (None, None)
             }
         };
 
@@ -103,6 +106,7 @@ impl App {
             picker,
             #[cfg(feature = "mpris")]
             mpris,
+            band_energies,
         })
     }
 
@@ -145,6 +149,13 @@ impl App {
             if needs_sync {
                 self.sync_track_selection();
                 self.sync_queue_display();
+            }
+
+            // Update visualizer band energies from the audio sink
+            if let Some(ref arc) = self.band_energies {
+                if let Ok(bands) = arc.lock() {
+                    self.state.viz_bands.clone_from(&*bands);
+                }
             }
 
             // ── MPRIS: update state + process incoming commands ───────────────

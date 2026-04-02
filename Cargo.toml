@@ -50,6 +50,9 @@ md5 = "0.7"
 # RNG (shuffle)
 rand = "0.8"
 
+# FFT for audio visualizer
+rustfft = "6"
+
 # OS memory management
 libc = "0.2"
 
