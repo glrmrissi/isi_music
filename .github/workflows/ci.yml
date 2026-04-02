@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build (${{ matrix.label }})
@@ -30,8 +33,13 @@ jobs:
       - name: Install system dependencies (Linux only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev libdbus-1-dev
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libasound2-dev \
+            libpulse-dev \
+            libdbus-1-dev \
+            libssl-dev
 
       - name: Setup Rust (Edition 2024)
         uses: dtolnay/rust-toolchain@stable
