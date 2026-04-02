@@ -449,14 +449,65 @@ impl Ui {
             let root = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(1)
-                .constraints([Constraint::Min(0), Constraint::Length(2), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Min(0),      // now playing (album art + info)
+                    Constraint::Length(2),   // progress bar + volume
+                    Constraint::Length(5),   // visualizer (below volume)
+                    Constraint::Length(1),   // help
+                ])
                 .split(area);
             self.render_now_playing(frame, state, root[0]);
             self.render_progress(frame, &state.playback, root[1]);
-            self.render_help(frame, state, root[2]);
+            self.render_visualizer(frame, &state.playback, root[2]);
+            self.render_help(frame, state, root[3]);
             return;
         }
 
+        let showing_now_playing = state.search_results.is_none()
+            && state.active_content == ActiveContent::None
+            && !state.playback.title.is_empty();
+
+        // ── Player mode: header full-width at top, visualizer below progress ──
+        if showing_now_playing {
+            let root = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(3),   // header (full width — no visualizer at top)
+                    Constraint::Min(10),     // main panels
+                    Constraint::Length(2),   // progress bar + volume
+                    Constraint::Length(5),   // visualizer (below volume)
+                    Constraint::Length(1),   // help
+                ])
+                .split(area);
+
+            let main_cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+                .split(root[1]);
+
+            let left_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(6), Constraint::Min(0)])
+                .split(main_cols[0]);
+
+            let right_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(8)])
+                .split(main_cols[1]);
+
+            self.render_header(frame, state, root[0]);
+            self.render_library(frame, state, left_rows[0]);
+            self.render_playlists(frame, state, left_rows[1]);
+            self.render_now_playing(frame, state, right_rows[0]);
+            self.render_queue(frame, state, right_rows[1]);
+            self.render_progress(frame, &state.playback, root[2]);
+            self.render_visualizer(frame, &state.playback, root[3]);
+            self.render_help(frame, state, root[4]);
+            return;
+        }
+
+        // ── Normal mode: visualizer top-left, marquee + progress at bottom ───
         let root = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
@@ -478,18 +529,12 @@ impl Ui {
             .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
             .split(root[1]);
 
-        let showing_now_playing = state.search_results.is_none()
-            && state.active_content == ActiveContent::None
-            && !state.playback.title.is_empty();
-
-        // Left panel: Library + Playlists + (Album art if enabled, hidden when now playing is shown)
-        let art_h = if state.show_album_art && !showing_now_playing { Constraint::Length(16) } else { Constraint::Length(0) };
+        let art_h = if state.show_album_art { Constraint::Length(16) } else { Constraint::Length(0) };
         let left_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(6), Constraint::Min(0), art_h])
             .split(main_cols[0]);
 
-        // Right panel: content (top) + queue (bottom 8 rows)
         let right_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(8)])
@@ -499,7 +544,7 @@ impl Ui {
         self.render_header(frame, state, top_cols[1]);
         self.render_library(frame, state, left_rows[0]);
         self.render_playlists(frame, state, left_rows[1]);
-        if state.show_album_art && !showing_now_playing {
+        if state.show_album_art {
             self.render_album_art(frame, state, left_rows[2]);
         }
 
@@ -522,20 +567,16 @@ impl Ui {
         }
         self.render_queue(frame, state, right_rows[1]);
 
-        if showing_now_playing {
-            self.render_progress(frame, &state.playback, root[2]);
-        } else {
-            let playback_row = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-                .split(root[2]);
-            self.render_progress(frame, &state.playback, playback_row[1]);
-            self.render_marquee(frame, &state.playback, state.marquee_offset, playback_row[0]);
-        }
+        let playback_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(root[2]);
+        self.render_progress(frame, &state.playback, playback_row[1]);
+        self.render_marquee(frame, &state.playback, state.marquee_offset, playback_row[0]);
         self.render_help(frame, state, root[3]);
     }
 
-    // ── Visualizer ────────────────────────────────────────────────────────────
+    // ── Visualizer (braille dots — 2× horizontal, 4× vertical resolution) ───────
 
     fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, area: Rect) {
         let block = Block::default()
@@ -550,44 +591,76 @@ impl Ui {
 
         let title_seed = pb.title.chars().map(|c| c as u32).sum::<u32>() as f64;
         let t = pb.progress_ms as f64 / 400.0;
-        let w = inner.width as f64;
 
-        // Sub-cell precision: each cell = 8 units (▁▂▃▄▅▆▇█)
-        let partial_chars = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
+        // Each terminal cell = 2 pixel columns × 4 pixel rows (braille grid).
+        let px_cols = inner.width  as usize * 2;
+        let px_rows = inner.height as usize * 4;
+        let w = px_cols as f64;
 
-        for x in 0..inner.width {
-            let amplitude = if pb.is_playing {
-                let x_f = x as f64;
+        // Compute amplitude for every pixel column.
+        let amplitudes: Vec<f64> = (0..px_cols).map(|px| {
+            if pb.is_playing {
+                let x_f  = px as f64;
                 let freq  = 0.5 + (x_f / w) * 3.0 + (x_f * 0.37 + title_seed * 0.01).sin() * 0.5;
                 let phase = x_f * 2.1 + title_seed * 0.07;
-                let a = (t * freq + phase).sin().abs();
-                let b = (t * freq * 0.53 + phase + 1.3).cos().abs();
-                let c = (t * freq * 1.7 + phase * 0.4).sin().abs();
+                let a = (t * freq         + phase      ).sin().abs();
+                let b = (t * freq * 0.53  + phase + 1.3).cos().abs();
+                let c = (t * freq * 1.7   + phase * 0.4).sin().abs();
                 (a * 0.5 + b * 0.3 + c * 0.2).clamp(0.03, 1.0)
             } else {
-                0.03 // flat bars when paused — skip all sin/cos
-            };
+                0.03
+            }
+        }).collect();
 
-            // Convert amplitude to units (height * 8 for sub-cell resolution)
-            let max_units = inner.height * 8;
-            let bar_units = ((amplitude * max_units as f64) as u16).min(max_units);
-            let full_cells = bar_units / 8;
-            let partial    = (bar_units % 8) as usize;
+        // Convert amplitudes to pixel heights (0..=px_rows).
+        let px_heights: Vec<usize> = amplitudes.iter()
+            .map(|&a| ((a * px_rows as f64) as usize).min(px_rows))
+            .collect();
 
-            for y in 0..inner.height {
-                let pos_x = inner.x + x;
-                let pos_y = inner.y + inner.height - 1 - y;
+        // Braille bit layout — indexed by pixel row from the bottom of a cell (0 = bottom):
+        //   pixel row 0 (bottom): left = dot7 = bit6,  right = dot8 = bit7
+        //   pixel row 1:          left = dot3 = bit2,  right = dot6 = bit5
+        //   pixel row 2:          left = dot2 = bit1,  right = dot5 = bit4
+        //   pixel row 3 (top):    left = dot1 = bit0,  right = dot4 = bit3
+        const LEFT:  [u8; 4] = [1 << 6, 1 << 2, 1 << 1, 1 << 0];
+        const RIGHT: [u8; 4] = [1 << 7, 1 << 5, 1 << 4, 1 << 3];
 
-                let ch = if y < full_cells {
-                    '█'
-                } else if y == full_cells && partial > 0 {
-                    partial_chars[partial]
-                } else {
-                    continue; // empty — skip writing to buffer
-                };
+        for cell_x in 0..inner.width as usize {
+            let h_l = px_heights[cell_x * 2];
+            let h_r = px_heights.get(cell_x * 2 + 1).copied().unwrap_or(0);
+            let max_h = h_l.max(h_r);
+            if max_h == 0 { continue; }
 
-                if let Some(cell) = frame.buffer_mut().cell_mut((pos_x, pos_y)) {
-                    cell.set_char(ch).set_fg(Color::Green);
+            // Color: gradient by amplitude — dim for quiet, bright for loud peaks.
+            let amp = amplitudes[cell_x * 2]
+                .max(amplitudes.get(cell_x * 2 + 1).copied().unwrap_or(0.0));
+            let color = if amp > 0.75 { Color::White }
+                        else if amp > 0.5 { Color::LightGreen }
+                        else if amp > 0.25 { Color::Green }
+                        else { Color::DarkGray };
+
+            for cell_y in 0..inner.height as usize {
+                // cell_y=0 is the top terminal row.
+                // bottom_idx=0 means the bottom-most cell of the visualizer.
+                let bottom_idx = inner.height as usize - 1 - cell_y;
+                let px_base   = bottom_idx * 4; // pixel row at the bottom of this cell
+
+                if px_base >= max_h { continue; } // entirely above the bar
+
+                let mut bits: u8 = 0;
+                for dot_row in 0..4usize {
+                    let px_row = px_base + dot_row;
+                    if px_row < h_l { bits |= LEFT[dot_row]; }
+                    if px_row < h_r { bits |= RIGHT[dot_row]; }
+                }
+                if bits == 0 { continue; }
+
+                let ch = char::from_u32(0x2800 | bits as u32).unwrap_or(' ');
+                if let Some(cell) = frame.buffer_mut().cell_mut((
+                    inner.x + cell_x as u16,
+                    inner.y + cell_y as u16,
+                )) {
+                    cell.set_char(ch).set_fg(color);
                 }
             }
         }

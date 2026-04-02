@@ -7,14 +7,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 use crate::lastfm::LastfmClient;
-use crate::player::{NativePlayer, PlayerNotification, RepeatMode};
+use crate::player::{AudioPlayer, NativePlayer, PlayerNotification, RepeatMode};
+#[cfg(feature = "mpris")]
+use crate::mpris::{MprisCmd, MprisHandle, MprisState};
 use rspotify::model::RepeatState;
 use crate::spotify::SpotifyClient;
 use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, Ui, UiState};
 
 pub struct App {
     spotify: SpotifyClient,
-    player: Option<NativePlayer>,
+    player: Option<Box<dyn AudioPlayer>>,
     lastfm: Option<Arc<LastfmClient>>,
     ui: Ui,
     state: UiState,
@@ -31,6 +33,9 @@ pub struct App {
     last_art_uri: String,
     album_art_pending: Option<tokio::sync::oneshot::Receiver<Option<Vec<u8>>>>,
     picker: Picker,
+    // MPRIS D-Bus integration
+    #[cfg(feature = "mpris")]
+    mpris: Option<MprisHandle>,
 }
 
 impl App {
@@ -47,7 +52,7 @@ impl App {
             Some(token) => match NativePlayer::new(token, false).await {
                 Ok(p) => {
                     tracing::info!("Native player started");
-                    Some(p)
+                    Some(Box::new(p) as Box<dyn AudioPlayer>)
                 }
                 Err(e) => {
                     warn!("Native player unavailable: {e:#}");
@@ -74,6 +79,12 @@ impl App {
 
         state.playback = spotify.fetch_playback().await.unwrap_or_default();
 
+        #[cfg(feature = "mpris")]
+        let mpris = match crate::mpris::spawn().await {
+            Ok(h) => { tracing::info!("MPRIS D-Bus server started"); Some(h) }
+            Err(e) => { tracing::warn!("MPRIS unavailable: {e}"); None }
+        };
+
         Ok(Self {
             spotify,
             player,
@@ -90,6 +101,8 @@ impl App {
             last_art_uri: String::new(),
             album_art_pending: None,
             picker,
+            #[cfg(feature = "mpris")]
+            mpris,
         })
     }
 
@@ -104,7 +117,7 @@ impl App {
             let mut needs_sync = false;
 
             if let Some(player) = &mut self.player {
-                while let Ok(notif) = player.event_rx.try_recv() {
+                while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded => {
                             if player.next() { needs_sync = true; }
@@ -119,10 +132,10 @@ impl App {
                         }
                     }
                 }
-                self.state.playback.is_playing = player.is_playing;
-                self.state.playback.volume = player.volume;
-                self.state.playback.shuffle = player.shuffle;
-                self.state.playback.repeat = match player.repeat {
+                self.state.playback.is_playing = player.is_playing();
+                self.state.playback.volume = player.volume();
+                self.state.playback.shuffle = player.shuffle();
+                self.state.playback.repeat = match player.repeat() {
                     RepeatMode::Off   => RepeatState::Off,
                     RepeatMode::Queue => RepeatState::Context,
                     RepeatMode::Track => RepeatState::Track,
@@ -132,6 +145,66 @@ impl App {
             if needs_sync {
                 self.sync_track_selection();
                 self.sync_queue_display();
+            }
+
+            // ── MPRIS: update state + process incoming commands ───────────────
+            #[cfg(feature = "mpris")]
+            if let Some(mpris) = &mut self.mpris {
+                // Push current state to D-Bus clients (Waybar, playerctl, etc.)
+                let pb = &self.state.playback;
+                mpris.update(MprisState {
+                    title:        pb.title.clone(),
+                    artist:       pb.artist.clone(),
+                    album:        pb.album.clone(),
+                    art_url:      None, // album art URL is fetched separately
+                    duration_us:  pb.duration_ms as i64 * 1000,
+                    position_us:  pb.progress_ms as i64 * 1000,
+                    volume:       pb.volume as f64 / 100.0,
+                    is_playing:   pb.is_playing,
+                    shuffle:      pb.shuffle,
+                    repeat_track: pb.repeat == RepeatState::Track,
+                    repeat_queue: pb.repeat == RepeatState::Context,
+                });
+
+                // Drain commands into a local vec to avoid holding &mut self.mpris
+                // while we call other &mut self methods.
+                let cmds: Vec<MprisCmd> = {
+                    let mut v = Vec::new();
+                    while let Ok(c) = mpris.cmd_rx.try_recv() { v.push(c); }
+                    v
+                };
+                drop(mpris); // release the borrow on self.mpris
+
+                for cmd in cmds {
+                    match cmd {
+                        MprisCmd::Play => {
+                            if let Some(p) = &mut self.player { p.play(); }
+                        }
+                        MprisCmd::Pause => {
+                            if let Some(p) = &mut self.player { p.pause(); }
+                        }
+                        MprisCmd::Next => {
+                            if let Some(p) = &mut self.player { p.next(); }
+                            self.sync_track_selection();
+                            self.sync_queue_display();
+                        }
+                        MprisCmd::Prev => {
+                            if let Some(p) = &mut self.player { p.prev(); }
+                            self.sync_track_selection();
+                        }
+                        MprisCmd::Seek(us) => {
+                            let ms = (us / 1000) as u64;
+                            self.state.playback.progress_ms = ms;
+                            if let Some(p) = &self.player { p.seek(ms as u32); }
+                        }
+                        MprisCmd::SetVolume(v) => {
+                            if let Some(p) = &mut self.player {
+                                p.set_volume((v * 100.0).round() as u8);
+                                self.state.playback.volume = p.volume();
+                            }
+                        }
+                    }
+                }
             }
 
             // Poll album art background fetch
@@ -347,7 +420,7 @@ impl App {
                 if let Some(idx) = self.state.queue_list.selected() {
                     if let Some(player) = &mut self.player {
                         if idx < player.user_queue().len() {
-                            player.user_queue.remove(idx);
+                            player.remove_from_user_queue(idx);
                             self.sync_queue_display();
                             let new_sel = if self.state.queue_items.is_empty() { None }
                                 else { Some(idx.min(self.state.queue_items.len() - 1)) };
@@ -377,13 +450,13 @@ impl App {
             (KeyCode::Char('s'), _) => {
                 if let Some(player) = &mut self.player {
                     player.toggle_shuffle();
-                    self.state.playback.shuffle = player.shuffle;
+                    self.state.playback.shuffle = player.shuffle();
                 }
             }
             (KeyCode::Char('r'), _) => {
                 if let Some(player) = &mut self.player {
                     player.cycle_repeat();
-                    self.state.playback.repeat = match player.repeat {
+                    self.state.playback.repeat = match player.repeat() {
                         RepeatMode::Off   => RepeatState::Off,
                         RepeatMode::Queue => RepeatState::Context,
                         RepeatMode::Track => RepeatState::Track,
@@ -421,13 +494,13 @@ impl App {
             (KeyCode::Char('+'), _) | (KeyCode::Char('='), _) => {
                 if let Some(player) = &mut self.player {
                     player.volume_up();
-                    self.state.playback.volume = player.volume;
+                    self.state.playback.volume = player.volume();
                 }
             }
             (KeyCode::Char('-'), _) => {
                 if let Some(player) = &mut self.player {
                     player.volume_down();
-                    self.state.playback.volume = player.volume;
+                    self.state.playback.volume = player.volume();
                 }
             }
 
@@ -939,7 +1012,7 @@ impl App {
 
     fn sync_track_selection(&mut self) {
         // If we just played a user_queue track, update playback from that
-        let queued = self.player.as_mut().and_then(|p| p.playing_queued.take());
+        let queued = self.player.as_mut().and_then(|p| p.take_playing_queued());
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
             self.state.playback.artist = qt.artist;

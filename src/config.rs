@@ -19,7 +19,6 @@ pub struct LastfmConfig {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SpotifyConfig {
     pub client_id: Option<String>,
-    pub client_secret: Option<String>,
 }
 
 impl AppConfig {
@@ -50,12 +49,6 @@ impl AppConfig {
             .or_else(|| self.spotify.client_id.clone())
     }
 
-    pub fn get_client_secret(&self) -> Option<String> {
-        std::env::var("SPOTIFY_CLIENT_SECRET")
-            .ok()
-            .or_else(|| self.spotify.client_secret.clone())
-    }
-
     pub fn save(&self) -> Result<()> {
         let path = config_path()?;
         if let Some(dir) = path.parent() {
@@ -67,7 +60,7 @@ impl AppConfig {
     }
 
     pub fn needs_setup(&self) -> bool {
-        self.get_client_id().is_none() || self.get_client_secret().is_none()
+        self.get_client_id().is_none()
     }
 }
 

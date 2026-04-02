@@ -3,7 +3,6 @@ use ratatui_image::picker::Picker;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    event::{EnableMouseCapture, DisableMouseCapture},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
@@ -13,6 +12,8 @@ mod config;
 mod daemon;
 mod ipc;
 mod lastfm;
+#[cfg(feature = "mpris")]
+mod mpris;
 mod player;
 mod spotify;
 mod ui;
@@ -32,6 +33,7 @@ fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("────────────────────────────────────────");
     println!("Create a Spotify app at: https://developer.spotify.com/dashboard");
     println!("Set the redirect URI to: http://127.0.0.1:8888/callback");
+    println!("No client secret needed — isi-music uses PKCE authentication.");
     println!();
 
     let client_id = loop {
@@ -39,14 +41,8 @@ fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
         if !v.is_empty() { break v; }
         println!("Cannot be empty.");
     };
-    let client_secret = loop {
-        let v = prompt("Client Secret: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
 
     cfg.spotify.client_id = Some(client_id);
-    cfg.spotify.client_secret = Some(client_secret);
     cfg.save()?;
 
     println!();
@@ -155,6 +151,11 @@ SETUP
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
 
+AUTH
+  Uses PKCE — only client_id is needed (no client_secret)
+  Register at https://developer.spotify.com/dashboard
+  Set redirect URI to http://127.0.0.1:8888/callback
+
 FILES
   Config   ~/.config/isi-music/config.toml
   Log      ~/.local/share/isi-music/isi-music.log
@@ -165,7 +166,7 @@ FILES
 fn main() -> Result<()> {
     // Reset any leftover terminal state from a previous crash
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
 
     if let Ok(env_path) = config::env_path() {
         dotenvy::from_path(&env_path).ok();
@@ -289,7 +290,7 @@ fn main() -> Result<()> {
 
             enable_raw_mode()?;
             let mut stdout = io::stdout();
-            execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+            execute!(stdout, EnterAlternateScreen)?;
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
@@ -297,11 +298,7 @@ fn main() -> Result<()> {
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;
-            execute!(
-                terminal.backend_mut(),
-                LeaveAlternateScreen,
-                DisableMouseCapture
-            )?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             terminal.show_cursor()?;
 
             if let Err(err) = res {

@@ -15,7 +15,8 @@ A terminal-based Spotify player written in Rust. Uses librespot for native audio
 - Queue management
 - Shuffle and repeat modes (off / queue / track)
 - Album art rendered via Kitty / Sixel / half-block (auto-detected)
-- Audio visualizer
+- Audio visualizer using braille dots (2× horizontal + 4× vertical resolution)
+- **MPRIS2 D-Bus integration** — media keys, Waybar widget, `playerctl` support
 - Last.fm scrobbling
 - Keyboard-driven TUI interface
 - **Daemon mode** — keep music playing after closing the terminal, control via CLI
@@ -111,24 +112,19 @@ The config file is created automatically at:
 - **Linux:** `~/.config/isi-music/config.toml`
 - **Windows:** `%APPDATA%\isi-music\config.toml`
 
-You need to register a Spotify app at [developer.spotify.com](https://developer.spotify.com/dashboard) and add your credentials:
+Register a Spotify app at [developer.spotify.com](https://developer.spotify.com/dashboard) and set the redirect URI to `http://127.0.0.1:8888/callback`.
+
+isi-music uses **PKCE authentication** — only the Client ID is needed. No client secret required.
 
 ```toml
 [spotify]
-client_id     = "your_client_id_here"
-client_secret = "your_client_secret_here"
+client_id = "your_client_id_here"
 
 # Optional: Last.fm scrobbling
 [lastfm]
 api_key    = "your_lastfm_api_key"
 api_secret = "your_lastfm_api_secret"
-username   = "your_lastfm_username"
-password   = "your_lastfm_password"
-```
-
-In your Spotify app dashboard, set the redirect URI to:
-```
-http://127.0.0.1:8888/callback
+session_key = "obtained_via_setup-lastfm"
 ```
 
 ---
@@ -221,6 +217,32 @@ The TUI is built with [ratatui](https://github.com/ratatui-org/ratatui). All sta
        │
        ▼
   System audio (ALSA / PulseAudio / WASAPI)
+```
+
+---
+
+## MPRIS2 / Linux Integration
+
+isi-music registers on D-Bus as `org.mpris.MediaPlayer2.isi_music`, so it works with:
+
+- **Media keys** (XF86AudioPlay / Next / Prev) via Hyprland keybindings or `playerctld`
+- **Waybar** `mpris` module — shows current track and controls playback
+- **`playerctl`** CLI — `playerctl play-pause`, `playerctl next`, etc.
+
+**Waybar config example:**
+```json
+"mpris": {
+    "format": "{player_icon} {title} — {artist}",
+    "player-icons": { "isi_music": "" },
+    "status-icons": { "playing": "▶", "paused": "⏸", "stopped": "⏹" }
+}
+```
+
+MPRIS works in both TUI mode and daemon mode. To use media keys in Hyprland:
+```
+bind = , XF86AudioPlay,  exec, playerctl play-pause
+bind = , XF86AudioNext,  exec, playerctl next
+bind = , XF86AudioPrev,  exec, playerctl previous
 ```
 
 ---
