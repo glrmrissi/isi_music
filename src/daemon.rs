@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use crate::config::AppConfig;
 use crate::ipc::socket_path;
 use crate::lastfm::LastfmClient;
-use crate::player::{NativePlayer, PlayerNotification};
+use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
 
 struct TrackInfo {
@@ -45,7 +45,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         .get_access_token()
         .await
         .ok_or_else(|| anyhow::anyhow!("No Spotify access token"))?;
-    let mut player = NativePlayer::new(token, true).await?;
+    let mut player: Box<dyn AudioPlayer> = Box::new(NativePlayer::new(token, true).await?);
 
     // IPC socket
     let sock = socket_path();
@@ -76,7 +76,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
 
                 let response: String = if cmd.starts_with("play ") {
                     let arg = cmd.trim_start_matches("play ").trim();
-                    match load_playlist(&mut spotify, &mut player, &mut track_list, arg).await {
+                    match load_playlist(&mut spotify, &mut *player, &mut track_list, arg).await {
                         Ok(n) => {
                             progress_ms = 0;
                             scrobble_sent = false;
@@ -86,7 +86,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                         Err(e) => format!("error: {e}"),
                     }
                 } else if cmd == "liked" {
-                    match load_liked(&mut spotify, &mut player, &mut track_list).await {
+                    match load_liked(&mut spotify, &mut *player, &mut track_list).await {
                         Ok(n) => {
                             progress_ms = 0;
                             scrobble_sent = false;
@@ -113,7 +113,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                     match cmd.as_str() {
                         "toggle" => {
                             player.toggle();
-                            if player.is_playing { "playing".into() } else { "paused".into() }
+                            if player.is_playing() { "playing".into() } else { "paused".into() }
                         }
                         "next" => {
                             if player.next() {
@@ -131,10 +131,10 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                             }
                             "ok".into()
                         }
-                        "vol+" => { player.volume_up();   format!("vol {}", player.volume) }
-                        "vol-" => { player.volume_down(); format!("vol {}", player.volume) }
-                        "status" => status_string(&player, &track_list, progress_ms),
-                        "ls" => ls_string(&player, &track_list),
+                        "vol+" => { player.volume_up();   format!("vol {}", player.volume()) }
+                        "vol-" => { player.volume_down(); format!("vol {}", player.volume()) }
+                        "status" => status_string(&*player, &track_list, progress_ms),
+                        "ls" => ls_string(&*player, &track_list),
                         "quit" => {
                             let _ = w.write_all(b"bye\n").await;
                             break;
@@ -152,7 +152,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 last_tick = now;
 
                 // Player events
-                while let Ok(notif) = player.event_rx.try_recv() {
+                while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded | PlayerNotification::TrackUnavailable => {
                             if player.next() {
@@ -165,7 +165,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                     }
                 }
 
-                if player.is_playing {
+                if player.is_playing() {
                     progress_ms += delta;
 
                     if !scrobble_sent {
@@ -199,7 +199,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
 /// Load all tracks from a Spotify playlist URI/ID into the player.
 async fn load_playlist(
     spotify: &mut SpotifyClient,
-    player: &mut NativePlayer,
+    player: &mut dyn AudioPlayer,
     track_list: &mut Vec<TrackInfo>,
     uri_or_id: &str,
 ) -> Result<usize> {
@@ -238,7 +238,7 @@ async fn load_playlist(
 /// Load all liked/saved tracks into the player queue.
 async fn load_liked(
     spotify: &mut SpotifyClient,
-    player: &mut NativePlayer,
+    player: &mut dyn AudioPlayer,
     track_list: &mut Vec<TrackInfo>,
 ) -> Result<usize> {
     track_list.clear();
@@ -265,34 +265,34 @@ async fn load_liked(
 }
 
 /// List all tracks with their index (ID), marking the currently playing one.
-fn ls_string(player: &NativePlayer, tracks: &[TrackInfo]) -> String {
+fn ls_string(player: &dyn AudioPlayer, tracks: &[TrackInfo]) -> String {
     if tracks.is_empty() {
         return "no playlist loaded — use: isi-music --play <spotify:playlist:ID>".into();
     }
     let current = player.current_index();
     tracks.iter().enumerate().map(|(i, t)| {
         let marker = if current == Some(i) {
-            if player.is_playing { "▶" } else { "⏸" }
+            if player.is_playing() { "▶" } else { "⏸" }
         } else { " " };
         format!("{marker} {:>4}  {} — {}", i, t.name, t.artist)
     }).collect::<Vec<_>>().join("\n")
 }
 
 /// Build a human-readable status line.
-fn status_string(player: &NativePlayer, tracks: &[TrackInfo], progress_ms: u64) -> String {
+fn status_string(player: &dyn AudioPlayer, tracks: &[TrackInfo], progress_ms: u64) -> String {
     let Some(idx) = player.current_index() else {
         return "stopped".into();
     };
-    let state = if player.is_playing { "▶" } else { "⏸" };
+    let state = if player.is_playing() { "▶" } else { "⏸" };
     match tracks.get(idx) {
         Some(t) => format!(
             "{state}  {} — {}  |  {} / {}  |  vol {}%",
             t.name, t.artist,
             fmt_duration(progress_ms),
             fmt_duration(t.duration_ms),
-            player.volume,
+            player.volume(),
         ),
-        None => format!("{state}  track #{idx}  |  vol {}%", player.volume),
+        None => format!("{state}  track #{idx}  |  vol {}%", player.volume()),
     }
 }
 

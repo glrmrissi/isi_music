@@ -29,6 +29,46 @@ pub enum PlayerNotification {
     Paused,
 }
 
+// ── Backend-agnostic player trait ─────────────────────────────────────────────
+
+/// Common interface for any audio backend (librespot, local files, etc.).
+/// All methods are synchronous — backends manage their own async internals.
+pub trait AudioPlayer: Send {
+    // ── Queue ────────────────────────────────────────────────────────────────
+    fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
+    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64);
+    fn user_queue(&self) -> &[QueuedTrack];
+    fn remove_from_user_queue(&mut self, index: usize);
+    /// Take the `QueuedTrack` that was just promoted from the user queue, if any.
+    fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
+
+    // ── Playback ─────────────────────────────────────────────────────────────
+    fn play(&mut self);
+    fn pause(&mut self);
+    fn toggle(&mut self);
+    fn next(&mut self) -> bool;
+    fn prev(&mut self) -> bool;
+    fn play_at(&mut self, index: usize);
+    fn seek(&self, position_ms: u32);
+
+    // ── State ────────────────────────────────────────────────────────────────
+    fn is_playing(&self) -> bool;
+    fn volume(&self) -> u8;
+    fn shuffle(&self) -> bool;
+    fn repeat(&self) -> RepeatMode;
+    fn current_index(&self) -> Option<usize>;
+
+    // ── Volume / mode ────────────────────────────────────────────────────────
+    fn volume_up(&mut self);
+    fn volume_down(&mut self);
+    fn toggle_shuffle(&mut self);
+    fn cycle_repeat(&mut self);
+
+    // ── Events ───────────────────────────────────────────────────────────────
+    /// Non-blocking poll for the next player event.
+    fn try_recv_event(&mut self) -> Option<PlayerNotification>;
+}
+
 pub struct QueuedTrack {
     pub uri: String,
     pub name: String,
@@ -274,5 +314,36 @@ impl NativePlayer {
     fn apply_volume(&self) {
         let v = (self.volume as u32 * 65535 / 100) as u16;
         self.mixer.set_volume(v);
+    }
+}
+
+impl AudioPlayer for NativePlayer {
+    fn set_queue(&mut self, uris: Vec<String>, start_index: usize) { self.set_queue(uris, start_index); }
+    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) { self.add_to_queue(uri, name, artist, duration_ms); }
+    fn user_queue(&self) -> &[QueuedTrack] { self.user_queue() }
+    fn remove_from_user_queue(&mut self, index: usize) { self.user_queue.remove(index); }
+    fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
+
+    fn play(&mut self) { self.play(); }
+    fn pause(&mut self) { self.pause(); }
+    fn toggle(&mut self) { self.toggle(); }
+    fn next(&mut self) -> bool { self.next() }
+    fn prev(&mut self) -> bool { self.prev() }
+    fn play_at(&mut self, index: usize) { self.play_at(index); }
+    fn seek(&self, position_ms: u32) { self.seek(position_ms); }
+
+    fn is_playing(&self) -> bool { self.is_playing }
+    fn volume(&self) -> u8 { self.volume }
+    fn shuffle(&self) -> bool { self.shuffle }
+    fn repeat(&self) -> RepeatMode { self.repeat }
+    fn current_index(&self) -> Option<usize> { self.current_index() }
+
+    fn volume_up(&mut self) { self.volume_up(); }
+    fn volume_down(&mut self) { self.volume_down(); }
+    fn toggle_shuffle(&mut self) { self.toggle_shuffle(); }
+    fn cycle_repeat(&mut self) { self.cycle_repeat(); }
+
+    fn try_recv_event(&mut self) -> Option<PlayerNotification> {
+        self.event_rx.try_recv().ok()
     }
 }
