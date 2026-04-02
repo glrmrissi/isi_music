@@ -2,7 +2,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
 use ratatui_image::picker::Picker;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -36,6 +36,8 @@ pub struct App {
     // MPRIS D-Bus integration
     #[cfg(feature = "mpris")]
     mpris: Option<MprisHandle>,
+    // Real-time audio band energies from AnalyzerSink
+    band_energies: Option<Arc<Mutex<Vec<f32>>>>,
 }
 
 impl App {
@@ -48,20 +50,21 @@ impl App {
 
         let mut spotify = SpotifyClient::new().await?;
 
-        let player = match spotify.get_access_token().await {
+        let (player, band_energies) = match spotify.get_access_token().await {
             Some(token) => match NativePlayer::new(token, false).await {
                 Ok(p) => {
                     tracing::info!("Native player started");
-                    Some(Box::new(p) as Box<dyn AudioPlayer>)
+                    let bands = p.band_energies();
+                    (Some(Box::new(p) as Box<dyn AudioPlayer>), bands)
                 }
                 Err(e) => {
                     warn!("Native player unavailable: {e:#}");
-                    None
+                    (None, None)
                 }
             },
             None => {
                 warn!("Token not available for native player");
-                None
+                (None, None)
             }
         };
 
@@ -103,6 +106,7 @@ impl App {
             picker,
             #[cfg(feature = "mpris")]
             mpris,
+            band_energies,
         })
     }
 
@@ -145,6 +149,13 @@ impl App {
             if needs_sync {
                 self.sync_track_selection();
                 self.sync_queue_display();
+            }
+
+            // Update visualizer band energies from the audio sink
+            if let Some(ref arc) = self.band_energies {
+                if let Ok(bands) = arc.lock() {
+                    self.state.viz_bands.clone_from(&*bands);
+                }
             }
 
             // ── MPRIS: update state + process incoming commands ───────────────
@@ -223,8 +234,8 @@ impl App {
 
             terminal.draw(|f| self.ui.render(f, &mut self.state))?;
 
-            // Faster poll when playing (smooth visualizer + progress), slower when paused
-            let poll_ms = if self.state.playback.is_playing { 100 } else { 500 };
+            // 30 FPS when playing (fluid visualizer), slow when paused
+            let poll_ms = if self.state.playback.is_playing { 33 } else { 500 };
             if crossterm::event::poll(Duration::from_millis(poll_ms))? {
                 if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
                     self.handle_key(key_event.code, key_event.modifiers).await?;
@@ -563,21 +574,8 @@ impl App {
                             Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
-                    3 => { // Podcasts
-                        self.state.status_msg = Some("Loading saved podcasts…".to_string());
-                        match self.spotify.fetch_saved_shows(0).await {
-                            Ok((shows, total)) => {
-                                self.state.shows = shows;
-                                self.state.shows_total = total;
-                                self.state.shows_offset = self.state.shows.len() as u32;
-                                self.state.show_list.select(if self.state.shows.is_empty() { None } else { Some(0) });
-                                self.state.active_content = ActiveContent::Shows;
-                                self.state.search_results = None;
-                                self.state.status_msg = None;
-                                self.state.focus = Focus::Tracks;
-                            }
-                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
-                        }
+                    3 => { // Podcasts — coming soon
+                        self.state.status_msg = Some("Podcasts — coming soon".to_string());
                     }
                     _ => {}
                 }
@@ -677,9 +675,22 @@ impl App {
                     }
                     ActiveContent::Tracks | ActiveContent::None => {
                         if let Some(idx) = self.state.selected_track_index() {
+                            // Podcast episodes cannot be played via librespot
+                            if self.state.tracks.get(idx)
+                                .map(|t| t.uri.starts_with("spotify:episode:"))
+                                .unwrap_or(false)
+                            {
+                                self.state.status_msg = Some("Podcast playback not supported".to_string());
+                            } else
                             if let Some(player) = &mut self.player {
-                                let uris: Vec<String> = self.state.tracks.iter().map(|t| t.uri.clone()).collect();
-                                player.set_queue(uris, idx);
+                                let uris: Vec<String> = self.state.tracks.iter()
+                                    .filter(|t| !t.uri.starts_with("spotify:episode:"))
+                                    .map(|t| t.uri.clone())
+                                    .collect();
+                                let adjusted_idx = self.state.tracks[..idx].iter()
+                                    .filter(|t| !t.uri.starts_with("spotify:episode:"))
+                                    .count();
+                                player.set_queue(uris, adjusted_idx);
                                 if let Some(track) = self.state.tracks.get(idx) {
                                     self.state.playback.title = track.name.clone();
                                     self.state.playback.artist = track.artist.clone();

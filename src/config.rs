@@ -81,6 +81,30 @@ pub fn cache_path() -> Result<PathBuf> {
     Ok(dir.join("token.json"))
 }
 
+/// Separate file that persists just the refresh_token across rspotify auto-refreshes.
+/// rspotify drops the refresh_token from its Token object when Spotify's refresh
+/// response omits it (meaning "keep using the same one"), so we save it ourselves.
+pub fn refresh_token_path() -> Result<PathBuf> {
+    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+    let dir = base.join("isi-music");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join("refresh_token"))
+}
+
+pub fn save_refresh_token(rt: &str) {
+    if let Ok(p) = refresh_token_path() {
+        let _ = std::fs::write(p, rt);
+    }
+}
+
+pub fn load_refresh_token() -> Option<String> {
+    refresh_token_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub fn volume_path() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("Could not determine cache directory")?;
     let dir = base.join("isi-music");

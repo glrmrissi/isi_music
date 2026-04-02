@@ -11,8 +11,9 @@ use librespot_playback::{
     mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
+use crate::audio_sink::{AnalyzerSink, N_BANDS};
 use crate::config;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use rand::seq::SliceRandom;
 #[cfg(target_os = "linux")]
 use libc;
@@ -68,6 +69,10 @@ pub trait AudioPlayer: Send {
     // ── Events ───────────────────────────────────────────────────────────────
     /// Non-blocking poll for the next player event.
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
+
+    /// Shared frequency-band energies updated in real time by the audio sink.
+    /// Returns `None` if this player doesn't support audio analysis.
+    fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
 }
 
 pub struct QueuedTrack {
@@ -90,6 +95,8 @@ pub struct NativePlayer {
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
+    /// Real-time frequency band energies from the audio sink (N_BANDS values, 0..1)
+    pub band_energies: Arc<Mutex<Vec<f32>>>,
 }
 
 impl NativePlayer {
@@ -117,11 +124,13 @@ impl NativePlayer {
         } else {
             librespot_playback::config::Bitrate::Bitrate320
         };
+        let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
+        let bands_for_sink = Arc::clone(&bands);
         let player = LibrespotPlayer::new(
             PlayerConfig { gapless: false, bitrate, ..PlayerConfig::default() },
             session,
             volume_getter,
-            move || backend(None, audio_format),
+            move || Box::new(AnalyzerSink::new(backend(None, audio_format), Arc::clone(&bands_for_sink))),
         );
 
         // Notification channel for the App
@@ -169,6 +178,7 @@ impl NativePlayer {
             shuffle: false,
             repeat: RepeatMode::Off,
             event_rx: notif_rx,
+            band_energies: bands,
         };
         instance.apply_volume();
         Ok(instance)
@@ -351,5 +361,9 @@ impl AudioPlayer for NativePlayer {
 
     fn try_recv_event(&mut self) -> Option<PlayerNotification> {
         self.event_rx.try_recv().ok()
+    }
+
+    fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
+        Some(Arc::clone(&self.band_energies))
     }
 }
