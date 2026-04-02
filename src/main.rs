@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ratatui_image::picker::Picker;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -143,13 +144,17 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // Query terminal for image protocol support BEFORE entering raw mode
+    let picker = Picker::from_query_stdio()
+        .unwrap_or_else(|_| Picker::halfblocks());
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new().await?;
+    let mut app = App::new(picker).await?;
     let res = app.run(&mut terminal).await;
 
     disable_raw_mode()?;

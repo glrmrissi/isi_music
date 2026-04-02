@@ -8,6 +8,7 @@ use ratatui::{
 use rspotify::model::RepeatState;
 use std::f64::consts::TAU;
 
+use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 
 // ── Album Art ─────────────────────────────────────────────────────────────────
@@ -19,6 +20,8 @@ pub struct AlbumArtData {
     pub height: u16, // terminal rows (each = 2 pixel rows)
     /// Raw image bytes for re-processing on terminal resize
     pub raw: Vec<u8>,
+    /// High-quality render state (kitty/sixel/halfblocks via ratatui-image)
+    pub image_state: Option<StatefulProtocol>,
 }
 
 // ── Playback State ────────────────────────────────────────────────────────────
@@ -95,11 +98,11 @@ pub enum ActiveContent {
 
 // ── Library items (fixed) ─────────────────────────────────────────────────────
 
-const LIBRARY_ITEMS: &[(&str, &str)] = &[
-    ("󱍙", "Liked Songs"),
-    ("󰀥", "Albums"),
-    ("󰋌", "Artists"),
-    ("󰦔", "Podcasts"),
+const LIBRARY_ITEMS: &[&str] = &[
+    "Liked Songs",
+    "Albums",
+    "Artists",
+    "Podcasts",
 ];
 
 // ── Search Results ────────────────────────────────────────────────────────────
@@ -114,10 +117,16 @@ pub struct SearchResults {
     pub album_list:    ListState,
     pub playlist_list: ListState,
     pub panel: SearchPanel,
+    pub query: String,
+    pub tracks_total:    u32,
+    pub artists_total:   u32,
+    pub albums_total:    u32,
+    pub playlists_total: u32,
+    pub loading: bool,
 }
 
 impl SearchResults {
-    pub fn new(r: FullSearchResults) -> Self {
+    pub fn new(query: String, r: FullSearchResults) -> Self {
         let mut tl = ListState::default();
         if !r.tracks.is_empty() { tl.select(Some(0)); }
         Self {
@@ -130,6 +139,12 @@ impl SearchResults {
             album_list: ListState::default(),
             playlist_list: ListState::default(),
             panel: SearchPanel::Tracks,
+            query,
+            tracks_total:    r.tracks_total,
+            artists_total:   r.artists_total,
+            albums_total:    r.albums_total,
+            playlists_total: r.playlists_total,
+            loading: false,
         }
     }
 
@@ -179,6 +194,10 @@ impl SearchResults {
         self.album_list.selected().and_then(|i| self.albums.get(i))
     }
 
+    pub fn selected_artist(&self) -> Option<&ArtistSummary> {
+        self.artist_list.selected().and_then(|i| self.artists.get(i))
+    }
+
     pub fn selected_playlist(&self) -> Option<&PlaylistSummary> {
         self.playlist_list.selected().and_then(|i| self.playlists.get(i))
     }
@@ -218,6 +237,9 @@ pub struct UiState {
     pub shows_total: u32,
     // Right panel: Search
     pub search_results: Option<SearchResults>,
+    pub previous_search: Option<SearchResults>,
+    // Fullscreen now playing
+    pub fullscreen_player: bool,
     // Queue panel
     pub queue_items: Vec<(String, String)>, // (name, artist)
     pub queue_list: ListState,
@@ -263,6 +285,8 @@ impl UiState {
             shows_offset: 0,
             shows_total: 0,
             search_results: None,
+            previous_search: None,
+            fullscreen_player: false,
             queue_items: Vec::new(),
             queue_list: ListState::default(),
             show_album_art: true,
@@ -426,6 +450,19 @@ impl Ui {
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
         let area = frame.area();
 
+        // Fullscreen player: just the now playing panel + progress + help
+        if state.fullscreen_player && !state.playback.title.is_empty() {
+            let root = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([Constraint::Min(0), Constraint::Length(2), Constraint::Length(1)])
+                .split(area);
+            self.render_now_playing(frame, state, root[0]);
+            self.render_progress(frame, &state.playback, root[1]);
+            self.render_help(frame, state, root[2]);
+            return;
+        }
+
         let root = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
@@ -447,8 +484,12 @@ impl Ui {
             .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
             .split(root[1]);
 
-        // Left panel: Library + Playlists + (Album art if enabled)
-        let art_h = if state.show_album_art { Constraint::Length(16) } else { Constraint::Length(0) };
+        let showing_now_playing = state.search_results.is_none()
+            && state.active_content == ActiveContent::None
+            && !state.playback.title.is_empty();
+
+        // Left panel: Library + Playlists + (Album art if enabled, hidden when now playing is shown)
+        let art_h = if state.show_album_art && !showing_now_playing { Constraint::Length(16) } else { Constraint::Length(0) };
         let left_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(6), Constraint::Min(0), art_h])
@@ -464,7 +505,7 @@ impl Ui {
         self.render_header(frame, state, top_cols[1]);
         self.render_library(frame, state, left_rows[0]);
         self.render_playlists(frame, state, left_rows[1]);
-        if state.show_album_art {
+        if state.show_album_art && !showing_now_playing {
             self.render_album_art(frame, state, left_rows[2]);
         }
 
@@ -472,7 +513,13 @@ impl Ui {
             self.render_search_panels(frame, state, right_rows[0]);
         } else {
             match &state.active_content {
-                ActiveContent::None    => self.render_welcome(frame, right_rows[0]),
+                ActiveContent::None => {
+                    if state.playback.title.is_empty() {
+                        self.render_welcome(frame, right_rows[0])
+                    } else {
+                        self.render_now_playing(frame, state, right_rows[0])
+                    }
+                }
                 ActiveContent::Tracks  => self.render_tracks(frame, state, right_rows[0]),
                 ActiveContent::Albums  => self.render_albums(frame, state, right_rows[0]),
                 ActiveContent::Artists => self.render_artists(frame, state, right_rows[0]),
@@ -481,13 +528,16 @@ impl Ui {
         }
         self.render_queue(frame, state, right_rows[1]);
 
-        let playback_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(root[2]);
-
-        self.render_progress(frame, &state.playback, playback_row[1]);
-        self.render_marquee(frame, &state.playback, state.marquee_offset, playback_row[0]);
+        if showing_now_playing {
+            self.render_progress(frame, &state.playback, root[2]);
+        } else {
+            let playback_row = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .split(root[2]);
+            self.render_progress(frame, &state.playback, playback_row[1]);
+            self.render_marquee(frame, &state.playback, state.marquee_offset, playback_row[0]);
+        }
         self.render_help(frame, state, root[3]);
     }
 
@@ -561,8 +611,6 @@ impl Ui {
             RepeatState::Context => "  󰑖 Rep",
             RepeatState::Track   => "  󰑘 Rep1",
         };
-        let shuffle_label = if pb.shuffle { "  󰒝 Shuf" } else { "" };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -582,18 +630,9 @@ impl Ui {
                 Span::styled(" 󰍉  Search Results", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                 Span::styled("  [TAB] switch panel  [ENTER] open  [ESC] close", Style::default().fg(Color::DarkGray)),
             ])
-        } else if !pb.title.is_empty() {
-            Line::from(vec![
-                Span::styled(" 󰓇  ", Style::default().fg(Color::Green)),
-                Span::styled(&pb.title, Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  󰠃 {}", pb.artist), Style::default().fg(Color::DarkGray)),
-                Span::styled(repeat_label, Style::default().fg(Color::Green)),
-                Span::styled(shuffle_label, Style::default().fg(Color::Green)),
-            ])
         } else {
             Line::from(vec![
-                Span::styled(" 󰓇  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("No music playing", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                Span::styled("", Style::default().fg(Color::DarkGray)),
             ])
         };
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Left), inner);
@@ -613,9 +652,9 @@ impl Ui {
             ]).alignment(Alignment::Left))
             .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
 
-        let items: Vec<ListItem> = LIBRARY_ITEMS.iter().map(|(icon, name)| {
+        let items: Vec<ListItem> = LIBRARY_ITEMS.iter().map(|name| {
             ListItem::new(Line::from(vec![
-                Span::raw(format!("  {icon} {name} ")),
+                Span::raw(format!("  {name} ")),
             ]))
         }).collect();
 
@@ -670,6 +709,98 @@ impl Ui {
 
     // ── Welcome ───────────────────────────────────────────────────────────────
 
+    fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" 󰎈 Now Playing ")
+            .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            .border_style(Style::default().fg(Color::Green));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner.height == 0 { return; }
+
+        // Terminal cells are ~2:1 (h:w), so a square image needs width = height*2 in cells.
+        // Use as much height as possible, leaving at least 8 rows for text info.
+        let info_min: u16 = 8;
+        let art_h = inner.height.saturating_sub(info_min).min(inner.width / 2);
+        let art_w = art_h * 2;
+        let info_h = inner.height.saturating_sub(art_h);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(art_h), Constraint::Min(0)])
+            .split(inner);
+
+        let art_area = sections[0];
+        let info_area = sections[1];
+
+        // ── Album art ────────────────────────────────────────────────────────
+        // Center the art horizontally using Layout
+        let padding = art_area.width.saturating_sub(art_w) / 2;
+        let art_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(padding),
+                Constraint::Length(art_w),
+                Constraint::Min(0),
+            ])
+            .split(art_area);
+        let art_rect = art_cols[1];
+
+        if let Some(art) = &mut state.album_art {
+            if let Some(img_state) = &mut art.image_state {
+                frame.render_stateful_widget(
+                    StatefulImage::<StatefulProtocol>::default(),
+                    art_rect,
+                    img_state,
+                );
+            }
+        }
+
+        // ── Text info ────────────────────────────────────────────────────────
+        if info_h == 0 { return; }
+
+        let pb = &state.playback;
+
+        let repeat_icon = match pb.repeat {
+            rspotify::model::RepeatState::Off     => "󰑗",
+            rspotify::model::RepeatState::Context => "󰑖",
+            rspotify::model::RepeatState::Track   => "󰑘",
+        };
+        let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
+        let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
+
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                pb.title.clone(),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                pb.artist.clone(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                pb.album.clone(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("{}  {}  {}  vol {}%", play_icon, shuffle_icon, repeat_icon, pb.volume),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        frame.render_widget(
+            Paragraph::new(lines).alignment(Alignment::Center),
+            info_area,
+        );
+    }
+
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -713,9 +844,9 @@ impl Ui {
         let focused = state.focus == Focus::Tracks;
 
         let title = if state.active_playlist_uri.as_deref() == Some("liked_songs") {
-            " 󱍙 Liked Songs ".to_string()
+            " Liked Songs ".to_string()
         } else {
-            " 󰎆 Tracks ".to_string()
+            " Tracks ".to_string()
         };
 
         let count = if state.tracks_total > 0 {
@@ -743,7 +874,6 @@ impl Ui {
                 Style::default().fg(Color::White)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(if is_playing { " 󰓇 " } else { "   " }, Style::default().fg(Color::Green)),
                 Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
                 Span::styled(t.name.clone(), style),
                 Span::styled(format!("  󰠃 {}", t.artist), Style::default().fg(Color::DarkGray)),
@@ -772,7 +902,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" 󰀥 Albums ")
+            .title(" Albums ")
             .title_bottom(Line::from(vec![
                 Span::styled(format!(" {count} "), Style::default().fg(Color::DarkGray)),
             ]))
@@ -780,7 +910,6 @@ impl Ui {
 
         let items: Vec<ListItem> = state.albums.iter().enumerate().map(|(idx, a)| {
             ListItem::new(Line::from(vec![
-                Span::styled(" 󰀥 ", Style::default().fg(Color::Green)),
                 Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
                 Span::raw(a.name.clone()),
                 Span::styled(format!("  󰠃 {}", a.artist), Style::default().fg(Color::DarkGray)),
@@ -806,7 +935,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" 󰋌 Artists ")
+            .title(" Artists ")
             .title_bottom(Line::from(vec![
                 Span::styled(format!(" {count} "), Style::default().fg(Color::DarkGray)),
             ]))
@@ -814,7 +943,6 @@ impl Ui {
 
         let items: Vec<ListItem> = state.artists.iter().enumerate().map(|(idx, a)| {
             ListItem::new(Line::from(vec![
-                Span::styled(" 󰋌 ", Style::default().fg(Color::Green)),
                 Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
                 Span::raw(a.name.clone()),
                 Span::styled(
@@ -846,7 +974,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" 󰦔 Podcasts ")
+            .title(" Podcasts ")
             .title_bottom(Line::from(vec![
                 Span::styled(format!(" {count} "), Style::default().fg(Color::DarkGray)),
             ]))
@@ -854,7 +982,6 @@ impl Ui {
 
         let items: Vec<ListItem> = state.shows.iter().enumerate().map(|(idx, s)| {
             ListItem::new(Line::from(vec![
-                Span::styled(" 󰦔 ", Style::default().fg(Color::Green)),
                 Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
                 Span::raw(s.name.clone()),
                 Span::styled(format!("  {}", s.publisher), Style::default().fg(Color::DarkGray)),
@@ -873,18 +1000,24 @@ impl Ui {
     // ── Search Panels (4 columns) ─────────────────────────────────────────────
 
     fn render_search_panels(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-            ])
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
+
+        let top_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[0]);
+
+        let bot_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[1]);
 
         let focused_panel = state.search_results.as_ref().map(|sr| sr.panel).unwrap_or(SearchPanel::Tracks);
         let is_search_focus = state.focus == Focus::Search;
+        let is_loading = state.search_results.as_ref().map(|sr| sr.loading).unwrap_or(false);
 
         let panel_border = |panel: SearchPanel| -> Style {
             if is_search_focus && focused_panel == panel {
@@ -894,8 +1027,16 @@ impl Ui {
             }
         };
 
+        let panel_title = |panel: SearchPanel, base: &'static str| -> String {
+            if is_loading && focused_panel == panel {
+                format!("{base} …")
+            } else {
+                base.to_string()
+            }
+        };
+
         if let Some(sr) = &mut state.search_results {
-            // Tracks
+            // Tracks (top-left)
             let track_items: Vec<ListItem> = sr.tracks.iter().enumerate().map(|(idx, t)| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰓇 ", Style::default().fg(Color::Green)),
@@ -906,13 +1047,13 @@ impl Ui {
             }).collect();
             let track_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
-                .title(" 󰎆 Tracks ").border_style(panel_border(SearchPanel::Tracks));
+                .title(panel_title(SearchPanel::Tracks, " 󰎆 Tracks ")).border_style(panel_border(SearchPanel::Tracks));
             let track_list = List::new(track_items).block(track_block)
                 .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
-            frame.render_stateful_widget(track_list, cols[0], &mut sr.track_list);
+            frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
-            // Artists
+            // Artists (top-right)
             let artist_items: Vec<ListItem> = sr.artists.iter().map(|a| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰋌 ", Style::default().fg(Color::Green)),
@@ -925,13 +1066,13 @@ impl Ui {
             }).collect();
             let artist_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
-                .title(" 󰋌 Artists ").border_style(panel_border(SearchPanel::Artists));
+                .title(panel_title(SearchPanel::Artists, " 󰋌 Artists ")).border_style(panel_border(SearchPanel::Artists));
             let artist_list = List::new(artist_items).block(artist_block)
                 .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
-            frame.render_stateful_widget(artist_list, cols[1], &mut sr.artist_list);
+            frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
-            // Albums
+            // Albums (bottom-left)
             let album_items: Vec<ListItem> = sr.albums.iter().map(|a| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰀥 ", Style::default().fg(Color::Green)),
@@ -941,13 +1082,13 @@ impl Ui {
             }).collect();
             let album_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
-                .title(" 󰀥 Albums ").border_style(panel_border(SearchPanel::Albums));
+                .title(panel_title(SearchPanel::Albums, " 󰀥 Albums ")).border_style(panel_border(SearchPanel::Albums));
             let album_list = List::new(album_items).block(album_block)
                 .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
-            frame.render_stateful_widget(album_list, cols[2], &mut sr.album_list);
+            frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
-            // Playlists
+            // Playlists (bottom-right)
             let playlist_items: Vec<ListItem> = sr.playlists.iter().map(|p| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰲚 ", Style::default().fg(Color::Green)),
@@ -957,11 +1098,11 @@ impl Ui {
             }).collect();
             let pl_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
-                .title(" 󰲚 Playlists ").border_style(panel_border(SearchPanel::Playlists));
+                .title(panel_title(SearchPanel::Playlists, " 󰲚 Playlists ")).border_style(panel_border(SearchPanel::Playlists));
             let pl_list = List::new(playlist_items).block(pl_block)
                 .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
-            frame.render_stateful_widget(pl_list, cols[3], &mut sr.playlist_list);
+            frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
         }
     }
 
@@ -973,7 +1114,9 @@ impl Ui {
         } else {
             0.0
         };
-        let width = area.width.saturating_sub(14) as usize;
+        let shuffle_label = if pb.shuffle { "  󰒝 Shuf" } else { "" };
+        let shuffle_width = if pb.shuffle { 9u16 } else { 0u16 };
+        let width = area.width.saturating_sub(14 + shuffle_width) as usize;
         let filled = (width as f64 * ratio) as usize;
 
         let bar = format!(
@@ -995,6 +1138,7 @@ impl Ui {
                 fmt_duration(pb.duration_ms),
                 Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
             ),
+            Span::styled(shuffle_label, Style::default().fg(Color::Green)),
         ]);
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
     }
@@ -1034,45 +1178,27 @@ impl Ui {
 
         if inner.width == 0 || inner.height == 0 { return; }
 
-        match &mut state.album_art {
-            None => {
-                frame.render_widget(
-                    Paragraph::new("").style(Style::default().fg(Color::DarkGray)),
-                    inner,
-                );
-            }
-            Some(art) => {
-                // Re-process if container size changed (e.g. terminal resize)
-                if art.width != inner.width || art.height != inner.height {
-                    if let Ok(img) = image::load_from_memory(&art.raw) {
-                        let (w, h) = (inner.width as u32, inner.height as u32);
-                        let resized = img.resize_exact(w, h * 2, image::imageops::FilterType::Lanczos3);
-                        let rgb = resized.to_rgb8();
-                        art.pixels = (0..h).flat_map(|row| {
-                            let rgb = &rgb;
-                            (0..w).map(move |col| {
-                                let t = rgb.get_pixel(col, row * 2);
-                                let b = rgb.get_pixel(col, row * 2 + 1);
-                                (t[0], t[1], t[2], b[0], b[1], b[2])
-                            })
-                        }).collect();
-                        art.width = inner.width;
-                        art.height = inner.height;
-                    }
-                }
+        // Square image: width = height * 2 cells (terminal cells are ~2:1 height:width in pixels)
+        let img_h = inner.height.min(inner.width / 2);
+        let img_w = img_h * 2;
+        let padding = inner.width.saturating_sub(img_w) / 2;
+        let img_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(padding),
+                Constraint::Length(img_w),
+                Constraint::Min(0),
+            ])
+            .split(inner);
+        let img_rect = img_cols[1];
 
-                for row in 0..art.height.min(inner.height) {
-                    for col in 0..art.width.min(inner.width) {
-                        let idx = row as usize * art.width as usize + col as usize;
-                        if let Some(&(tr, tg, tb, br, bg, bb)) = art.pixels.get(idx) {
-                            if let Some(cell) = frame.buffer_mut().cell_mut((inner.x + col, inner.y + row)) {
-                                cell.set_char('▀')
-                                    .set_fg(Color::Rgb(tr, tg, tb))
-                                    .set_bg(Color::Rgb(br, bg, bb));
-                            }
-                        }
-                    }
-                }
+        if let Some(art) = &mut state.album_art {
+            if let Some(img_state) = &mut art.image_state {
+                frame.render_stateful_widget(
+                    StatefulImage::<StatefulProtocol>::default(),
+                    img_rect,
+                    img_state,
+                );
             }
         }
     }
@@ -1138,9 +1264,14 @@ impl Ui {
                 " [↑↓] Navigate  [DEL] Remove from queue  [TAB] Focus  [A] Add track ",
                 Style::default().fg(Color::DarkGray),
             ))
+        } else if state.previous_search.is_some() {
+            Line::from(Span::styled(
+                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [←→] Seek  [BACKSPACE] Back to search ",
+                Style::default().fg(Color::DarkGray),
+            ))
         } else {
             Line::from(Span::styled(
-                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Q] Quit ",
+                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Q] Quit ",
                 Style::default().fg(Color::DarkGray),
             ))
         };

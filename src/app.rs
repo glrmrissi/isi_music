@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
+use ratatui_image::picker::Picker;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -29,10 +30,11 @@ pub struct App {
     current_track_uri: String,
     last_art_uri: String,
     album_art_pending: Option<tokio::sync::oneshot::Receiver<Option<Vec<u8>>>>,
+    picker: Picker,
 }
 
 impl App {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(picker: Picker) -> Result<Self> {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
             (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(k.clone(), s.clone(), sk.clone()))),
@@ -87,6 +89,7 @@ impl App {
             current_track_uri: String::new(),
             last_art_uri: String::new(),
             album_art_pending: None,
+            picker,
         })
     }
 
@@ -136,11 +139,14 @@ impl App {
                 if let Ok(result) = rx.try_recv() {
                     self.album_art_pending = None;
                     if let Some(bytes) = result {
+                        let image_state = image::load_from_memory(&bytes).ok()
+                            .map(|img| self.picker.new_resize_protocol(img));
                         self.state.album_art = Some(AlbumArtData {
                             raw: bytes,
                             pixels: vec![],
                             width: 0,
                             height: 0,
+                            image_state,
                         });
                     }
                 }
@@ -216,7 +222,7 @@ impl App {
                                     + results.artists.len()
                                     + results.albums.len()
                                     + results.playlists.len();
-                                self.state.search_results = Some(SearchResults::new(results));
+                                self.state.search_results = Some(SearchResults::new(query.clone(), results));
                                 self.state.tracks.clear();
                                 self.state.active_playlist_uri = None;
                                 self.state.search_active = false;
@@ -235,8 +241,8 @@ impl App {
                         }
                     }
                 }
-                KeyCode::Up | KeyCode::Char('k')   => self.state.nav_up(),
-                KeyCode::Down | KeyCode::Char('j')  => self.state.nav_down(),
+                KeyCode::Up                         => self.state.nav_up(),
+                KeyCode::Down                       => self.state.nav_down(),
                 KeyCode::Backspace                  => self.state.search_pop(),
                 KeyCode::Tab                        => self.state.switch_focus(),
                 KeyCode::Char(c)                    => self.state.search_push(c),
@@ -299,10 +305,23 @@ impl App {
 
             (KeyCode::Char('/'), _) => self.state.start_search(),
 
-            // Esc from search panel → back to normal tracks view
+            // Backspace → go back to previous search results if available
+            (KeyCode::Backspace, _) => {
+                if let Some(prev) = self.state.previous_search.take() {
+                    self.state.search_results = Some(prev);
+                    self.state.active_content = ActiveContent::None;
+                    self.state.focus = Focus::Search;
+                }
+            }
+
+            // Esc: exit fullscreen or exit search
             (KeyCode::Esc, _) => {
-                if self.state.search_results.is_some() {
+                if self.state.fullscreen_player {
+                    self.state.fullscreen_player = false;
+                } else if self.state.search_results.is_some() {
                     self.state.search_results = None;
+                    self.state.previous_search = None;
+                    self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
                 }
             }
@@ -374,7 +393,19 @@ impl App {
                     };
                 }
             }
-            (KeyCode::Char('c'), _) if modifiers != KeyModifiers::CONTROL => {
+            (KeyCode::Char('z'), _) => {
+                if !self.state.playback.title.is_empty() {
+                    self.state.fullscreen_player = !self.state.fullscreen_player;
+                    if self.state.fullscreen_player {
+                        self.state.active_content = ActiveContent::None;
+                    }
+                }
+            }
+            (KeyCode::Char('c'), _) if modifiers != KeyModifiers::CONTROL
+                && !self.state.fullscreen_player
+                && !(self.state.search_results.is_none()
+                     && self.state.active_content == ActiveContent::None
+                     && !self.state.playback.title.is_empty()) => {
                 self.state.show_album_art = !self.state.show_album_art;
                 if self.state.show_album_art {
                     // Reset so maybe_fetch_album_art triggers a new fetch
@@ -655,7 +686,7 @@ impl App {
                                     self.state.active_playlist_id = Some(format!("album:{id}"));
                                     self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
                                     self.state.active_content = ActiveContent::Tracks;
-                                    self.state.search_results = None;
+                                    self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
@@ -678,7 +709,7 @@ impl App {
                                     self.state.active_playlist_id = Some(id);
                                     self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
                                     self.state.active_content = ActiveContent::Tracks;
-                                    self.state.search_results = None;
+                                    self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
@@ -687,7 +718,27 @@ impl App {
                         }
                     }
                     Some(SearchPanel::Artists) => {
-                        self.state.status_msg = Some("Artist browse — coming soon".to_string());
+                        let artist = self.state.search_results.as_ref()
+                            .and_then(|sr| sr.selected_artist())
+                            .map(|a| (a.id.clone(), a.name.clone()));
+                        if let Some((id, name)) = artist {
+                            self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
+                            match self.spotify.fetch_artist_top_tracks(&id).await {
+                                Ok(tracks) => {
+                                    self.state.tracks = tracks;
+                                    self.state.tracks_total = self.state.tracks.len() as u32;
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                                    self.state.active_playlist_id = Some(format!("artist:{id}"));
+                                    self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
+                                    self.state.active_content = ActiveContent::Tracks;
+                                    self.state.previous_search = self.state.search_results.take();
+                                    self.state.status_msg = None;
+                                    self.state.focus = Focus::Tracks;
+                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                            }
+                        }
                     }
                     None => {}
                 }
@@ -706,6 +757,7 @@ impl App {
         // Reset album art so maybe_fetch_album_art will kick off a new fetch
         self.state.album_art = None;
         self.album_art_pending = None;
+        self.last_art_uri.clear();
 
         if let Some(lfm) = self.lastfm.clone() {
             let artist = self.state.playback.artist.clone();
@@ -719,6 +771,45 @@ impl App {
 
     /// Load next page of tracks for the active context.
     async fn maybe_load_more(&mut self) {
+        // Handle search results pagination
+        if self.state.focus == Focus::Search {
+            let should_load = self.state.search_results.as_ref().map(|sr| {
+                if sr.loading { return None; }
+                let (selected, len, total, stype) = match sr.panel {
+                    SearchPanel::Tracks    => (sr.track_list.selected().unwrap_or(0),    sr.tracks.len(),    sr.tracks_total,    "track"),
+                    SearchPanel::Artists   => (sr.artist_list.selected().unwrap_or(0),   sr.artists.len(),   sr.artists_total,   "artist"),
+                    SearchPanel::Albums    => (sr.album_list.selected().unwrap_or(0),    sr.albums.len(),    sr.albums_total,    "album"),
+                    SearchPanel::Playlists => (sr.playlist_list.selected().unwrap_or(0), sr.playlists.len(), sr.playlists_total, "playlist"),
+                };
+                if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
+                    return None;
+                }
+                Some((sr.query.clone(), len as u32, stype))
+            }).flatten();
+
+            if let Some((query, offset, stype)) = should_load {
+                self.state.search_results.as_mut().unwrap().loading = true;
+                match self.spotify.search_more(&query, stype, offset).await {
+                    Ok(more) => {
+                        let sr = self.state.search_results.as_mut().unwrap();
+                        match stype {
+                            "track"    => { sr.tracks_total = more.tracks_total;       sr.tracks.extend(more.tracks); }
+                            "artist"   => { sr.artists_total = more.artists_total;     sr.artists.extend(more.artists); }
+                            "album"    => { sr.albums_total = more.albums_total;       sr.albums.extend(more.albums); }
+                            "playlist" => { sr.playlists_total = more.playlists_total; sr.playlists.extend(more.playlists); }
+                            _ => {}
+                        }
+                        sr.loading = false;
+                    }
+                    Err(e) => {
+                        if let Some(sr) = self.state.search_results.as_mut() { sr.loading = false; }
+                        self.state.status_msg = Some(format!("Load more error: {e}"));
+                    }
+                }
+            }
+            return;
+        }
+
         // Handle album list pagination
         if self.state.active_content == ActiveContent::Albums {
             let selected = self.state.album_list.selected().unwrap_or(0);
@@ -796,7 +887,11 @@ impl App {
     }
 
     async fn maybe_fetch_album_art(&mut self) {
-        if !self.state.show_album_art
+        let need_art_for_now_playing = self.state.search_results.is_none()
+            && self.state.active_content == ActiveContent::None
+            && !self.state.playback.title.is_empty();
+
+        if (!self.state.show_album_art && !need_art_for_now_playing)
             || self.current_track_uri.is_empty()
             || self.current_track_uri == self.last_art_uri
             || self.album_art_pending.is_some()
