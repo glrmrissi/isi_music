@@ -77,6 +77,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # MPRIS2 D-Bus integration (Waybar, playerctl, media keys)
 mpris-server = { version = "0.8", optional = true }
 
+# Discord Rich Presence
+discord-rich-presence = { version = "0.2", optional = true }
+
 [features]
 mpris = ["mpris-server"]
-default = ["mpris"]
+discord = ["discord-rich-presence"]
+default = ["mpris", "discord"]

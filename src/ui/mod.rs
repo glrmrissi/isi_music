@@ -17,7 +17,7 @@ pub struct AlbumArtData {
 }
 
 // ── Playback State ────────────────────────────────────────────────────────────
-
+#[derive(Clone, Debug)]
 pub struct PlaybackState {
     pub title: String,
     pub artist: String,
@@ -28,6 +28,7 @@ pub struct PlaybackState {
     pub progress_ms: u64,
     pub duration_ms: u64,
     pub volume: u8,
+    pub art_url: Option<String>
 }
 
 impl Default for PlaybackState {
@@ -42,6 +43,7 @@ impl Default for PlaybackState {
             progress_ms: 0,
             duration_ms: 0,
             volume: 100,
+            art_url: None,
         }
     }
 }
@@ -249,6 +251,7 @@ pub struct UiState {
     pub marquee_ms: u64,
     // Real-time audio spectrum (N_BANDS values, 0..1)
     pub viz_bands: Vec<f32>,
+    pub art_url: Option<String>,
 }
 
 impl UiState {
@@ -293,6 +296,7 @@ impl UiState {
             marquee_offset: 0,
             marquee_ms: 0,
             viz_bands: Vec::new(),
+            art_url: None,
         }
     }
 

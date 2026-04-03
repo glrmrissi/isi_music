@@ -7,6 +7,15 @@ pub struct AppConfig {
     pub spotify: SpotifyConfig,
     #[serde(default)]
     pub lastfm: LastfmConfig,
+    #[serde(default)]
+    pub discord: DiscordConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct DiscordConfig {
+    /// None = not asked yet (triggers setup on next launch)
+    pub enabled: Option<bool>,
+    pub app_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -42,11 +51,12 @@ impl AppConfig {
             .with_context(|| format!("Invalid config at {}", path.display()))
     }
 
-    /// Environment variable takes priority over config file.
+    /// Environment variable > config file > hardcoded default.
     pub fn get_client_id(&self) -> Option<String> {
         std::env::var("SPOTIFY_CLIENT_ID")
             .ok()
             .or_else(|| self.spotify.client_id.clone())
+            .or_else(|| Some("518a78a470a1453cb0daf2d1e12b3ccf".to_string()))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -60,7 +70,7 @@ impl AppConfig {
     }
 
     pub fn needs_setup(&self) -> bool {
-        self.get_client_id().is_none()
+        false
     }
 }
 

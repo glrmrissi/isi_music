@@ -7,7 +7,7 @@ use librespot_playback::{
 use rustfft::{FftPlanner, Fft, num_complex::Complex};
 
 pub const N_BANDS: usize = 64;
-const FFT_SIZE: usize = 1024;
+const FFT_SIZE: usize = 2048;
 const SAMPLE_RATE: f32 = 44100.0;
 
 pub struct AnalyzerSink {
@@ -52,9 +52,10 @@ impl AnalyzerSink {
         });
         self.buffer.extend(mono);
 
+        let step = 512;
         while self.buffer.len() >= FFT_SIZE {
             self.chunk_buf.copy_from_slice(&self.buffer[..FFT_SIZE]);
-            self.buffer.drain(..FFT_SIZE);
+            self.buffer.drain(..step);
             self.compute_bands();
         }
     }
@@ -91,16 +92,17 @@ impl AnalyzerSink {
 
         for v in self.new_bands_buf.iter_mut() { *v = 0.0; }
         for band in 0..N_BANDS {
-            let f_low  = 2.0f32.powf(log_min + (band       as f32 / N_BANDS as f32) * (log_max - log_min));
-            let f_high = 2.0f32.powf(log_min + ((band + 1) as f32 / N_BANDS as f32) * (log_max - log_min));
-            let bin_low  = (f_low  / freq_per_bin) as usize;
-            let bin_high = ((f_high / freq_per_bin) as usize).min(self.magnitudes_buf.len().saturating_sub(1));
-
-            self.new_bands_buf[band] = if bin_low >= bin_high {
-                self.magnitudes_buf.get(bin_low).copied().unwrap_or(0.0)
+            let f_target = 2.0f32.powf(log_min + (band as f32 / N_BANDS as f32) * (log_max - log_min));
+            let bin_idx = f_target / freq_per_bin;
+            
+            let i = bin_idx.floor() as usize;
+            let fract = bin_idx.fract();
+            
+            if i + 1 < self.magnitudes_buf.len() {
+                self.new_bands_buf[band] = self.magnitudes_buf[i] * (1.0 - fract) + self.magnitudes_buf[i+1] * fract;
             } else {
-                self.magnitudes_buf[bin_low..=bin_high].iter().cloned().fold(0.0f32, f32::max)
-            };
+                self.new_bands_buf[band] = self.magnitudes_buf[i];
+            }
         }
 
         // Per-band normalization: each band is divided by its own running peak.
@@ -122,7 +124,7 @@ impl AnalyzerSink {
                 if next > *cur {
                     *cur = next;
                 } else {
-                    *cur = *cur * 0.60 + next * 0.40;
+                    *cur *= 0.88; 
                 }
             }
         }

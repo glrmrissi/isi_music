@@ -18,6 +18,7 @@ pub struct PlaylistSummary {
     pub name: String,
     pub uri: String,
     pub total_tracks: u32,
+    pub art_url: Option<String>
 }
 
 pub struct TrackSummary {
@@ -227,11 +228,13 @@ impl SpotifyClient {
                 .await?;
             let fetched = page.items.len() as u32;
             for p in page.items {
+                let art_url = p.images.first().map(|img| img.url.clone());
                 all.push(PlaylistSummary {
                     id: p.id.id().to_owned(),
                     uri: p.id.uri(),
                     name: p.name,
                     total_tracks: p.tracks.total,
+                    art_url,
                 });
             }
             if page.next.is_none() || fetched == 0 {
@@ -303,28 +306,38 @@ impl SpotifyClient {
         self.shuffle_state = ctx.shuffle_state;
         self.repeat_state = ctx.repeat_state;
 
-        let (title, artist, album, duration_ms) = match ctx.item {
+        let (title, artist, album, duration_ms, art_url) = match ctx.item {
             Some(PlayableItem::Track(track)) => {
-                let artist = track
-                    .artists
-                    .iter()
+                let artist = track.artists.iter()
                     .map(|a| a.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
                 let duration = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
-                (track.name, artist, track.album.name, duration)
+
+                let url = if let Some(img) = track.album.images.first() {
+                    tracing::debug!("art_url from album.images: {}", img.url);
+                    Some(img.url.clone())
+                } else if let Some(id) = &track.id {
+                    tracing::debug!("album.images vazio, buscando via API track: {}", id.uri());
+                    let fetched = self.fetch_track_art_url(&id.uri()).await;
+                    tracing::debug!("fetch_track_art_url retornou: {:?}", fetched);
+                    fetched
+                } else {
+                    tracing::warn!("sem imagem e sem track id");
+                    None
+                };
+
+                (track.name, artist, track.album.name, duration, url)
             }
             Some(PlayableItem::Episode(ep)) => {
                 let duration = ep.duration.num_milliseconds().try_into().unwrap_or(0u64);
-                (ep.name, ep.show.name, String::new(), duration)
+                let url = ep.images.first().map(|img| img.url.clone());
+                (ep.name, ep.show.name, String::new(), duration, url)
             }
             Some(PlayableItem::Unknown(_)) | None => return Ok(PlaybackState::default()),
         };
 
-        let progress_ms = ctx
-            .progress
-            .and_then(|p| p.num_milliseconds().try_into().ok())
-            .unwrap_or(0u64);
+        let progress_ms = ctx.progress.and_then(|p| p.num_milliseconds().try_into().ok()).unwrap_or(0u64);
 
         Ok(PlaybackState {
             title,
@@ -336,6 +349,7 @@ impl SpotifyClient {
             progress_ms,
             duration_ms,
             volume: 100,
+            art_url,
         })
     }
 
@@ -473,7 +487,13 @@ impl SpotifyClient {
                     let name = item["name"].as_str().unwrap_or("Unknown").to_string();
                     let uri = item["uri"].as_str().unwrap_or("").to_string();
                     let total_tracks = item["tracks"]["total"].as_u64().unwrap_or(0) as u32;
-                    playlists.push(PlaylistSummary { id, name, uri, total_tracks });
+                    
+                    let art_url = item["images"].as_array()
+                        .and_then(|imgs| imgs.first())
+                        .and_then(|img| img["url"].as_str())
+                        .map(|s| s.to_string());
+
+                    playlists.push(PlaylistSummary { id, name, uri, total_tracks, art_url });
                 }
             }
         }
