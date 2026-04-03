@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
+use crate::discord::DiscordRpc;
 use crate::lastfm::LastfmClient;
 use crate::player::{AudioPlayer, NativePlayer, PlayerNotification, RepeatMode};
 #[cfg(feature = "mpris")]
@@ -31,13 +32,19 @@ pub struct App {
     // Album art
     current_track_uri: String,
     last_art_uri: String,
-    album_art_pending: Option<tokio::sync::oneshot::Receiver<Option<Vec<u8>>>>,
+    album_art_pending: Option<tokio::sync::oneshot::Receiver<(Option<String>, Option<Vec<u8>>)>>,
     picker: Picker,
     // MPRIS D-Bus integration
     #[cfg(feature = "mpris")]
     mpris: Option<MprisHandle>,
+    // Discord Rich Presence
+    discord: Option<DiscordRpc>,
+    discord_last_title: String,
+    discord_last_playing: bool,
+    discord_pending_since: Option<Instant>,
     // Real-time audio band energies from AnalyzerSink
     band_energies: Option<Arc<Mutex<Vec<f32>>>>,
+    art_url: Option<String>,
 }
 
 impl App {
@@ -80,12 +87,21 @@ impl App {
             Err(e) => warn!("Failed to load playlists: {e}"),
         }
 
-        state.playback = spotify.fetch_playback().await.unwrap_or_default();
+        let initial_playback = spotify.fetch_playback().await.unwrap_or_default();
+        let initial_art = initial_playback.art_url.clone(); 
+        state.playback = initial_playback;
 
         #[cfg(feature = "mpris")]
         let mpris = match crate::mpris::spawn().await {
             Ok(h) => { tracing::info!("MPRIS D-Bus server started"); Some(h) }
             Err(e) => { tracing::warn!("MPRIS unavailable: {e}"); None }
+        };
+
+        let discord = if cfg.discord.enabled == Some(true) {
+            let app_id = cfg.discord.app_id.as_deref().unwrap_or(crate::discord::DEFAULT_APP_ID);
+            DiscordRpc::spawn(app_id)
+        } else {
+            None
         };
 
         Ok(Self {
@@ -106,7 +122,12 @@ impl App {
             picker,
             #[cfg(feature = "mpris")]
             mpris,
+            discord,
+            discord_last_title: String::new(),
+            discord_last_playing: false,
+            discord_pending_since: None,
             band_energies,
+            art_url: initial_art
         })
     }
 
@@ -148,6 +169,10 @@ impl App {
             }
 
             if needs_sync {
+                if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                    self.state.playback = current_pb.clone();
+                    self.art_url = current_pb.art_url; 
+                }
                 self.sync_track_selection();
                 self.sync_queue_display();
             }
@@ -161,11 +186,12 @@ impl App {
             #[cfg(feature = "mpris")]
             if let Some(mpris) = &mut self.mpris {
                 let pb = &self.state.playback;
+                let art_url = self.state.art_url.clone(); 
+
                 mpris.update(MprisState {
                     title: pb.title.clone(),
                     artist: pb.artist.clone(),
                     album: pb.album.clone(),
-                    art_url: None,
                     duration_us: pb.duration_ms as i64 * 1000,
                     position_us: pb.progress_ms as i64 * 1000,
                     volume: pb.volume as f64 / 100.0,
@@ -173,6 +199,7 @@ impl App {
                     shuffle: pb.shuffle,
                     repeat_track: pb.repeat == RepeatState::Track,
                     repeat_queue: pb.repeat == RepeatState::Context,
+                    art_url: pb.art_url.clone(),
                 });
 
                 let cmds: Vec<MprisCmd> = {
@@ -210,12 +237,55 @@ impl App {
             }
 
             if let Some(rx) = &mut self.album_art_pending {
-                if let Ok(result) = rx.try_recv() {
+                if let Ok((art_url, bytes)) = rx.try_recv() {
                     self.album_art_pending = None;
-                    if let Some(bytes) = result {
+                    if let Some(url) = art_url {
+                        self.state.playback.art_url = Some(url);
+                    }
+                    if let Some(bytes) = bytes {
                         let image_state = image::load_from_memory(&bytes).ok()
                             .map(|img| self.picker.new_resize_protocol(img));
                         self.state.album_art = Some(AlbumArtData { image_state });
+                    }
+                }
+            }
+
+            if let Some(discord) = &self.discord {
+                let pb = &self.state.playback;
+                let title_changed = pb.title != self.discord_last_title;
+                let playing_changed = pb.is_playing != self.discord_last_playing;
+
+                if title_changed {
+                    // Track changed — wait for art_url before sending
+                    self.discord_pending_since = Some(Instant::now());
+                    self.discord_last_title = pb.title.clone();
+                    self.discord_last_playing = pb.is_playing;
+                } else if playing_changed {
+                    // Pause/resume — send immediately, no need to wait for art
+                    self.discord_last_playing = pb.is_playing;
+                    self.discord_pending_since = None;
+                    if pb.title.is_empty() {
+                        discord.clear();
+                    } else if pb.is_playing {
+                        discord.update_playing(&pb.title, &pb.artist, pb.art_url.as_deref());
+                    } else {
+                        discord.update_paused(&pb.title, &pb.artist);
+                    }
+                }
+
+                // Flush pending track update once art arrives or after 5s timeout
+                if let Some(since) = self.discord_pending_since {
+                    let art_ready = pb.art_url.is_some();
+                    let timed_out = since.elapsed() >= Duration::from_secs(5);
+                    if art_ready || timed_out {
+                        self.discord_pending_since = None;
+                        if pb.title.is_empty() {
+                            discord.clear();
+                        } else if pb.is_playing {
+                            discord.update_playing(&pb.title, &pb.artist, pb.art_url.as_deref());
+                        } else {
+                            discord.update_paused(&pb.title, &pb.artist);
+                        }
                     }
                 }
             }
@@ -827,6 +897,7 @@ impl App {
 
         // Reset album art so maybe_fetch_album_art will kick off a new fetch
         self.state.album_art = None;
+        self.state.playback.art_url = None;
         self.album_art_pending = None;
         self.last_art_uri.clear();
 
@@ -962,8 +1033,14 @@ impl App {
             && self.state.active_content == ActiveContent::None
             && !self.state.playback.title.is_empty();
 
+        // Always fetch art so Discord RPC and MPRIS have the URL regardless of TUI state
         if (!self.state.show_album_art && !need_art_for_now_playing)
-            || self.current_track_uri.is_empty()
+            && self.discord.is_none()
+        {
+            return;
+        }
+
+        if self.current_track_uri.is_empty()
             || self.current_track_uri == self.last_art_uri
             || self.album_art_pending.is_some()
         {
@@ -979,7 +1056,7 @@ impl App {
 
         tokio::spawn(async move {
             let Some(track_id) = uri.strip_prefix("spotify:track:").map(|s| s.to_string()) else {
-                let _ = tx.send(None);
+                let _ = tx.send((None, None));
                 return;
             };
             let Ok(resp) = http
@@ -987,11 +1064,11 @@ impl App {
                 .bearer_auth(&token)
                 .send().await
             else {
-                let _ = tx.send(None);
+                let _ = tx.send((None, None));
                 return;
             };
             let Ok(json) = resp.json::<serde_json::Value>().await else {
-                let _ = tx.send(None);
+                let _ = tx.send((None, None));
                 return;
             };
             // Use the largest image (first) for better quality in terminal
@@ -1000,14 +1077,14 @@ impl App {
                 .and_then(|img| img["url"].as_str())
                 .map(|s| s.to_string())
             else {
-                let _ = tx.send(None);
+                let _ = tx.send((None, None));
                 return;
             };
             let bytes = match http.get(&url).send().await {
                 Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
                 Err(_) => None,
             };
-            let _ = tx.send(bytes);
+            let _ = tx.send((Some(url), bytes));
         });
     }
 

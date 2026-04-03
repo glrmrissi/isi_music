@@ -11,6 +11,7 @@ mod app;
 mod audio_sink;
 mod config;
 mod daemon;
+mod discord;
 mod ipc;
 mod lastfm;
 #[cfg(feature = "mpris")]
@@ -111,6 +112,32 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_discord_setup(cfg: &mut config::AppConfig) -> Result<()> {
+    println!();
+    println!("Discord Rich Presence (optional)");
+    println!("────────────────────────────────────────");
+    println!("Show the current track in your Discord activity status.");
+    println!();
+
+    let answer = prompt("Enable Discord Rich Presence? (y/n): ");
+    if !matches!(answer.to_lowercase().as_str(), "y" | "yes") {
+        cfg.discord.enabled = Some(false);
+        cfg.save()?;
+        println!("Discord Rich Presence disabled. You can enable it later by editing");
+        println!("~/.config/isi-music/config.toml  (set discord.enabled = true)");
+        println!();
+        return Ok(());
+    }
+
+    cfg.discord.enabled = Some(true);
+    cfg.save()?;
+
+    println!();
+    println!("Discord Rich Presence enabled!");
+    println!();
     Ok(())
 }
 
@@ -285,6 +312,10 @@ fn main() -> Result<()> {
     // ── TUI mode: multi-thread but capped at 2 workers ───────────────────────
     if cfg.needs_setup() {
         run_setup(&mut cfg)?;
+    }
+
+    if cfg.discord.enabled.is_none() {
+        run_discord_setup(&mut cfg)?;
     }
 
     tokio::runtime::Builder::new_multi_thread()
