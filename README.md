@@ -8,23 +8,6 @@ A terminal music player written in Rust. Stream from Spotify via librespot or pl
 
 ![preview](https://github.com/user-attachments/assets/f67383b5-cc7d-4486-8d7a-ffea9ad2e997)
 
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Keybindings](#keybindings)
-- [Local Files](#local-files)
-- [Daemon Mode](#daemon-mode)
-- [MPRIS2 / Linux Integration](#mpris2--linux-integration)
-- [Last.fm Scrobbling](#lastfm-scrobbling)
-- [How It Works](#how-it-works)
-- [License](#license)
-
----
-
 ## Features
 
 - **Spotify streaming** via librespot — no Spotify app required
