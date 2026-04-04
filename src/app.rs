@@ -252,20 +252,41 @@ impl App {
 
             let mut needs_sync = false;
             let mut needs_reconnect = false;
+            let mut needs_crossover = false;
+
+            let parked_has_queue = self.parked_player
+                .as_ref()
+                .map(|p| !p.user_queue().is_empty())
+                .unwrap_or(false);
 
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded => {
-                            if player.next() { needs_sync = true; }
-                            else { self.state.playback.is_playing = false; }
+                            if parked_has_queue {
+                                // Cross-player queue has priority over the active playlist
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            } else if player.next() {
+                                needs_sync = true;
+                            } else {
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            }
                         }
                         PlayerNotification::Playing => self.state.playback.is_playing = true,
                         PlayerNotification::Paused => self.state.playback.is_playing = false,
                         PlayerNotification::TrackUnavailable => {
                             self.state.status_msg = Some("Track unavailable, skipping...".to_string());
-                            if player.next() { needs_sync = true; }
-                            else { self.state.playback.is_playing = false; }
+                            if parked_has_queue {
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            } else if player.next() {
+                                needs_sync = true;
+                            } else {
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            }
                         }
                         PlayerNotification::SessionLost => {
                             self.state.status_msg = Some("Session lost, reconnecting...".to_string());
@@ -283,13 +304,37 @@ impl App {
                 };
             }
 
-            if needs_sync {
-                if let Ok(current_pb) = self.spotify.fetch_playback().await {
-                    self.state.playback = current_pb.clone();
-                    self.art_url = current_pb.art_url;
+            // If the active player's queue ended, check if the parked player has queued tracks
+            if needs_crossover {
+                let parked_has_queue = self.parked_player
+                    .as_ref()
+                    .map(|p| !p.user_queue().is_empty())
+                    .unwrap_or(false);
+                if parked_has_queue {
+                    // Swap players and play next from the newly-active player's user queue
+                    std::mem::swap(&mut self.player, &mut self.parked_player);
+                    self.local_active = !self.local_active;
+                    self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+                    if let Some(player) = &mut self.player {
+                        if player.next() { needs_sync = true; }
+                    }
                 }
+            }
+
+            if needs_sync {
+                // sync_track_selection must run first — it reads take_playing_queued()
+                // which is consumed once, and sets local metadata from the native player.
                 self.sync_track_selection();
                 self.sync_queue_display();
+                // Only ask Spotify's API when no native player is in control.
+                // With librespot running, the API lags behind and would overwrite
+                // the correct local state we just set above.
+                if self.player.is_none() {
+                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                        self.state.playback = current_pb.clone();
+                        self.art_url = current_pb.art_url;
+                    }
+                }
             }
 
             if needs_reconnect && !self.session_reconnecting {
@@ -602,7 +647,14 @@ impl App {
                     .and_then(|i| self.state.tracks.get(i))
                     .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms));
                 if let Some((uri, name, artist, duration_ms)) = track {
-                    if let Some(player) = &mut self.player {
+                    // Route to the player that owns this URI type
+                    let is_local = uri.starts_with("file://");
+                    let target = if is_local == self.local_active {
+                        self.player.as_mut()
+                    } else {
+                        self.parked_player.as_mut()
+                    };
+                    if let Some(player) = target {
                         player.add_to_queue(uri, name.clone(), artist, duration_ms);
                         self.state.status_msg = Some(format!("+ {name} added to queue"));
                         self.sync_queue_display();
@@ -612,15 +664,27 @@ impl App {
 
             (KeyCode::Delete, _) if self.state.focus == Focus::Queue => {
                 if let Some(idx) = self.state.queue_list.selected() {
-                    if let Some(player) = &mut self.player {
-                        if idx < player.user_queue().len() {
+                    let active_len = self.player.as_ref()
+                        .map(|p| p.user_queue().len())
+                        .unwrap_or(0);
+
+                    if idx < active_len {
+                        if let Some(player) = &mut self.player {
                             player.remove_from_user_queue(idx);
-                            self.sync_queue_display();
-                            let new_sel = if self.state.queue_items.is_empty() { None }
-                                else { Some(idx.min(self.state.queue_items.len() - 1)) };
-                            self.state.queue_list.select(new_sel);
+                        }
+                    } else {
+                        let parked_idx = idx - active_len;
+                        if let Some(player) = &mut self.parked_player {
+                            if parked_idx < player.user_queue().len() {
+                                player.remove_from_user_queue(parked_idx);
+                            }
                         }
                     }
+
+                    self.sync_queue_display();
+                    let new_sel = if self.state.queue_items.is_empty() { None }
+                        else { Some(idx.min(self.state.queue_items.len() - 1)) };
+                    self.state.queue_list.select(new_sel);
                 }
             }
 
@@ -1028,6 +1092,8 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
+        self.state.playback.is_local = self.local_active;
+
         // Reset album art so maybe_fetch_album_art will kick off a new fetch
         self.state.album_art = None;
         self.state.playback.art_url = None;
@@ -1348,12 +1414,21 @@ impl App {
     }
 
     fn sync_queue_display(&mut self) {
-        if let Some(player) = &self.player {
-            self.state.queue_items = player.user_queue()
-                .iter()
-                .map(|t| (t.name.clone(), t.artist.clone()))
-                .collect();
+        let mut items: Vec<(String, String)> = Vec::new();
+
+        // Active player's queue comes first
+        if let Some(p) = &self.player {
+            items.extend(p.user_queue().iter().map(|t| (t.name.clone(), t.artist.clone())));
         }
+        // Parked player's queue appended after (shown with a marker)
+        if let Some(p) = &self.parked_player {
+            let prefix = if self.local_active { " " } else { "󰈣 " };
+            items.extend(p.user_queue().iter().map(|t| {
+                (format!("{}{}", prefix, t.name), t.artist.clone())
+            }));
+        }
+
+        self.state.queue_items = items;
     }
 
     /// Recreates the librespot session after it has been invalidated.

@@ -4,7 +4,8 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use crate::audio_sink::AnalyzingSource;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -102,7 +103,12 @@ impl LocalPlayer {
             }
         };
 
-        self.sink.append(decoder);
+        // Wrap with analyzer so band energies are updated in real time
+        let analyzing = AnalyzingSource::new(
+            decoder,
+            Arc::clone(&self.band_energies),
+        );
+        self.sink.append(analyzing);
         self.sink.play();
         self.current_index = Some(idx);
         self.is_playing = true;

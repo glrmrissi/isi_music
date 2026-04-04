@@ -372,6 +372,7 @@ impl SpotifyClient {
             duration_ms,
             volume: 100,
             art_url,
+            is_local: false,
         })
     }
 

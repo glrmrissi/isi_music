@@ -28,7 +28,9 @@ pub struct PlaybackState {
     pub progress_ms: u64,
     pub duration_ms: u64,
     pub volume: u8,
-    pub art_url: Option<String>
+    pub art_url: Option<String>,
+    /// True when the active player is playing a local file (not Spotify).
+    pub is_local: bool,
 }
 
 impl Default for PlaybackState {
@@ -44,6 +46,7 @@ impl Default for PlaybackState {
             duration_ms: 0,
             volume: 100,
             art_url: None,
+            is_local: false,
         }
     }
 }
@@ -483,16 +486,15 @@ impl Ui {
             && state.active_content == ActiveContent::None
             && !state.playback.title.is_empty();
 
-        // ── Player mode: header full-width at top, visualizer below progress ──
+        // ── Player mode: header full-width at top, visualizer inside now playing ──
         if showing_now_playing {
             let root = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(1)
                 .constraints([
-                    Constraint::Length(3),   // header (full width — no visualizer at top)
+                    Constraint::Length(3),   // header (full width)
                     Constraint::Min(10),     // main panels
                     Constraint::Length(2),   // progress bar + volume
-                    Constraint::Length(5),   // visualizer (below volume)
                     Constraint::Length(1),   // help
                 ])
                 .split(area);
@@ -518,8 +520,7 @@ impl Ui {
             self.render_now_playing(frame, state, right_rows[0]);
             self.render_queue(frame, state, right_rows[1]);
             self.render_progress(frame, &state.playback, root[2]);
-            self.render_visualizer(frame, &state.playback, &state.viz_bands, root[3]);
-            self.render_help(frame, state, root[4]);
+            self.render_help(frame, state, root[3]);
             return;
         }
 
@@ -696,10 +697,7 @@ impl Ui {
     // ── Visualizer (braille dots — 2× horizontal, 4× vertical resolution) ───────
 
     fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, viz_bands: &[f32], area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Green));
+        let block = Block::default();
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -869,35 +867,48 @@ impl Ui {
     // ── Welcome ───────────────────────────────────────────────────────────────
 
     fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.playback.is_local {
+            return self.render_local_now_playing(frame, state, area);
+        }
+
+        let focused = state.focus == Focus::Tracks;
+        let accent = if focused { Color::Green } else { Color::DarkGray };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(" 󰎈 Now Playing ")
-            .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-            .border_style(Style::default().fg(Color::Green));
+            .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
+            .border_style(Style::default().fg(accent));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         if inner.height == 0 { return; }
 
-        // Terminal cells are ~2:1 (h:w), so a square image needs width = height*2 in cells.
-        // Use as much height as possible, leaving at least 8 rows for text info.
+        // Reserve space: art on top, text info in middle, visualizer at bottom
+        let viz_h: u16 = inner.height.min(8).max(4);
         let info_min: u16 = 8;
-        let art_h = inner.height.saturating_sub(info_min).min(inner.width / 2);
+        let art_h = inner.height
+            .saturating_sub(info_min)
+            .saturating_sub(viz_h)
+            .min(inner.width / 2);
         let art_w = art_h * 2;
-        let info_h = inner.height.saturating_sub(art_h);
+        let info_h = inner.height.saturating_sub(art_h).saturating_sub(viz_h);
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(art_h), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(art_h),
+                Constraint::Length(info_h),
+                Constraint::Length(viz_h),
+            ])
             .split(inner);
 
-        let art_area = sections[0];
+        let art_area  = sections[0];
         let info_area = sections[1];
+        let viz_area  = sections[2];
 
         // ── Album art ────────────────────────────────────────────────────────
-        // Center the art horizontally using Layout
         let padding = art_area.width.saturating_sub(art_w) / 2;
         let art_cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -907,23 +918,94 @@ impl Ui {
                 Constraint::Min(0),
             ])
             .split(art_area);
-        let art_rect = art_cols[1];
 
         if let Some(art) = &mut state.album_art {
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
                     StatefulImage::<StatefulProtocol>::default(),
-                    art_rect,
+                    art_cols[1],
                     img_state,
                 );
             }
         }
 
         // ── Text info ────────────────────────────────────────────────────────
-        if info_h == 0 { return; }
+        if info_h > 0 {
+            let pb = &state.playback;
+
+            let repeat_icon = match pb.repeat {
+                rspotify::model::RepeatState::Off     => "󰑗",
+                rspotify::model::RepeatState::Context => "󰑖",
+                rspotify::model::RepeatState::Track   => "󰑘",
+            };
+            let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
+            let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    pb.title.clone(),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    pb.artist.clone(),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    pb.album.clone(),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("{}  {}  {}  vol {}%", play_icon, shuffle_icon, repeat_icon, pb.volume),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            frame.render_widget(
+                Paragraph::new(lines).alignment(Alignment::Center),
+                info_area,
+            );
+        }
+
+        // ── Visualizer ───────────────────────────────────────────────────────
+        let viz_bands = state.viz_bands.clone();
+        let pb = state.playback.clone();
+        self.render_visualizer(frame, &pb, &viz_bands, viz_area);
+    }
+
+    fn render_local_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let focused = state.focus == Focus::Tracks;
+        let accent = if focused { Color::Green } else { Color::DarkGray };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(vec![
+                Span::styled("  Local Files ", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
+            ]))
+            .border_style(Style::default().fg(accent));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        if inner.height == 0 { return; }
 
         let pb = &state.playback;
 
+        // Split: top = track info, bottom = visualizer
+        let viz_h = (inner.height / 3).max(4);
+        let info_h = inner.height.saturating_sub(viz_h);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(info_h), Constraint::Length(viz_h)])
+            .split(inner);
+
+        let info_area = sections[0];
+        let viz_area  = sections[1];
+
+        // ── Track info ────────────────────────────────────────────────────────
         let repeat_icon = match pb.repeat {
             rspotify::model::RepeatState::Off     => "󰑗",
             rspotify::model::RepeatState::Context => "󰑖",
@@ -931,6 +1013,8 @@ impl Ui {
         };
         let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
         let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
+
+        let ext_hint = if pb.album.is_empty() { String::new() } else { format!("  {}", pb.album) };
 
         let lines = vec![
             Line::from(""),
@@ -940,11 +1024,11 @@ impl Ui {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                pb.artist.clone(),
-                Style::default().fg(Color::DarkGray),
+                if pb.artist.is_empty() { "Unknown Artist".to_string() } else { pb.artist.clone() },
+                Style::default().fg(accent),
             )),
             Line::from(Span::styled(
-                pb.album.clone(),
+                ext_hint,
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
@@ -958,6 +1042,9 @@ impl Ui {
             Paragraph::new(lines).alignment(Alignment::Center),
             info_area,
         );
+
+        // ── Visualizer (reuse existing renderer) ──────────────────────────────
+        self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area);
     }
 
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
