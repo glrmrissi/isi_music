@@ -2,13 +2,82 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
 use ratatui_image::picker::Picker;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
+/// Read title/artist/album/duration from an audio file using symphonia.
+/// Falls back to filename for missing tags.
+fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
+    use symphonia::core::{
+        formats::FormatOptions,
+        io::MediaSourceStream,
+        meta::{MetadataOptions, StandardTagKey},
+        probe::Hint,
+    };
+
+    let fallback_name = path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (fallback_name, String::new(), String::new(), 0),
+    };
+
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = match symphonia::default::get_probe().format(
+        &hint, mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    ) {
+        Ok(p) => p,
+        Err(_) => return (fallback_name, String::new(), String::new(), 0),
+    };
+
+    let mut format = probed.format;
+
+    let duration_ms = format.default_track()
+        .and_then(|t| {
+            let tb = t.codec_params.time_base?;
+            let n_frames = t.codec_params.n_frames?;
+            let secs = tb.calc_time(n_frames).seconds;
+            Some(secs * 1000)
+        })
+        .unwrap_or(0);
+
+    // Pull tags from the first available metadata revision
+    let mut title = fallback_name.clone();
+    let mut artist = String::new();
+    let mut album = String::new();
+
+    let meta_ref = format.metadata();
+    if let Some(rev) = meta_ref.current() {
+        for tag in rev.tags() {
+            match tag.std_key {
+                Some(StandardTagKey::TrackTitle) => title = tag.value.to_string(),
+                Some(StandardTagKey::Artist) | Some(StandardTagKey::AlbumArtist) => {
+                    if artist.is_empty() { artist = tag.value.to_string(); }
+                }
+                Some(StandardTagKey::Album) => album = tag.value.to_string(),
+                _ => {}
+            }
+        }
+    }
+
+    (title, artist, album, duration_ms)
+}
+
 use crate::discord::DiscordRpc;
 use crate::lastfm::LastfmClient;
-use crate::player::{AudioPlayer, NativePlayer, PlayerNotification, RepeatMode};
+use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification, RepeatMode};
 #[cfg(feature = "mpris")]
 use crate::mpris::{MprisCmd, MprisHandle, MprisState};
 use rspotify::model::RepeatState;
@@ -17,7 +86,12 @@ use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, 
 
 pub struct App {
     spotify: SpotifyClient,
+    /// The currently active player (Spotify or local).
     player: Option<Box<dyn AudioPlayer>>,
+    /// The Spotify player kept aside while local playback is active, and vice-versa.
+    parked_player: Option<Box<dyn AudioPlayer>>,
+    /// True when `player` is the LocalPlayer, false when it's the NativePlayer.
+    local_active: bool,
     lastfm: Option<Arc<LastfmClient>>,
     ui: Ui,
     state: UiState,
@@ -45,6 +119,8 @@ pub struct App {
     // Real-time audio band energies from AnalyzerSink
     band_energies: Option<Arc<Mutex<Vec<f32>>>>,
     art_url: Option<String>,
+    // Session reconnection state
+    session_reconnecting: bool,
 }
 
 impl App {
@@ -55,25 +131,56 @@ impl App {
             _ => None,
         };
 
-        let mut spotify = SpotifyClient::new().await?;
-
-        let (player, band_energies) = match spotify.get_access_token().await {
-            Some(token) => match NativePlayer::new(token, false).await {
-                Ok(p) => {
-                    tracing::info!("Native player started");
-                    let bands = p.band_energies();
-                    (Some(Box::new(p) as Box<dyn AudioPlayer>), bands)
-                }
+        // If a Spotify refresh token is cached, authenticate normally.
+        // Otherwise, fall back to local-only mode (no browser auth required).
+        let has_spotify_token = crate::config::load_refresh_token().is_some();
+        let mut spotify = if has_spotify_token {
+            match SpotifyClient::new().await {
+                Ok(c) => c,
                 Err(e) => {
-                    warn!("Native player unavailable: {e:#}");
-                    (None, None)
+                    warn!("Spotify auth failed ({e:#}), running in local-only mode");
+                    SpotifyClient::new_unauthenticated()
                 }
-            },
-            None => {
-                warn!("Token not available for native player");
-                (None, None)
             }
+        } else {
+            SpotifyClient::new_unauthenticated()
         };
+
+        let volume = crate::config::load_volume();
+
+        // Try to start the Spotify (native) player if authenticated
+        let spotify_player: Option<Box<dyn AudioPlayer>> = if spotify.authenticated {
+            match spotify.get_access_token().await {
+                Some(token) => match NativePlayer::new(token, false).await {
+                    Ok(p) => {
+                        tracing::info!("Native player started");
+                        Some(Box::new(p) as Box<dyn AudioPlayer>)
+                    }
+                    Err(e) => { warn!("Native player unavailable: {e:#}"); None }
+                },
+                None => { warn!("Token not available for native player"); None }
+            }
+        } else {
+            None
+        };
+
+        // Always try to start the local player (used for local files regardless of Spotify)
+        let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume) {
+            Ok(p) => {
+                tracing::info!("Local player started");
+                Some(Box::new(p) as Box<dyn AudioPlayer>)
+            }
+            Err(e) => { warn!("Local player unavailable: {e:#}"); None }
+        };
+
+        // Active player: Spotify when available, otherwise local
+        let (player, parked_player, local_active) = match (spotify_player, local_player) {
+            (Some(sp), local) => (Some(sp), local, false),
+            (None, Some(lp)) => (Some(lp), None, true),
+            (None, None) => (None, None, false),
+        };
+
+        let band_energies = player.as_ref().and_then(|p| p.band_energies());
 
         let mut state = UiState::new();
 
@@ -107,6 +214,8 @@ impl App {
         Ok(Self {
             spotify,
             player,
+            parked_player,
+            local_active,
             lastfm,
             ui: Ui::new(),
             state,
@@ -127,7 +236,8 @@ impl App {
             discord_last_playing: false,
             discord_pending_since: None,
             band_energies,
-            art_url: initial_art
+            art_url: initial_art,
+            session_reconnecting: false,
         })
     }
 
@@ -141,20 +251,46 @@ impl App {
             self.last_tick = now;
 
             let mut needs_sync = false;
+            let mut needs_reconnect = false;
+            let mut needs_crossover = false;
+
+            let parked_has_queue = self.parked_player
+                .as_ref()
+                .map(|p| !p.user_queue().is_empty())
+                .unwrap_or(false);
 
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded => {
-                            if player.next() { needs_sync = true; }
-                            else { self.state.playback.is_playing = false; }
+                            if parked_has_queue {
+                                // Cross-player queue has priority over the active playlist
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            } else if player.next() {
+                                needs_sync = true;
+                            } else {
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            }
                         }
                         PlayerNotification::Playing => self.state.playback.is_playing = true,
                         PlayerNotification::Paused => self.state.playback.is_playing = false,
                         PlayerNotification::TrackUnavailable => {
                             self.state.status_msg = Some("Track unavailable, skipping...".to_string());
-                            if player.next() { needs_sync = true; }
-                            else { self.state.playback.is_playing = false; }
+                            if parked_has_queue {
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            } else if player.next() {
+                                needs_sync = true;
+                            } else {
+                                needs_crossover = true;
+                                self.state.playback.is_playing = false;
+                            }
+                        }
+                        PlayerNotification::SessionLost => {
+                            self.state.status_msg = Some("Session lost, reconnecting...".to_string());
+                            needs_reconnect = true;
                         }
                     }
                 }
@@ -168,13 +304,42 @@ impl App {
                 };
             }
 
-            if needs_sync {
-                if let Ok(current_pb) = self.spotify.fetch_playback().await {
-                    self.state.playback = current_pb.clone();
-                    self.art_url = current_pb.art_url; 
+            // If the active player's queue ended, check if the parked player has queued tracks
+            if needs_crossover {
+                let parked_has_queue = self.parked_player
+                    .as_ref()
+                    .map(|p| !p.user_queue().is_empty())
+                    .unwrap_or(false);
+                if parked_has_queue {
+                    // Swap players and play next from the newly-active player's user queue
+                    std::mem::swap(&mut self.player, &mut self.parked_player);
+                    self.local_active = !self.local_active;
+                    self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+                    if let Some(player) = &mut self.player {
+                        if player.next() { needs_sync = true; }
+                    }
                 }
+            }
+
+            if needs_sync {
+                // sync_track_selection must run first — it reads take_playing_queued()
+                // which is consumed once, and sets local metadata from the native player.
                 self.sync_track_selection();
                 self.sync_queue_display();
+                // Only ask Spotify's API when no native player is in control.
+                // With librespot running, the API lags behind and would overwrite
+                // the correct local state we just set above.
+                if self.player.is_none() {
+                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                        self.state.playback = current_pb.clone();
+                        self.art_url = current_pb.art_url;
+                    }
+                }
+            }
+
+            if needs_reconnect && !self.session_reconnecting {
+                self.session_reconnecting = true;
+                self.reconnect_player().await;
             }
 
             if let Some(ref arc) = self.band_energies {
@@ -433,13 +598,16 @@ impl App {
                 self.maybe_load_more().await;
             }
 
-            // Tab: if in Search focus → cycle search panels; else cycle focus
+            // Tab: cycle focus forward; Shift+Tab: cycle focus backward
             (KeyCode::Tab, _) => {
                 if self.state.focus == Focus::Search {
                     self.state.switch_search_panel();
                 } else {
                     self.state.switch_focus();
                 }
+            }
+            (KeyCode::BackTab, _) => {
+                self.state.switch_focus_prev();
             }
 
             (KeyCode::Enter, _) => self.handle_enter().await,
@@ -479,7 +647,14 @@ impl App {
                     .and_then(|i| self.state.tracks.get(i))
                     .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms));
                 if let Some((uri, name, artist, duration_ms)) = track {
-                    if let Some(player) = &mut self.player {
+                    // Route to the player that owns this URI type
+                    let is_local = uri.starts_with("file://");
+                    let target = if is_local == self.local_active {
+                        self.player.as_mut()
+                    } else {
+                        self.parked_player.as_mut()
+                    };
+                    if let Some(player) = target {
                         player.add_to_queue(uri, name.clone(), artist, duration_ms);
                         self.state.status_msg = Some(format!("+ {name} added to queue"));
                         self.sync_queue_display();
@@ -489,15 +664,27 @@ impl App {
 
             (KeyCode::Delete, _) if self.state.focus == Focus::Queue => {
                 if let Some(idx) = self.state.queue_list.selected() {
-                    if let Some(player) = &mut self.player {
-                        if idx < player.user_queue().len() {
+                    let active_len = self.player.as_ref()
+                        .map(|p| p.user_queue().len())
+                        .unwrap_or(0);
+
+                    if idx < active_len {
+                        if let Some(player) = &mut self.player {
                             player.remove_from_user_queue(idx);
-                            self.sync_queue_display();
-                            let new_sel = if self.state.queue_items.is_empty() { None }
-                                else { Some(idx.min(self.state.queue_items.len() - 1)) };
-                            self.state.queue_list.select(new_sel);
+                        }
+                    } else {
+                        let parked_idx = idx - active_len;
+                        if let Some(player) = &mut self.parked_player {
+                            if parked_idx < player.user_queue().len() {
+                                player.remove_from_user_queue(parked_idx);
+                            }
                         }
                     }
+
+                    self.sync_queue_display();
+                    let new_sel = if self.state.queue_items.is_empty() { None }
+                        else { Some(idx.min(self.state.queue_items.len() - 1)) };
+                    self.state.queue_list.select(new_sel);
                 }
             }
 
@@ -637,6 +824,9 @@ impl App {
                     3 => { // Podcasts — coming soon
                         self.state.status_msg = Some("Podcasts — coming soon".to_string());
                     }
+                    4 => { // Local Files
+                        self.load_local_files().await;
+                    }
                     _ => {}
                 }
             }
@@ -733,8 +923,14 @@ impl App {
                             }
                         }
                     }
-                    ActiveContent::Tracks | ActiveContent::None => {
+                    ActiveContent::LocalFiles | ActiveContent::Tracks | ActiveContent::None => {
                         if let Some(idx) = self.state.selected_track_index() {
+                            // Switch to the appropriate player based on content type
+                            if self.state.active_content == ActiveContent::LocalFiles {
+                                self.activate_local_player();
+                            } else {
+                                self.activate_spotify_player();
+                            }
                             // Podcast episodes cannot be played via librespot
                             if self.state.tracks.get(idx)
                                 .map(|t| t.uri.starts_with("spotify:episode:"))
@@ -790,6 +986,7 @@ impl App {
                             .and_then(|sr| sr.selected_track_uri())
                             .map(|s| s.to_string());
                         if let Some(track_uri) = uri {
+                            self.activate_spotify_player();
                             if let Some(player) = &mut self.player {
                                 // load just this track into queue
                                 self.current_track_uri = track_uri.clone();
@@ -894,6 +1091,8 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+
+        self.state.playback.is_local = self.local_active;
 
         // Reset album art so maybe_fetch_album_art will kick off a new fetch
         self.state.album_art = None;
@@ -1118,12 +1317,163 @@ impl App {
         }
     }
 
-    fn sync_queue_display(&mut self) {
-        if let Some(player) = &self.player {
-            self.state.queue_items = player.user_queue()
-                .iter()
-                .map(|t| (t.name.clone(), t.artist.clone()))
-                .collect();
+    /// Swap the active player to the LocalPlayer.
+    /// Pauses Spotify playback and moves it to `parked_player`.
+    fn activate_local_player(&mut self) {
+        if self.local_active { return; }
+        // Pause whatever is currently playing in the Spotify player
+        if let Some(ref mut p) = self.player {
+            p.pause();
         }
+        std::mem::swap(&mut self.player, &mut self.parked_player);
+        self.local_active = true;
+        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+    }
+
+    /// Swap the active player back to the Spotify/NativePlayer.
+    /// Pauses local playback and moves it to `parked_player`.
+    fn activate_spotify_player(&mut self) {
+        if !self.local_active { return; }
+        if let Some(ref mut p) = self.player {
+            p.pause();
+        }
+        std::mem::swap(&mut self.player, &mut self.parked_player);
+        self.local_active = false;
+        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+    }
+
+    async fn load_local_files(&mut self) {
+        let cfg = crate::config::AppConfig::load().unwrap_or_default();
+        let raw_dir = match cfg.local.music_dir {
+            Some(d) => d,
+            None => {
+                self.state.status_msg = Some(
+                    "Set [local] music_dir in ~/.config/isi-music/config.toml".to_string()
+                );
+                return;
+            }
+        };
+
+        // Expand leading ~
+        let dir = if raw_dir.starts_with('~') {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&raw_dir[2..])
+            } else {
+                std::path::PathBuf::from(&raw_dir)
+            }
+        } else {
+            std::path::PathBuf::from(&raw_dir)
+        };
+
+        if !dir.exists() {
+            self.state.status_msg = Some(format!("Directory not found: {}", dir.display()));
+            return;
+        }
+
+        self.state.status_msg = Some("Scanning local files…".to_string());
+
+        let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "m4a", "opus"];
+        let mut tracks = Vec::new();
+
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut paths: Vec<_> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.is_file() && p.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| extensions.contains(&e.to_lowercase().as_str()))
+                        .unwrap_or(false)
+                })
+                .collect();
+            paths.sort();
+
+            for path in paths {
+                let (name, artist, album, duration_ms) = read_audio_metadata(&path);
+                let uri = format!("file://{}", path.display());
+                tracks.push(crate::spotify::TrackSummary { name, artist, album, duration_ms, uri });
+            }
+        }
+
+        let count = tracks.len();
+        self.state.tracks = tracks;
+        self.state.tracks_total = count as u32;
+        self.state.tracks_offset = count as u32;
+        self.state.active_playlist_uri = Some("local_files".to_string());
+        self.state.active_playlist_id = Some("local_files".to_string());
+        self.state.track_list.select(if count == 0 { None } else { Some(0) });
+        self.state.active_content = crate::ui::ActiveContent::LocalFiles;
+        self.state.search_results = None;
+        self.state.focus = crate::ui::Focus::Tracks;
+
+        if count == 0 {
+            self.state.status_msg = Some(format!("No audio files found in {}", dir.display()));
+        } else {
+            self.state.status_msg = Some(format!("{count} local tracks loaded"));
+        }
+    }
+
+    fn sync_queue_display(&mut self) {
+        let mut items: Vec<(String, String)> = Vec::new();
+
+        // Active player's queue comes first
+        if let Some(p) = &self.player {
+            items.extend(p.user_queue().iter().map(|t| (t.name.clone(), t.artist.clone())));
+        }
+        // Parked player's queue appended after (shown with a marker)
+        if let Some(p) = &self.parked_player {
+            let prefix = if self.local_active { " " } else { "󰈣 " };
+            items.extend(p.user_queue().iter().map(|t| {
+                (format!("{}{}", prefix, t.name), t.artist.clone())
+            }));
+        }
+
+        self.state.queue_items = items;
+    }
+
+    /// Recreates the librespot session after it has been invalidated.
+    /// Saves the current queue and index, creates a new player, then restores playback.
+    async fn reconnect_player(&mut self) {
+        warn!("Session lost — attempting to reconnect librespot...");
+
+        // Snapshot what was queued before the session died
+        let (saved_queue, saved_index) = self
+            .player
+            .as_ref()
+            .map(|p| p.snapshot_queue())
+            .unwrap_or_default();
+        let saved_volume = self.player.as_ref().map(|p| p.volume()).unwrap_or(50);
+
+        // Drop the old (dead) player
+        self.player = None;
+        self.band_energies = None;
+
+        let Some(token) = self.spotify.get_access_token().await else {
+            warn!("Could not get access token for reconnect");
+            self.state.status_msg = Some("Reconnect failed: no token".to_string());
+            self.session_reconnecting = false;
+            return;
+        };
+
+        match NativePlayer::new(token, false).await {
+            Ok(mut p) => {
+                p.set_volume(saved_volume);
+                // Restore the queue at the track that was playing, without auto-playing
+                if !saved_queue.is_empty() {
+                    let start = saved_index.unwrap_or(0);
+                    p.set_queue(saved_queue, start);
+                }
+                self.band_energies = p.band_energies();
+                self.player = Some(Box::new(p));
+                self.state.status_msg = Some("Reconnected!".to_string());
+                warn!("Librespot session reconnected successfully");
+            }
+            Err(e) => {
+                warn!("Reconnect failed: {e:#}");
+                self.state.status_msg = Some(format!("Reconnect failed: {e}"));
+            }
+        }
+
+        self.session_reconnecting = false;
     }
 }

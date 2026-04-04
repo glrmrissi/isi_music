@@ -4,13 +4,14 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square)](LICENSE)
 
-A terminal-based Spotify player written in Rust. Uses librespot for native audio playback — no browser, no Electron, just your terminal.
+A terminal-based music player written in Rust. Streams from Spotify via librespot, or plays local audio files (MP3, FLAC, OGG, WAV) — no browser, no Electron, just your terminal.
 
 <img width="1915" height="1031" alt="image" src="https://github.com/user-attachments/assets/ff4de1b1-488f-4d9c-8e8f-411c7990c0c7" />
 
 ## Features
 
-- Native audio playback via librespot (no Spotify app required)
+- Native Spotify playback via librespot (no Spotify app required)
+- **Local file playback** — play MP3, FLAC, OGG, and WAV files without a Spotify account
 - Full-text search across tracks, albums, artists, playlists, and podcasts
 - Queue management
 - Shuffle and repeat modes (off / queue / track)
@@ -21,7 +22,7 @@ A terminal-based Spotify player written in Rust. Uses librespot for native audio
 - Keyboard-driven TUI interface
 - **Daemon mode** — keep music playing after closing the terminal, control via CLI
 
-> **Requires Spotify Premium** — librespot needs a Premium account for audio streaming.
+> **Spotify streaming requires Spotify Premium** — librespot needs a Premium account. Local file playback works without any Spotify account.
 
 ---
 
@@ -117,8 +118,13 @@ Register a Spotify app at [developer.spotify.com](https://developer.spotify.com/
 isi-music uses **PKCE authentication** — only the Client ID is needed. No client secret required.
 
 ```toml
+# Required only for Spotify streaming — skip if using local files only
 [spotify]
 client_id = "your_client_id_here"
+
+# Optional: local audio files (MP3, FLAC, OGG, WAV)
+[local]
+music_dir = "~/Music"
 
 # Optional: Last.fm scrobbling
 [lastfm]
@@ -149,6 +155,32 @@ session_key = "obtained_via_setup-lastfm"
 | `Backspace` | Back to previous search results |
 | `Esc` | Close search / exit fullscreen |
 | `q` / `Ctrl+C` | Quit |
+
+---
+
+## Local Files
+
+isi-music can play local audio files without any Spotify account. Supported formats: **MP3, FLAC, OGG, WAV, AIFF**.
+
+### Setup
+
+Add the `[local]` section to `~/.config/isi-music/config.toml`:
+
+```toml
+[local]
+music_dir = "~/Music"
+```
+
+### Usage
+
+1. Open isi-music (if there is no saved Spotify token, it starts in local-only mode automatically)
+2. Navigate to **Local Files** in the Library panel
+3. Press `Enter` — the directory is scanned and all audio files are listed
+4. Select a track and press `Enter` to play
+
+Tags (title, artist, album) are read from the file's metadata automatically. Files without tags fall back to the filename.
+
+> **No Spotify account needed.** If you have never logged in to Spotify, isi-music starts in local-only mode and skips all Spotify features.
 
 ---
 
