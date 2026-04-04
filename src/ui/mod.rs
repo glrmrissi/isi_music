@@ -31,6 +31,8 @@ pub struct PlaybackState {
     pub art_url: Option<String>,
     /// True when the active player is playing a local file (not Spotify).
     pub is_local: bool,
+    /// True when Radio Mode is enabled (auto-fetch recommendations when queue ends).
+    pub radio_mode: bool,
 }
 
 impl Default for PlaybackState {
@@ -47,6 +49,7 @@ impl Default for PlaybackState {
             volume: 100,
             art_url: None,
             is_local: false,
+            radio_mode: false,
         }
     }
 }
@@ -229,6 +232,7 @@ pub struct UiState {
     // Right panel: Artists
     pub artists: Vec<ArtistSummary>,
     pub artist_list: ListState,
+    pub active_artist_name: Option<String>,
     // Right panel: Shows/Podcasts
     pub shows: Vec<ShowSummary>,
     pub show_list: ListState,
@@ -282,6 +286,7 @@ impl UiState {
             albums_total: 0,
             artists: Vec::new(),
             artist_list: ListState::default(),
+            active_artist_name: None,
             shows: Vec::new(),
             show_list: ListState::default(),
             shows_offset: 0,
@@ -940,6 +945,7 @@ impl Ui {
             };
             let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
             let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
+            let radio_icon   = if pb.radio_mode { "  󰐇" } else { "" };
 
             let lines = vec![
                 Line::from(""),
@@ -958,7 +964,7 @@ impl Ui {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("{}  {}  {}  vol {}%", play_icon, shuffle_icon, repeat_icon, pb.volume),
+                    format!("{}  {}  {}  vol {}%{}", play_icon, shuffle_icon, repeat_icon, pb.volume, radio_icon),
                     Style::default().fg(Color::DarkGray),
                 )),
             ];
@@ -1037,6 +1043,7 @@ impl Ui {
                 Style::default().fg(Color::DarkGray),
             )),
         ];
+        // (radio_mode not shown for local playback — recommendations require Spotify)
 
         frame.render_widget(
             Paragraph::new(lines).alignment(Alignment::Center),

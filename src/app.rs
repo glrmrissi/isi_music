@@ -121,6 +121,10 @@ pub struct App {
     art_url: Option<String>,
     // Session reconnection state
     session_reconnecting: bool,
+    // Radio Mode: auto-fetch recommendations when the queue runs dry
+    radio_mode: bool,
+    /// Ring buffer of the last 5 Spotify track URIs played — used as seeds for recommendations.
+    recent_track_uris: std::collections::VecDeque<String>,
 }
 
 impl App {
@@ -238,6 +242,8 @@ impl App {
             band_energies,
             art_url: initial_art,
             session_reconnecting: false,
+            radio_mode: false,
+            recent_track_uris: std::collections::VecDeque::new(),
         })
     }
 
@@ -253,6 +259,7 @@ impl App {
             let mut needs_sync = false;
             let mut needs_reconnect = false;
             let mut needs_crossover = false;
+            let mut needs_radio_refill = false;
 
             let parked_has_queue = self.parked_player
                 .as_ref()
@@ -269,6 +276,8 @@ impl App {
                                 self.state.playback.is_playing = false;
                             } else if player.next() {
                                 needs_sync = true;
+                            } else if self.radio_mode && !self.local_active {
+                                needs_radio_refill = true;
                             } else {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
@@ -283,6 +292,8 @@ impl App {
                                 self.state.playback.is_playing = false;
                             } else if player.next() {
                                 needs_sync = true;
+                            } else if self.radio_mode && !self.local_active {
+                                needs_radio_refill = true;
                             } else {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
@@ -318,6 +329,13 @@ impl App {
                     if let Some(player) = &mut self.player {
                         if player.next() { needs_sync = true; }
                     }
+                }
+            }
+
+            if needs_radio_refill {
+                self.radio_refill().await;
+                if let Some(player) = &mut self.player {
+                    if player.next() { needs_sync = true; }
                 }
             }
 
@@ -711,6 +729,17 @@ impl App {
                     self.state.playback.shuffle = player.shuffle();
                 }
             }
+            // Alt+r → Get similar tracks for the selected track or artist
+            (KeyCode::Char('r'), KeyModifiers::ALT) => {
+                self.get_similar_tracks().await;
+            }
+            // Shift+r (uppercase R) → Toggle Radio Mode
+            (KeyCode::Char('R'), _) => {
+                self.radio_mode = !self.radio_mode;
+                self.state.playback.radio_mode = self.radio_mode;
+                let msg = if self.radio_mode { "󰐇 Radio Mode on (Test)" } else { "Radio Mode off" };
+                self.state.status_msg = Some(msg.to_string());
+            }
             (KeyCode::Char('r'), _) => {
                 if let Some(player) = &mut self.player {
                     player.cycle_repeat();
@@ -885,11 +914,12 @@ impl App {
                                 let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                                 let name = artist.name.clone();
                                 self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
-                                match self.spotify.fetch_artist_top_tracks(&id).await {
-                                    Ok(tracks) => {
+                                match self.spotify.fetch_artist_tracks(&name, 0).await {
+                                    Ok((tracks, total)) => {
                                         self.state.tracks = tracks;
-                                        self.state.tracks_total = self.state.tracks.len() as u32;
+                                        self.state.tracks_total = total;
                                         self.state.tracks_offset = self.state.tracks.len() as u32;
+                                        self.state.active_artist_name = Some(name.clone());
                                         self.state.active_playlist_uri = Some(format!("artist:{id}"));
                                         self.state.active_playlist_id = Some(format!("artist:{id}"));
                                         self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
@@ -1061,11 +1091,12 @@ impl App {
                             .map(|a| (a.id.clone(), a.name.clone()));
                         if let Some((id, name)) = artist {
                             self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
-                            match self.spotify.fetch_artist_top_tracks(&id).await {
-                                Ok(tracks) => {
+                            match self.spotify.fetch_artist_tracks(&name, 0).await {
+                                Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
-                                    self.state.tracks_total = self.state.tracks.len() as u32;
+                                    self.state.tracks_total = total;
                                     self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.active_artist_name = Some(name.clone());
                                     self.state.active_playlist_uri = Some(format!("artist:{id}"));
                                     self.state.active_playlist_id = Some(format!("artist:{id}"));
                                     self.state.track_list.select(if self.state.tracks.is_empty() { None } else { Some(0) });
@@ -1093,6 +1124,15 @@ impl App {
             .unwrap_or(0);
 
         self.state.playback.is_local = self.local_active;
+        self.state.playback.radio_mode = self.radio_mode;
+
+        // Keep a rolling window of the last 5 Spotify tracks for radio seeds
+        if self.current_track_uri.starts_with("spotify:track:") {
+            self.recent_track_uris.push_back(self.current_track_uri.clone());
+            if self.recent_track_uris.len() > 5 {
+                self.recent_track_uris.pop_front();
+            }
+        }
 
         // Reset album art so maybe_fetch_album_art will kick off a new fetch
         self.state.album_art = None;
@@ -1206,6 +1246,10 @@ impl App {
                 Some(id) if id.starts_with("album:") => {
                     let album_id = &id["album:".len()..];
                     self.spotify.fetch_album_tracks(album_id, offset).await
+                }
+                Some(id) if id.starts_with("artist:") => {
+                    let name = self.state.active_artist_name.clone().unwrap_or_default();
+                    self.spotify.fetch_artist_tracks(&name, offset).await
                 }
                 Some(id) => {
                     self.spotify.fetch_playlist_tracks(id, offset).await
@@ -1410,6 +1454,87 @@ impl App {
             self.state.status_msg = Some(format!("No audio files found in {}", dir.display()));
         } else {
             self.state.status_msg = Some(format!("{count} local tracks loaded"));
+        }
+    }
+
+    /// Fetch recommendations from Spotify and add them to the active player's user queue.
+    async fn radio_refill(&mut self) {
+        let seeds: Vec<String> = self.recent_track_uris.iter().cloned().collect();
+        if seeds.is_empty() {
+            self.state.status_msg = Some("Radio: no seed tracks yet — play a Spotify track first".to_string());
+            return;
+        }
+
+        match self.spotify.fetch_recommendations(&seeds, 20).await {
+            Ok(tracks) if !tracks.is_empty() => {
+                let count = tracks.len();
+                if let Some(player) = &mut self.player {
+                    for t in tracks {
+                        player.add_to_queue(t.uri, t.name, t.artist, t.duration_ms);
+                    }
+                    self.state.status_msg = Some(format!("󰐇 Radio: queued {count} tracks"));
+                    self.sync_queue_display();
+                }
+            }
+            Ok(_) | Err(_) => {
+                // Could not find recommendations — turn off radio so the player doesn't get stuck
+                self.radio_mode = false;
+                self.state.playback.radio_mode = false;
+                self.state.status_msg = Some("Radio: could not find tracks, radio off".to_string());
+            }
+        }
+    }
+
+    /// Fetch similar tracks for the currently selected track or artist and display them.
+    async fn get_similar_tracks(&mut self) {
+        let seed_uri = match self.state.focus {
+            Focus::Tracks => self
+                .state
+                .track_list
+                .selected()
+                .and_then(|i| self.state.tracks.get(i))
+                .map(|t| t.uri.clone()),
+            Focus::Search => self.state.search_results.as_ref().and_then(|sr| match sr.panel {
+                SearchPanel::Tracks => sr.selected_track_uri().map(|s| s.to_string()),
+                SearchPanel::Artists => sr.selected_artist().map(|a| format!("spotify:artist:{}", a.id)),
+                _ => None,
+            }),
+            _ => None,
+        };
+
+        let Some(uri) = seed_uri else {
+            self.state.status_msg = Some("Select a track or artist first".to_string());
+            return;
+        };
+
+        if uri.starts_with("file://") {
+            self.state.status_msg = Some("Recommendations require a Spotify track or artist".to_string());
+            return;
+        }
+
+        self.state.status_msg = Some("Fetching similar tracks…".to_string());
+
+        match self.spotify.fetch_recommendations(&[uri], 30).await {
+            Ok(tracks) => {
+                let count = tracks.len();
+                self.state.tracks = tracks;
+                self.state.tracks_total = count as u32;
+                self.state.tracks_offset = count as u32;
+                self.state.active_playlist_uri = Some("radio:recommendations".to_string());
+                self.state.active_playlist_id = Some("radio:recommendations".to_string());
+                self.state.track_list.select(if count == 0 { None } else { Some(0) });
+                self.state.active_content = ActiveContent::Tracks;
+                self.state.search_results = None;
+                self.state.focus = Focus::Tracks;
+                self.state.status_msg = if count == 0 {
+                    Some("No recommendations found".to_string())
+                } else {
+                    Some(format!("󰐇 {count} similar tracks"))
+                };
+            }
+            Err(e) => {
+                self.state.status_msg = Some(format!("Recommendations failed: {e}"));
+            }
         }
     }
 

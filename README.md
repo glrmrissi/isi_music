@@ -147,6 +147,8 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 | `/` | Search |
 | `a` | Add track to queue |
 | `Delete` | Remove selected item from queue |
+| `R` | Toggle Radio Mode (auto-recommendations when queue ends) |
+| `Alt+r` | Get similar tracks for selected track or artist |
 | `c` | Toggle album art panel |
 | `z` | Toggle fullscreen player |
 | `l` | Like current track |
