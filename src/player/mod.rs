@@ -28,6 +28,7 @@ pub enum PlayerNotification {
     TrackUnavailable,
     Playing,
     Paused,
+    SessionLost,
 }
 
 // ── Backend-agnostic player trait ─────────────────────────────────────────────
@@ -70,6 +71,12 @@ pub trait AudioPlayer: Send {
     /// Non-blocking poll for the next player event.
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
 
+    /// Returns false if the underlying session has been invalidated (e.g. connection lost).
+    fn is_session_valid(&self) -> bool { true }
+
+    /// Returns (queue_uris, current_index) for state restoration after reconnect.
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
+
     /// Shared frequency-band energies updated in real time by the audio sink.
     /// Returns `None` if this player doesn't support audio analysis.
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
@@ -84,6 +91,7 @@ pub struct QueuedTrack {
 
 pub struct NativePlayer {
     player: Arc<LibrespotPlayer>,
+    session: Session,
     mixer: Arc<dyn Mixer>,
     queue: Vec<String>,
     pub user_queue: Vec<QueuedTrack>,
@@ -120,12 +128,15 @@ impl NativePlayer {
         let volume_getter = soft_mixer.get_soft_volume();
 
         let bitrate = librespot_playback::config::Bitrate::Bitrate320;
-        
+
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
+
+        // Clone session before moving it into the player so we can check validity later
+        let session_for_player = session.clone();
         let player = LibrespotPlayer::new(
             PlayerConfig { gapless: false, bitrate, ..PlayerConfig::default() },
-            session,
+            session_for_player,
             volume_getter,
             move || Box::new(AnalyzerSink::new(backend(None, audio_format), Arc::clone(&bands_for_sink))),
         );
@@ -135,6 +146,7 @@ impl NativePlayer {
 
         // Monitor player events in background
         let mut event_channel = player.get_player_event_channel();
+        let session_for_monitor = session.clone();
         tokio::spawn(async move {
             while let Some(event) = event_channel.recv().await {
                 match event {
@@ -151,8 +163,13 @@ impl NativePlayer {
                         let _ = notif_tx.send(PlayerNotification::TrackEnded);
                     }
                     PlayerEvent::Unavailable { track_id, .. } => {
-                        error!("Track unavailable (Premium required?): {}", track_id);
-                        let _ = notif_tx.send(PlayerNotification::TrackUnavailable);
+                        if session_for_monitor.is_invalid() {
+                            error!("Session lost — track unavailable: {}", track_id);
+                            let _ = notif_tx.send(PlayerNotification::SessionLost);
+                        } else {
+                            error!("Track unavailable (Premium required?): {}", track_id);
+                            let _ = notif_tx.send(PlayerNotification::TrackUnavailable);
+                        }
                     }
                     PlayerEvent::Loading { track_id, .. } => {
                         info!("Loading: {}", track_id);
@@ -160,11 +177,16 @@ impl NativePlayer {
                     _ => {}
                 }
             }
+            // Event channel closed — session likely died
+            if session_for_monitor.is_invalid() {
+                warn!("Player event channel closed with invalid session");
+            }
         });
 
         let volume = config::load_volume();
         let mut instance = Self {
             player,
+            session,
             mixer: soft_mixer,
             queue: Vec::new(),
             user_queue: Vec::new(),
@@ -179,6 +201,16 @@ impl NativePlayer {
         };
         instance.apply_volume();
         Ok(instance)
+    }
+
+    pub fn is_session_valid(&self) -> bool {
+        !self.session.is_invalid()
+    }
+
+    /// Returns the current queue URIs and the current index, useful for restoring
+    /// state after a session reconnect.
+    pub fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
+        (self.queue.clone(), self.current_index)
     }
 
     pub fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
@@ -363,4 +395,7 @@ impl AudioPlayer for NativePlayer {
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         Some(Arc::clone(&self.band_energies))
     }
+
+    fn is_session_valid(&self) -> bool { self.is_session_valid() }
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { self.snapshot_queue() }
 }

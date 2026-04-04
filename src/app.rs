@@ -45,6 +45,8 @@ pub struct App {
     // Real-time audio band energies from AnalyzerSink
     band_energies: Option<Arc<Mutex<Vec<f32>>>>,
     art_url: Option<String>,
+    // Session reconnection state
+    session_reconnecting: bool,
 }
 
 impl App {
@@ -127,7 +129,8 @@ impl App {
             discord_last_playing: false,
             discord_pending_since: None,
             band_energies,
-            art_url: initial_art
+            art_url: initial_art,
+            session_reconnecting: false,
         })
     }
 
@@ -141,6 +144,7 @@ impl App {
             self.last_tick = now;
 
             let mut needs_sync = false;
+            let mut needs_reconnect = false;
 
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
@@ -155,6 +159,10 @@ impl App {
                             self.state.status_msg = Some("Track unavailable, skipping...".to_string());
                             if player.next() { needs_sync = true; }
                             else { self.state.playback.is_playing = false; }
+                        }
+                        PlayerNotification::SessionLost => {
+                            self.state.status_msg = Some("Session lost, reconnecting...".to_string());
+                            needs_reconnect = true;
                         }
                     }
                 }
@@ -171,10 +179,15 @@ impl App {
             if needs_sync {
                 if let Ok(current_pb) = self.spotify.fetch_playback().await {
                     self.state.playback = current_pb.clone();
-                    self.art_url = current_pb.art_url; 
+                    self.art_url = current_pb.art_url;
                 }
                 self.sync_track_selection();
                 self.sync_queue_display();
+            }
+
+            if needs_reconnect && !self.session_reconnecting {
+                self.session_reconnecting = true;
+                self.reconnect_player().await;
             }
 
             if let Some(ref arc) = self.band_energies {
@@ -1125,5 +1138,51 @@ impl App {
                 .map(|t| (t.name.clone(), t.artist.clone()))
                 .collect();
         }
+    }
+
+    /// Recreates the librespot session after it has been invalidated.
+    /// Saves the current queue and index, creates a new player, then restores playback.
+    async fn reconnect_player(&mut self) {
+        warn!("Session lost — attempting to reconnect librespot...");
+
+        // Snapshot what was queued before the session died
+        let (saved_queue, saved_index) = self
+            .player
+            .as_ref()
+            .map(|p| p.snapshot_queue())
+            .unwrap_or_default();
+        let saved_volume = self.player.as_ref().map(|p| p.volume()).unwrap_or(50);
+
+        // Drop the old (dead) player
+        self.player = None;
+        self.band_energies = None;
+
+        let Some(token) = self.spotify.get_access_token().await else {
+            warn!("Could not get access token for reconnect");
+            self.state.status_msg = Some("Reconnect failed: no token".to_string());
+            self.session_reconnecting = false;
+            return;
+        };
+
+        match NativePlayer::new(token, false).await {
+            Ok(mut p) => {
+                p.set_volume(saved_volume);
+                // Restore the queue at the track that was playing, without auto-playing
+                if !saved_queue.is_empty() {
+                    let start = saved_index.unwrap_or(0);
+                    p.set_queue(saved_queue, start);
+                }
+                self.band_energies = p.band_energies();
+                self.player = Some(Box::new(p));
+                self.state.status_msg = Some("Reconnected!".to_string());
+                warn!("Librespot session reconnected successfully");
+            }
+            Err(e) => {
+                warn!("Reconnect failed: {e:#}");
+                self.state.status_msg = Some(format!("Reconnect failed: {e}"));
+            }
+        }
+
+        self.session_reconnecting = false;
     }
 }
