@@ -88,6 +88,7 @@ pub enum ActiveContent {
     Albums,
     Artists,
     Shows,
+    LocalFiles,
 }
 
 // ── Library items (fixed) ─────────────────────────────────────────────────────
@@ -97,6 +98,7 @@ const LIBRARY_ITEMS: &[&str] = &[
     "Albums",
     "Artists",
     "Podcasts",
+    "Local Files",
 ];
 
 // ── Search Results ────────────────────────────────────────────────────────────
@@ -201,7 +203,7 @@ impl SearchResults {
 
 pub struct UiState {
     pub focus: Focus,
-    // Left panel: Library (fixed 4 items)
+    // Left panel: Library (fixed 5 items)
     pub library_list: ListState,
     // Left panel: Playlists
     pub playlists: Vec<PlaylistSummary>,
@@ -419,6 +421,17 @@ impl UiState {
         };
     }
 
+    pub fn switch_focus_prev(&mut self) {
+        self.search_active = false;
+        self.focus = match self.focus {
+            Focus::Library   => Focus::Queue,
+            Focus::Playlists => Focus::Library,
+            Focus::Tracks    => Focus::Playlists,
+            Focus::Queue     => Focus::Tracks,
+            Focus::Search    => Focus::Playlists,
+        };
+    }
+
     /// Cycle search panel (Tab when focused on Search)
     pub fn switch_search_panel(&mut self) {
         if let Some(sr) = &mut self.search_results {
@@ -491,7 +504,7 @@ impl Ui {
 
             let left_rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(6), Constraint::Min(0)])
+                .constraints([Constraint::Length(7), Constraint::Min(0)])
                 .split(main_cols[0]);
 
             let right_rows = Layout::default()
@@ -535,7 +548,7 @@ impl Ui {
         let art_h = if state.show_album_art { Constraint::Length(16) } else { Constraint::Length(0) };
         let left_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(6), Constraint::Min(0), art_h])
+            .constraints([Constraint::Length(7), Constraint::Min(0), art_h])
             .split(main_cols[0]);
 
         let right_rows = Layout::default()
@@ -562,7 +575,7 @@ impl Ui {
                         self.render_now_playing(frame, state, right_rows[0])
                     }
                 }
-                ActiveContent::Tracks  => self.render_tracks(frame, state, right_rows[0]),
+                ActiveContent::Tracks | ActiveContent::LocalFiles => self.render_tracks(frame, state, right_rows[0]),
                 ActiveContent::Albums  => self.render_albums(frame, state, right_rows[0]),
                 ActiveContent::Artists => self.render_artists(frame, state, right_rows[0]),
                 ActiveContent::Shows   => self.render_shows(frame, state, right_rows[0]),

@@ -26,6 +26,10 @@ chrono = "0.4"
 librespot-core = "0.8"
 librespot-playback = { version = "0.8", features = ["rodio-backend"] }
 
+# Local audio playback (MP3, FLAC, OGG, WAV)
+rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac", "symphonia-ogg", "symphonia-wav"] }
+symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "aiff"] }
+
 # .env support (desenvolvimento)
 dotenvy = "0.15"
 

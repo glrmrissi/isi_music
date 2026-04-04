@@ -1,3 +1,6 @@
+pub mod local;
+pub use local::LocalPlayer;
+
 use anyhow::{Context, Result};
 use librespot_core::{
     authentication::Credentials,

@@ -69,6 +69,8 @@ pub struct SpotifyClient {
     shuffle_state: bool,
     repeat_state: RepeatState,
     user_market: Option<String>,
+    /// False when running without Spotify login (local-only mode).
+    pub authenticated: bool,
 }
 
 impl SpotifyClient {
@@ -154,13 +156,31 @@ impl SpotifyClient {
             shuffle_state: false,
             repeat_state: RepeatState::Off,
             user_market: None,
+            authenticated: true,
         };
         spotify.user_market = spotify.fetch_user_market().await.ok();
         Ok(spotify)
     }
 
+    /// Creates a stub client for local-only mode (no Spotify login required).
+    /// All API calls will return errors gracefully.
+    pub fn new_unauthenticated() -> Self {
+        // Build a dummy client — it won't be used for any real requests.
+        let client = SpotifyAuth::build_client()
+            .unwrap_or_else(|_| AuthCodePkceSpotify::default());
+        Self {
+            client,
+            http: reqwest::Client::new(),
+            shuffle_state: false,
+            repeat_state: RepeatState::Off,
+            user_market: None,
+            authenticated: false,
+        }
+    }
+
     /// Returns the current access token for use with librespot.
     pub async fn get_access_token(&self) -> Option<String> {
+        if !self.authenticated { return None; }
         let guard = self.client.token.lock().await.ok()?;
         guard.as_ref().map(|t| t.access_token.clone())
     }
@@ -219,6 +239,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
+        if !self.authenticated { return Ok(Vec::new()); }
         let mut all = Vec::new();
         let mut offset = 0u32;
         loop {
@@ -291,6 +312,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_playback(&mut self) -> Result<PlaybackState> {
+        if !self.authenticated { return Ok(PlaybackState::default()); }
         let ctx = match self.client.current_playback(None, None::<&[_]>).await {
             Ok(ctx) => ctx,
             Err(e) => {

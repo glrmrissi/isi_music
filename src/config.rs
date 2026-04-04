@@ -9,6 +9,15 @@ pub struct AppConfig {
     pub lastfm: LastfmConfig,
     #[serde(default)]
     pub discord: DiscordConfig,
+    #[serde(default)]
+    pub local: LocalConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct LocalConfig {
+    /// Directory to scan for local audio files (MP3, FLAC, OGG, WAV).
+    /// Example: "~/Music"
+    pub music_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
