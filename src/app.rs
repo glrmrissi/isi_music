@@ -135,20 +135,7 @@ impl App {
             _ => None,
         };
 
-        // If a Spotify refresh token is cached, authenticate normally.
-        // Otherwise, fall back to local-only mode (no browser auth required).
-        let has_spotify_token = crate::config::load_refresh_token().is_some();
-        let mut spotify = if has_spotify_token {
-            match SpotifyClient::new().await {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("Spotify auth failed ({e:#}), running in local-only mode");
-                    SpotifyClient::new_unauthenticated()
-                }
-            }
-        } else {
-            SpotifyClient::new_unauthenticated()
-        };
+        let mut spotify = SpotifyClient::new().await?;
 
         let volume = crate::config::load_volume();
 
