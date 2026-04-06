@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use rspotify::{
     AuthCodePkceSpotify, Token,
-    clients::{BaseClient, OAuthClient},
+    clients::{OAuthClient},
     model::{
-        ArtistId, Id, LibraryId, Offset, PlayContextId, PlayableItem, PlaylistId,
+        Id, LibraryId, Offset, PlayContextId, PlayableItem, PlaylistId,
         RepeatState, TrackId,
     },
 };
@@ -21,6 +21,7 @@ pub struct PlaylistSummary {
     pub art_url: Option<String>
 }
 
+#[derive(Clone)]
 pub struct TrackSummary {
     pub name: String,
     pub artist: String,
@@ -254,7 +255,7 @@ impl SpotifyClient {
                     id: p.id.id().to_owned(),
                     uri: p.id.uri(),
                     name: p.name,
-                    total_tracks: p.tracks.total,
+                    total_tracks: p.items.total,
                     art_url,
                 });
             }
@@ -267,33 +268,60 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_playlist_tracks(&self, playlist_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
-        let id = PlaylistId::from_id(playlist_id)
-            .map_err(|e| anyhow::anyhow!("Invalid playlist ID: {e}"))?;
-        let page = self
-            .client
-            .playlist_items_manual(id, None, None, Some(50), Some(offset))
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let offset_str = offset.to_string();
+        let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
+        let response = self.http
+            .get(&url)
+            .bearer_auth(&token)
+            .query(&[("limit", "50"), ("offset", &offset_str)])
+            .send()
             .await?;
-        let total = page.total;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
         let mut tracks = Vec::new();
-        for item in page.items {
-            if let Some(PlayableItem::Track(track)) = item.track {
-                let artist = track
-                    .artists
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let duration_ms = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
-                let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
-                tracks.push(TrackSummary {
-                    name: track.name,
-                    artist,
-                    album: track.album.name,
-                    duration_ms,
-                    uri,
-                });
+
+        if let Some(items) = json["items"].as_array() {
+            for item_wrapper in items {
+                let track = if !item_wrapper["track"].is_null() {
+                    &item_wrapper["track"]
+                } else if !item_wrapper["item"].is_null() {
+                    &item_wrapper["item"]
+                } else {
+                    continue;
+                };
+
+                if track.is_null() || track["type"].as_str() == Some("episode") { 
+                    continue; 
+                }
+
+                let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                
+                let artist = track["artists"].as_array()
+                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+
+                let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                let uri = track["uri"].as_str().unwrap_or("").to_string();
+
+                if !uri.is_empty() {
+                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+                }
             }
         }
+
         Ok((tracks, total))
     }
 
@@ -373,6 +401,7 @@ impl SpotifyClient {
             volume: 100,
             art_url,
             is_local: false,
+            radio_mode: false,
         })
     }
 
@@ -622,22 +651,52 @@ impl SpotifyClient {
         Ok(artists)
     }
 
-    pub async fn fetch_artist_top_tracks(&self, artist_id: &str) -> Result<Vec<TrackSummary>> {
-        let id = ArtistId::from_id(artist_id)
-            .map_err(|e| anyhow::anyhow!("Invalid artist id: {e}"))?;
+    pub async fn fetch_artist_tracks(&self, artist_name: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let full_tracks = self.client
-            .artist_top_tracks(id, None)
+        let market = self.user_market.as_deref().unwrap_or("BR");
+        let query = format!("artist:\"{}\"", artist_name);
+        let offset_str = offset.to_string();
+        let response = self.http
+            .get("https://api.spotify.com/v1/search")
+            .bearer_auth(&token)
+            .query(&[
+                ("q", query.as_str()),
+                ("type", "track"),
+                ("limit", "10"),
+                ("offset", &offset_str),
+                ("market", market),
+            ])
+            .send()
             .await?;
 
-        let tracks = full_tracks.into_iter().map(|t| {
-            let artist = t.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
-            let duration_ms = t.duration.num_milliseconds().try_into().unwrap_or(0u64);
-            let uri = t.id.map(|id| id.uri()).unwrap_or_default();
-            TrackSummary { name: t.name, artist, album: t.album.name, duration_ms, uri }
-        }).collect();
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+        }
 
-        Ok(tracks)
+        let json: serde_json::Value = response.json().await?;
+        let total = json["tracks"]["total"].as_u64().unwrap_or(0) as u32;
+        let mut tracks = Vec::new();
+
+        if let Some(items) = json["tracks"]["items"].as_array() {
+            for item in items {
+                let name = item["name"].as_str().unwrap_or("Unknown").to_string();
+                let artist = item["artists"].as_array()
+                    .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                let album = item["album"]["name"].as_str().unwrap_or("").to_string();
+                let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
+                let uri = item["uri"].as_str().unwrap_or("").to_string();
+                tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+            }
+        }
+
+        Ok((tracks, total))
     }
 
     pub async fn fetch_saved_shows(&self, offset: u32) -> Result<(Vec<ShowSummary>, u32)> {
@@ -775,7 +834,156 @@ impl SpotifyClient {
         Ok((access_token, expires_in, new_rt))
     }
 
-    /// Fetch the smallest album art URL for a track URI (spotify:track:<id>).
+    pub async fn fetch_recommendations(
+        &self,
+        seed_uris: &[String],
+        limit: u8,
+    ) -> Result<Vec<TrackSummary>> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let mut seed_artists: Vec<(String, String)> = Vec::new(); // (id, name)
+
+        for uri in seed_uris {
+            if let Some(id) = uri.strip_prefix("spotify:artist:") {
+                if !seed_artists.iter().any(|(i, _)| i == id) {
+                    seed_artists.push((id.to_string(), String::new()));
+                }
+            } else if let Some(track_id) = uri.strip_prefix("spotify:track:") {
+                if let Ok(resp) = self.http
+                    .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let (Some(a_id), Some(a_name)) = (
+                            json["artists"].as_array().and_then(|a| a.first()).and_then(|a| a["id"].as_str()),
+                            json["artists"].as_array().and_then(|a| a.first()).and_then(|a| a["name"].as_str()),
+                        ) {
+                            if !seed_artists.iter().any(|(i, _)| i == a_id) {
+                                seed_artists.push((a_id.to_string(), a_name.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if seed_artists.is_empty() { return Ok(vec![]); }
+
+        let seed_artist_names: Vec<String> = seed_artists.iter().map(|(_, n)| n.clone()).collect();
+        let market = self.user_market.as_deref().unwrap_or("BR");
+
+        let mut featured_artists: Vec<String> = Vec::new(); // artist names
+
+        for (artist_id, _) in seed_artists.iter().take(2) {
+            if let Ok(resp) = self.http
+                .get(format!("https://api.spotify.com/v1/artists/{artist_id}/albums"))
+                .bearer_auth(&token)
+                .query(&[("limit", "5"), ("include_groups", "album,single"), ("market", market)])
+                .send()
+                .await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    let album_ids: Vec<String> = json["items"].as_array()
+                        .unwrap_or(&vec![])
+                        .iter()
+                        .filter_map(|a| a["id"].as_str())
+                        .take(4)
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    for album_id in &album_ids {
+                        if let Ok(resp2) = self.http
+                            .get(format!("https://api.spotify.com/v1/albums/{album_id}/tracks"))
+                            .bearer_auth(&token)
+                            .query(&[("limit", "10"), ("market", market)])
+                            .send()
+                            .await
+                        {
+                            if let Ok(json2) = resp2.json::<serde_json::Value>().await {
+                                if let Some(items) = json2["items"].as_array() {
+                                    for track in items {
+                                        if let Some(artists) = track["artists"].as_array() {
+                                            for a in artists {
+                                                if let Some(name) = a["name"].as_str() {
+                                                    let is_seed = seed_artist_names.iter()
+                                                        .any(|n| n.eq_ignore_ascii_case(name));
+                                                    if !is_seed && !featured_artists.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                                                        featured_artists.push(name.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if featured_artists.len() >= 10 { break; }
+                    }
+                }
+            }
+            if featured_artists.len() >= 10 { break; }
+        }
+
+        let mut pool: Vec<TrackSummary> = Vec::new();
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        for artist_name in featured_artists.iter().take(8) {
+            let offset: u32 = rng.gen_range(0..20);
+            let query = format!("artist:\"{}\"", artist_name);
+            let offset_str = offset.to_string();
+            if let Ok(resp) = self.http
+                .get("https://api.spotify.com/v1/search")
+                .bearer_auth(&token)
+                .query(&[("q", query.as_str()), ("type", "track"), ("limit", "3"), ("offset", &offset_str), ("market", market)])
+                .send()
+                .await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(tracks) = json["tracks"]["items"].as_array() {
+                        for t in tracks {
+                            let t_artist = t["artists"].as_array()
+                                .and_then(|a| a.first())
+                                .and_then(|a| a["name"].as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if seed_artist_names.iter().any(|n| n.eq_ignore_ascii_case(&t_artist)) {
+                                continue;
+                            }
+                            let name = t["name"].as_str().unwrap_or("Unknown").to_string();
+                            let artist = t["artists"].as_array()
+                                .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+                                .unwrap_or_default();
+                            let uri = t["uri"].as_str().unwrap_or_default().to_string();
+                            if !uri.is_empty() {
+                                pool.push(TrackSummary {
+                                    name, artist,
+                                    album: t["album"]["name"].as_str().unwrap_or_default().to_string(),
+                                    duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
+                                    uri,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            if pool.len() >= (limit as usize * 2) { break; }
+        }
+
+
+        use rand::seq::SliceRandom;
+        pool.shuffle(&mut rand::thread_rng());
+        pool.truncate(limit as usize);
+
+        info!("Generated {} manual recommendations", pool.len());
+        Ok(pool)
+    }
+
     pub async fn fetch_track_art_url(&self, track_uri: &str) -> Option<String> {
         let track_id = track_uri.strip_prefix("spotify:track:")?;
         let token = self.get_access_token().await?;
