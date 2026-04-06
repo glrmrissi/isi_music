@@ -255,7 +255,7 @@ impl SpotifyClient {
                     id: p.id.id().to_owned(),
                     uri: p.id.uri(),
                     name: p.name,
-                    total_tracks: p.tracks.total,
+                    total_tracks: p.items.total,
                     art_url,
                 });
             }
@@ -273,13 +273,12 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let market = self.user_market.as_deref().unwrap_or("BR");
         let offset_str = offset.to_string();
         let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
         let response = self.http
             .get(&url)
             .bearer_auth(&token)
-            .query(&[("limit", "50"), ("offset", &offset_str), ("market", market)])
+            .query(&[("limit", "50"), ("offset", &offset_str)])
             .send()
             .await?;
 
@@ -294,17 +293,29 @@ impl SpotifyClient {
         let mut tracks = Vec::new();
 
         if let Some(items) = json["items"].as_array() {
-            for item in items {
-                let track = &item["track"];
-                if track.is_null() { continue; }
-                if track["type"].as_str() == Some("episode") { continue; }
+            for item_wrapper in items {
+                let track = if !item_wrapper["track"].is_null() {
+                    &item_wrapper["track"]
+                } else if !item_wrapper["item"].is_null() {
+                    &item_wrapper["item"]
+                } else {
+                    continue;
+                };
+
+                if track.is_null() || track["type"].as_str() == Some("episode") { 
+                    continue; 
+                }
+
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                
                 let artist = track["artists"].as_array()
                     .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
+
                 let album = track["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
                 let uri = track["uri"].as_str().unwrap_or("").to_string();
+
                 if !uri.is_empty() {
                     tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
                 }
