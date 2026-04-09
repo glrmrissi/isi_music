@@ -32,9 +32,9 @@ A terminal music player written in Rust. Stream from Spotify via librespot or pl
 **1. Download the binary**
 
 ```bash
-# Download from the Releases page
-chmod +x isi-music-linux
-sudo mv isi-music-linux /usr/local/bin/isi-music
+curl -L https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-linux -o isi-music
+chmod +x isi-music
+sudo mv isi-music /usr/local/bin/
 ```
 
 **2. Install audio dependencies**

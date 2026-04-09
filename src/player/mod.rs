@@ -66,6 +66,8 @@ pub trait AudioPlayer: Send {
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
 
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
+
+    fn current_uri(&self) -> Option<String>;
 }
 
 pub struct QueuedTrack {
@@ -324,6 +326,10 @@ impl NativePlayer {
         let v = (self.volume as u32 * 65535 / 100) as u16;
         self.mixer.set_volume(v);
     }
+
+    pub fn current_uri(&self) -> Option<String> {
+        self.current_index().and_then(|i| self.queue.get(i)).map(|u| u.clone())
+    }
 }
 
 impl AudioPlayer for NativePlayer {
@@ -332,6 +338,7 @@ impl AudioPlayer for NativePlayer {
     fn user_queue(&self) -> &[QueuedTrack] { self.user_queue() }
     fn remove_from_user_queue(&mut self, index: usize) { self.user_queue.remove(index); }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
+    fn current_uri(&self) -> Option<String> { self.current_uri() }
 
     fn play(&mut self) { self.play(); }
     fn pause(&mut self) { self.pause(); }

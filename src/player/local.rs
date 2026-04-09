@@ -209,7 +209,11 @@ impl LocalPlayer {
         self.sink.set_volume(self.volume as f32 / 100.0);
     }
 
-    pub fn current_index(&self) -> Option<usize> { self.current_index }
+    fn current_uri(&self) -> Option<String> {
+        self.current_index
+            .and_then(|i| self.queue.get(i))
+            .map(|t| format!("file://{}", t.path.display()))
+    }
 }
 
 impl AudioPlayer for LocalPlayer {
@@ -250,6 +254,7 @@ impl AudioPlayer for LocalPlayer {
     fn shuffle(&self) -> bool { self.shuffle }
     fn repeat(&self) -> RepeatMode { self.repeat }
     fn current_index(&self) -> Option<usize> { self.current_index() }
+    fn current_uri(&self) -> Option<String> { self.current_uri() }
 
     fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
