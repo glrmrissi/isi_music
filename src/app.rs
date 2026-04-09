@@ -125,6 +125,10 @@ pub struct App {
     radio_mode: bool,
     /// Ring buffer of the last 5 Spotify track URIs played — used as seeds for recommendations.
     recent_track_uris: std::collections::VecDeque<String>,
+    /// Snapshot of the track list that is currently loaded into the player queue.
+    /// Kept separate from `state.tracks` so that navigating to another playlist
+    /// while music is playing does not corrupt playback metadata.
+    playing_tracks: Vec<crate::spotify::TrackSummary>,
 }
 
 impl App {
@@ -186,7 +190,7 @@ impl App {
         }
 
         let initial_playback = spotify.fetch_playback().await.unwrap_or_default();
-        let initial_art = initial_playback.art_url.clone(); 
+        let initial_art = initial_playback.art_url.clone();
         state.playback = initial_playback;
 
         #[cfg(feature = "mpris")]
@@ -231,6 +235,7 @@ impl App {
             session_reconnecting: false,
             radio_mode: false,
             recent_track_uris: std::collections::VecDeque::new(),
+            playing_tracks: Vec::new(),
         })
     }
 
@@ -356,7 +361,7 @@ impl App {
             #[cfg(feature = "mpris")]
             if let Some(mpris) = &mut self.mpris {
                 let pb = &self.state.playback;
-                let _art_url = self.state.art_url.clone(); 
+                let _art_url = self.state.art_url.clone();
 
                 mpris.update(MprisState {
                     title: pb.title.clone(),
@@ -513,7 +518,7 @@ impl App {
 
         Ok(())
     }
-    
+
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
 
@@ -557,6 +562,9 @@ impl App {
                 KeyCode::Backspace                  => self.state.search_pop(),
                 KeyCode::Tab                        => self.state.switch_focus(),
                 KeyCode::Char(c)                    => self.state.search_push(c),
+                // KeyCode::Char('v') => {
+                //     state.show_visualizer = !state.show_visualizer;
+                // }
                 _ => {}
             }
             return Ok(());
@@ -964,6 +972,10 @@ impl App {
                                     .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                     .count();
                                 player.set_queue(uris, adjusted_idx);
+                                // Snapshot the playing track list so sync_track_selection
+                                // always reads from the correct source, even if the user
+                                // navigates away to another playlist while this one plays.
+                                self.playing_tracks = self.state.tracks.clone();
                                 if let Some(track) = self.state.tracks.get(idx) {
                                     self.state.playback.title = track.name.clone();
                                     self.state.playback.artist = track.artist.clone();
@@ -1017,6 +1029,15 @@ impl App {
                                             self.state.playback.duration_ms = t.duration_ms;
                                             self.state.playback.progress_ms = 0;
                                             self.state.playback.is_playing = true;
+                                            // Single track from search — snapshot it so
+                                            // sync_track_selection can find it later.
+                                            self.playing_tracks = vec![crate::spotify::TrackSummary {
+                                                uri: t.uri.clone(),
+                                                name: t.name.clone(),
+                                                artist: t.artist.clone(),
+                                                album: t.album.clone(),
+                                                duration_ms: t.duration_ms,
+                                            }];
                                             self.on_track_started();
                                         }
                                     }
@@ -1319,7 +1340,7 @@ impl App {
     }
 
     fn sync_track_selection(&mut self) {
-        // If we just played a user_queue track, update playback from that
+        // If we just played a user_queue track, update playback from that.
         let queued = self.player.as_mut().and_then(|p| p.take_playing_queued());
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
@@ -1332,10 +1353,13 @@ impl App {
             self.on_track_started();
             return;
         }
+
         if let Some(player) = &self.player {
             if let Some(idx) = player.current_index() {
-                self.state.track_list.select(Some(idx));
-                if let Some(track) = self.state.tracks.get(idx) {
+                // Read metadata from playing_tracks, NOT from state.tracks.
+                // state.tracks reflects whatever playlist the user is currently
+                // browsing, which may differ from the one loaded into the player.
+                if let Some(track) = self.playing_tracks.get(idx) {
                     self.state.playback.title = track.name.clone();
                     self.state.playback.artist = track.artist.clone();
                     self.state.playback.album = track.album.clone();
@@ -1343,6 +1367,14 @@ impl App {
                     self.state.playback.progress_ms = 0;
                     self.current_track_uri = track.uri.clone();
                     self.on_track_started();
+                }
+                // Only move the visual cursor if the user is still looking at
+                // the same playlist that is playing.
+                if self.playing_tracks.len() == self.state.tracks.len()
+                    && self.playing_tracks.get(idx).map(|t| &t.uri)
+                        == self.state.tracks.get(idx).map(|t| &t.uri)
+                {
+                    self.state.track_list.select(Some(idx));
                 }
             }
         }
