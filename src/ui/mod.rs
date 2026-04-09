@@ -232,6 +232,7 @@ pub struct UiState {
     pub marquee_ms: u64,
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
+    pub show_visualizer: bool,
 }
 
 impl UiState {
@@ -278,6 +279,7 @@ impl UiState {
             marquee_ms: 0,
             viz_bands: Vec::new(),
             art_url: None,
+            show_visualizer: true
         }
     }
 
@@ -448,7 +450,7 @@ impl Ui {
                 ])
                 .split(area);
             self.render_player_compact(frame, state, root[0]);
-            self.render_visualizer(frame, &state.playback, &state.viz_bands, root[1]);
+            self.render_visualizer(frame, &state.playback, &state.viz_bands, root[1], state);
             self.render_help(frame, state, root[2]);
             return;
         }
@@ -526,7 +528,7 @@ impl Ui {
             .constraints([Constraint::Min(0), Constraint::Length(8)])
             .split(main_cols[1]);
 
-        self.render_visualizer(frame, &state.playback, &state.viz_bands, top_cols[0]);
+        self.render_visualizer(frame, &state.playback, &state.viz_bands, top_cols[0], state);
         self.render_header(frame, state, top_cols[1]);
         self.render_library(frame, state, left_rows[0]);
         self.render_playlists(frame, state, left_rows[1]);
@@ -657,7 +659,10 @@ impl Ui {
         frame.render_widget(Paragraph::new(lines), text_rect);
     }
 
-    fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, viz_bands: &[f32], area: Rect) {
+    fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, viz_bands: &[f32], area: Rect, state: &UiState) {
+        if !state.show_visualizer {
+            return;
+        }
         let block = Block::default();
 
         let inner = block.inner(area);
@@ -921,7 +926,7 @@ impl Ui {
 
         let viz_bands = state.viz_bands.clone();
         let pb = state.playback.clone();
-        self.render_visualizer(frame, &pb, &viz_bands, viz_area);
+        self.render_visualizer(frame, &pb, &viz_bands, viz_area, state);
     }
 
     fn render_local_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -990,7 +995,7 @@ impl Ui {
             info_area,
         );
 
-        self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area);
+        self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area, state);
     }
 
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
