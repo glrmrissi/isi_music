@@ -34,20 +34,13 @@ pub enum PlayerNotification {
     SessionLost,
 }
 
-// ── Backend-agnostic player trait ─────────────────────────────────────────────
-
-/// Common interface for any audio backend (librespot, local files, etc.).
-/// All methods are synchronous — backends manage their own async internals.
 pub trait AudioPlayer: Send {
-    // ── Queue ────────────────────────────────────────────────────────────────
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
     fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64);
     fn user_queue(&self) -> &[QueuedTrack];
     fn remove_from_user_queue(&mut self, index: usize);
-    /// Take the `QueuedTrack` that was just promoted from the user queue, if any.
     fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
 
-    // ── Playback ─────────────────────────────────────────────────────────────
     fn play(&mut self);
     fn pause(&mut self);
     fn toggle(&mut self);
@@ -56,32 +49,22 @@ pub trait AudioPlayer: Send {
     fn play_at(&mut self, index: usize);
     fn seek(&self, position_ms: u32);
 
-    // ── State ────────────────────────────────────────────────────────────────
     fn is_playing(&self) -> bool;
     fn volume(&self) -> u8;
     fn shuffle(&self) -> bool;
     fn repeat(&self) -> RepeatMode;
     fn current_index(&self) -> Option<usize>;
 
-    // ── Volume / mode ────────────────────────────────────────────────────────
     fn volume_up(&mut self);
     fn volume_down(&mut self);
     fn set_volume(&mut self, volume: u8);
     fn toggle_shuffle(&mut self);
     fn cycle_repeat(&mut self);
 
-    // ── Events ───────────────────────────────────────────────────────────────
-    /// Non-blocking poll for the next player event.
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
 
-    /// Returns false if the underlying session has been invalidated (e.g. connection lost).
-    fn is_session_valid(&self) -> bool { true }
-
-    /// Returns (queue_uris, current_index) for state restoration after reconnect.
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
 
-    /// Shared frequency-band energies updated in real time by the audio sink.
-    /// Returns `None` if this player doesn't support audio analysis.
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
 }
 
@@ -94,11 +77,10 @@ pub struct QueuedTrack {
 
 pub struct NativePlayer {
     player: Arc<LibrespotPlayer>,
-    session: Session,
+    _session: Session,
     mixer: Arc<dyn Mixer>,
     queue: Vec<String>,
     pub user_queue: Vec<QueuedTrack>,
-    /// Set after next() plays from user_queue; caller should read and clear
     pub playing_queued: Option<QueuedTrack>,
     current_index: Option<usize>,
     pub is_playing: bool,
@@ -106,13 +88,11 @@ pub struct NativePlayer {
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
-    /// Real-time frequency band energies from the audio sink (N_BANDS values, 0..1)
     pub band_energies: Arc<Mutex<Vec<f32>>>,
 }
 
 impl NativePlayer {
-    /// `low_resource`: use 96kbps bitrate + smaller buffer (for daemon/background mode)
-    pub async fn new(access_token: String, low_resource: bool) -> Result<Self> {
+    pub async fn new(access_token: String, _low_resource: bool) -> Result<Self> {
         let session = Session::new(SessionConfig::default(), None);
         let credentials = Credentials::with_access_token(access_token);
         session
@@ -135,7 +115,6 @@ impl NativePlayer {
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
 
-        // Clone session before moving it into the player so we can check validity later
         let session_for_player = session.clone();
         let player = LibrespotPlayer::new(
             PlayerConfig { gapless: false, bitrate, ..PlayerConfig::default() },
@@ -144,10 +123,8 @@ impl NativePlayer {
             move || Box::new(AnalyzerSink::new(backend(None, audio_format), Arc::clone(&bands_for_sink))),
         );
 
-        // Notification channel for the App
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
 
-        // Monitor player events in background
         let mut event_channel = player.get_player_event_channel();
         let session_for_monitor = session.clone();
         tokio::spawn(async move {
@@ -180,16 +157,15 @@ impl NativePlayer {
                     _ => {}
                 }
             }
-            // Event channel closed — session likely died
             if session_for_monitor.is_invalid() {
                 warn!("Player event channel closed with invalid session");
             }
         });
 
         let volume = config::load_volume();
-        let mut instance = Self {
+        let instance = Self {
             player,
-            session,
+            _session: session,
             mixer: soft_mixer,
             queue: Vec::new(),
             user_queue: Vec::new(),
@@ -206,12 +182,6 @@ impl NativePlayer {
         Ok(instance)
     }
 
-    pub fn is_session_valid(&self) -> bool {
-        !self.session.is_invalid()
-    }
-
-    /// Returns the current queue URIs and the current index, useful for restoring
-    /// state after a session reconnect.
     pub fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (self.queue.clone(), self.current_index)
     }
@@ -242,7 +212,6 @@ impl NativePlayer {
                 self.current_index = Some(index);
                 self.is_playing = true;
                 self.playing_queued = None;
-                // Tell glibc to return freed pages (decoder/buffer from previous track) to the OS
                 #[cfg(target_os = "linux")]
                 unsafe { libc::malloc_trim(0); }
             }
@@ -266,14 +235,12 @@ impl NativePlayer {
 
     pub fn next(&mut self) -> bool {
         self.playing_queued = None;
-        // Track repeat: re-play the same track
         if self.repeat == RepeatMode::Track {
             if let Some(idx) = self.current_index {
                 self.play_at(idx);
                 return true;
             }
         }
-        // User queue has priority
         if !self.user_queue.is_empty() {
             let track = self.user_queue.remove(0);
             match SpotifyUri::from_uri(&track.uri) {
@@ -294,7 +261,7 @@ impl NativePlayer {
             let len = self.queue.len();
             let next = if self.shuffle && len > 1 {
                 let mut rng = rand::thread_rng();
-                let mut candidates: Vec<usize> = (0..len).filter(|&i| i != idx).collect();
+                let candidates: Vec<usize> = (0..len).filter(|&i| i != idx).collect();
                 *candidates.choose(&mut rng).unwrap_or(&((idx + 1) % len))
             } else {
                 idx + 1
@@ -303,7 +270,6 @@ impl NativePlayer {
                 self.play_at(next);
                 return true;
             }
-            // End of queue — wrap around if repeat Queue
             if self.repeat == RepeatMode::Queue && len > 0 {
                 self.play_at(0);
                 return true;
@@ -399,6 +365,5 @@ impl AudioPlayer for NativePlayer {
         Some(Arc::clone(&self.band_energies))
     }
 
-    fn is_session_valid(&self) -> bool { self.is_session_valid() }
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { self.snapshot_queue() }
 }

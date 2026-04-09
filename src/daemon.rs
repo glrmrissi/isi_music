@@ -247,14 +247,12 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     Ok(())
 }
 
-/// Load all tracks from a Spotify playlist URI/ID into the player.
 async fn load_playlist(
     spotify: &mut SpotifyClient,
     player: &mut dyn AudioPlayer,
     track_list: &mut Vec<TrackInfo>,
     uri_or_id: &str,
 ) -> Result<usize> {
-    // Accept both "spotify:playlist:ID" and bare "ID"
     let id = uri_or_id
         .trim_start_matches("spotify:playlist:")
         .trim_start_matches("spotify:album:");
@@ -286,7 +284,6 @@ async fn load_playlist(
     Ok(total)
 }
 
-/// Load all liked/saved tracks into the player queue.
 async fn load_liked(
     spotify: &mut SpotifyClient,
     player: &mut dyn AudioPlayer,

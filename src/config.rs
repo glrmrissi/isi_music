@@ -15,14 +15,11 @@ pub struct AppConfig {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct LocalConfig {
-    /// Directory to scan for local audio files (MP3, FLAC, OGG, WAV).
-    /// Example: "~/Music"
     pub music_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DiscordConfig {
-    /// None = not asked yet (triggers setup on next launch)
     pub enabled: Option<bool>,
     pub app_id: Option<String>,
 }
@@ -60,7 +57,6 @@ impl AppConfig {
             .with_context(|| format!("Invalid config at {}", path.display()))
     }
 
-    /// Environment variable > config file > hardcoded default.
     pub fn get_client_id(&self) -> Option<String> {
         std::env::var("SPOTIFY_CLIENT_ID")
             .ok()
@@ -100,9 +96,6 @@ pub fn cache_path() -> Result<PathBuf> {
     Ok(dir.join("token.json"))
 }
 
-/// Separate file that persists just the refresh_token across rspotify auto-refreshes.
-/// rspotify drops the refresh_token from its Token object when Spotify's refresh
-/// response omits it (meaning "keep using the same one"), so we save it ourselves.
 pub fn refresh_token_path() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("Could not determine cache directory")?;
     let dir = base.join("isi-music");

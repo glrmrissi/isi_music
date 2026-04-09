@@ -49,8 +49,6 @@ impl SpotifyAuth {
         Ok(AuthCodePkceSpotify::with_config(creds, oauth, rspotify_config))
     }
 
-    /// Opens the browser and waits for the OAuth callback via local server.
-    /// Returns the `code` extracted from the redirect URL.
     pub async fn run_oauth_flow(authorize_url: &str) -> Result<String> {
         let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
             .await
