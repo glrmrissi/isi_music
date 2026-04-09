@@ -13,8 +13,6 @@ use mpris_server::{
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 
-// ── Shared state (app writes, D-Bus impl reads) ───────────────────────────────
-
 #[derive(Clone, Default)]
 pub struct MprisState {
     pub title:        String,
@@ -30,7 +28,6 @@ pub struct MprisState {
     pub repeat_queue: bool,
 }
 
-// ── Commands sent from D-Bus clients → app ────────────────────────────────────
 
 pub enum MprisCmd {
     Play,
@@ -40,8 +37,6 @@ pub enum MprisCmd {
     Seek(i64),      // absolute position in microseconds
     SetVolume(f64), // 0.0 – 1.0
 }
-
-// ── D-Bus implementation ──────────────────────────────────────────────────────
 
 struct MprisImpl {
     state:  Arc<Mutex<MprisState>>,
@@ -165,8 +160,6 @@ impl PlayerInterface for MprisImpl {
     async fn can_control(&self) -> zbus::fdo::Result<bool>      { Ok(true) }
 }
 
-// ── Public handle returned to the app ────────────────────────────────────────
-
 pub struct MprisHandle {
     /// Written by the app; read by D-Bus handlers.
     pub state: Arc<Mutex<MprisState>>,
@@ -184,7 +177,6 @@ impl MprisHandle {
     }
 }
 
-// ── Server startup ────────────────────────────────────────────────────────────
 
 pub async fn spawn() -> Result<MprisHandle> {
     let state  = Arc::new(Mutex::new(MprisState::default()));

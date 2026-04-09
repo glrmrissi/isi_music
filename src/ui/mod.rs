@@ -9,14 +9,11 @@ use rspotify::model::RepeatState;
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 
-// ── Album Art ─────────────────────────────────────────────────────────────────
 
 pub struct AlbumArtData {
-    /// Render state (kitty/sixel/halfblocks via ratatui-image; handles resize automatically)
     pub image_state: Option<StatefulProtocol>,
 }
 
-// ── Playback State ────────────────────────────────────────────────────────────
 #[derive(Clone, Debug)]
 pub struct PlaybackState {
     pub title: String,
@@ -29,9 +26,7 @@ pub struct PlaybackState {
     pub duration_ms: u64,
     pub volume: u8,
     pub art_url: Option<String>,
-    /// True when the active player is playing a local file (not Spotify).
     pub is_local: bool,
-    /// True when Radio Mode is enabled (auto-fetch recommendations when queue ends).
     pub radio_mode: bool,
 }
 
@@ -53,8 +48,6 @@ impl Default for PlaybackState {
         }
     }
 }
-
-// ── Panel Focus ───────────────────────────────────────────────────────────────
 
 #[derive(PartialEq)]
 pub enum Focus {
@@ -84,8 +77,6 @@ impl SearchPanel {
     }
 }
 
-// ── Active Content ────────────────────────────────────────────────────────────
-
 #[derive(Default, PartialEq)]
 pub enum ActiveContent {
     #[default]
@@ -97,8 +88,6 @@ pub enum ActiveContent {
     LocalFiles,
 }
 
-// ── Library items (fixed) ─────────────────────────────────────────────────────
-
 const LIBRARY_ITEMS: &[&str] = &[
     "Liked Songs",
     "Albums",
@@ -106,8 +95,6 @@ const LIBRARY_ITEMS: &[&str] = &[
     "Podcasts",
     "Local Files",
 ];
-
-// ── Search Results ────────────────────────────────────────────────────────────
 
 pub struct SearchResults {
     pub tracks:   Vec<TrackSummary>,
@@ -205,18 +192,12 @@ impl SearchResults {
     }
 }
 
-// ── UI State ──────────────────────────────────────────────────────────────────
-
 pub struct UiState {
     pub focus: Focus,
-    // Left panel: Library (fixed 5 items)
     pub library_list: ListState,
-    // Left panel: Playlists
     pub playlists: Vec<PlaylistSummary>,
     pub playlist_list: ListState,
-    // Right panel: Active content type
     pub active_content: ActiveContent,
-    // Right panel: Tracks
     pub tracks: Vec<TrackSummary>,
     pub track_list: ListState,
     pub active_playlist_uri: Option<String>,
@@ -224,41 +205,31 @@ pub struct UiState {
     pub tracks_offset: u32,
     pub tracks_total: u32,
     pub tracks_loading: bool,
-    // Right panel: Albums
     pub albums: Vec<AlbumSummary>,
     pub album_list: ListState,
     pub albums_offset: u32,
     pub albums_total: u32,
-    // Right panel: Artists
     pub artists: Vec<ArtistSummary>,
     pub artist_list: ListState,
     pub active_artist_name: Option<String>,
-    // Right panel: Shows/Podcasts
     pub shows: Vec<ShowSummary>,
     pub show_list: ListState,
     pub shows_offset: u32,
     pub shows_total: u32,
-    // Right panel: Search
     pub search_results: Option<SearchResults>,
     pub previous_search: Option<SearchResults>,
-    // Fullscreen now playing
     pub fullscreen_player: bool,
-    // Queue panel
     pub queue_items: Vec<(String, String)>, // (name, artist)
     pub queue_list: ListState,
-    // Album art
     pub show_album_art: bool,
     pub album_art: Option<AlbumArtData>,
-    // Playback
     pub playback: PlaybackState,
     pub status_msg: Option<String>,
     pub search_query: String,
     pub search_active: bool,
-    // Animation
     pub spin_angle: f64,
     pub marquee_offset: usize,
     pub marquee_ms: u64,
-    // Real-time audio spectrum (N_BANDS values, 0..1)
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
 }
@@ -418,7 +389,6 @@ impl UiState {
         }
     }
 
-    /// Tab: Library → Playlists → Tracks → Queue → Library
     pub fn switch_focus(&mut self) {
         self.search_active = false;
         self.focus = match self.focus {
@@ -440,7 +410,6 @@ impl UiState {
         };
     }
 
-    /// Cycle search panel (Tab when focused on Search)
     pub fn switch_search_panel(&mut self) {
         if let Some(sr) = &mut self.search_results {
             sr.next_panel();
@@ -460,8 +429,6 @@ fn scroll_down(state: &mut ListState, len: usize) {
     state.select(Some(i));
 }
 
-// ── UI Implementation ─────────────────────────────────────────────────────────
-
 pub struct Ui;
 
 impl Ui {
@@ -470,7 +437,6 @@ impl Ui {
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
         let area = frame.area();
 
-        // Fullscreen player: visualizer-centric layout
         if state.fullscreen_player && !state.playback.title.is_empty() {
             let root = Layout::default()
                 .direction(Direction::Vertical)
@@ -491,7 +457,6 @@ impl Ui {
             && state.active_content == ActiveContent::None
             && !state.playback.title.is_empty();
 
-        // ── Player mode: header full-width at top, visualizer inside now playing ──
         if showing_now_playing {
             let root = Layout::default()
                 .direction(Direction::Vertical)
@@ -529,7 +494,6 @@ impl Ui {
             return;
         }
 
-        // ── Normal mode: visualizer top-left, marquee + progress at bottom ───
         let root = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
@@ -598,10 +562,7 @@ impl Ui {
         self.render_help(frame, state, root[3]);
     }
 
-    // ── Compact player strip (fullscreen mode: art left + info right) ────────────
-
     fn render_player_compact(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        // Album art occupies a square on the left (width = height * 2 due to cell aspect ratio)
         let art_h = area.height;
         let art_w = (art_h * 2).min(area.width * 2 / 5);
 
@@ -610,7 +571,6 @@ impl Ui {
             .constraints([Constraint::Length(art_w), Constraint::Min(0)])
             .split(area);
 
-        // ── Art (borderless) ──────────────────────────────────────────────────
         if let Some(art) = &mut state.album_art {
             if let Some(img_state) = &mut art.image_state {
                 let img_h = cols[0].height.min(cols[0].width / 2);
@@ -632,7 +592,6 @@ impl Ui {
             }
         }
 
-        // ── Info (title, artist, album, progress, controls) ───────────────────
         let pb = &state.playback;
         let info = cols[1];
 
@@ -686,7 +645,6 @@ impl Ui {
             )),
         ];
 
-        // Vertically center the lines block inside the info area
         let text_h = lines.len() as u16;
         let y_offset = info.height.saturating_sub(text_h) / 2;
         let text_rect = Rect {
@@ -699,8 +657,6 @@ impl Ui {
         frame.render_widget(Paragraph::new(lines), text_rect);
     }
 
-    // ── Visualizer (braille dots — 2× horizontal, 4× vertical resolution) ───────
-
     fn render_visualizer(&self, frame: &mut Frame, pb: &PlaybackState, viz_bands: &[f32], area: Rect) {
         let block = Block::default();
 
@@ -709,10 +665,6 @@ impl Ui {
 
         if inner.width == 0 || inner.height == 0 { return; }
 
-        // One bar per cell, both braille pixel columns filled (2px wide, no gap).
-        // Braille bit layout (bottom→top):
-        //   left : bit6, bit2, bit1, bit0
-        //   right: bit7, bit5, bit4, bit3
         const LEFT:  [u8; 4] = [1 << 6, 1 << 2, 1 << 1, 1 << 0];
         const RIGHT: [u8; 4] = [1 << 7, 1 << 5, 1 << 4, 1 << 3];
 
@@ -763,12 +715,11 @@ impl Ui {
         }
     }
 
-    // ── Header ────────────────────────────────────────────────────────────────
 
     fn render_header(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let pb = &state.playback;
 
-        let repeat_label = match pb.repeat {
+        let _repeat_label = match pb.repeat {
             RepeatState::Off     => "",
             RepeatState::Context => "  󰑖 Rep",
             RepeatState::Track   => "  󰑘 Rep1",
@@ -800,11 +751,9 @@ impl Ui {
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Left), inner);
     }
 
-    // ── Library ───────────────────────────────────────────────────────────────
-
     fn render_library(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Library;
-        let pb = &state.playback;
+        let _pb = &state.playback;
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -827,8 +776,6 @@ impl Ui {
 
         frame.render_stateful_widget(list, area, &mut state.library_list);
     }
-
-    // ── Playlists ─────────────────────────────────────────────────────────────
 
     fn render_playlists(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Playlists;
@@ -868,8 +815,6 @@ impl Ui {
 
         frame.render_stateful_widget(list, area, &mut state.playlist_list);
     }
-
-    // ── Welcome ───────────────────────────────────────────────────────────────
 
     fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.playback.is_local {
@@ -934,7 +879,6 @@ impl Ui {
             }
         }
 
-        // ── Text info ────────────────────────────────────────────────────────
         if info_h > 0 {
             let pb = &state.playback;
 
@@ -975,7 +919,6 @@ impl Ui {
             );
         }
 
-        // ── Visualizer ───────────────────────────────────────────────────────
         let viz_bands = state.viz_bands.clone();
         let pb = state.playback.clone();
         self.render_visualizer(frame, &pb, &viz_bands, viz_area);
@@ -999,7 +942,6 @@ impl Ui {
 
         let pb = &state.playback;
 
-        // Split: top = track info, bottom = visualizer
         let viz_h = (inner.height / 3).max(4);
         let info_h = inner.height.saturating_sub(viz_h);
 
@@ -1011,7 +953,6 @@ impl Ui {
         let info_area = sections[0];
         let viz_area  = sections[1];
 
-        // ── Track info ────────────────────────────────────────────────────────
         let repeat_icon = match pb.repeat {
             rspotify::model::RepeatState::Off     => "󰑗",
             rspotify::model::RepeatState::Context => "󰑖",
@@ -1043,14 +984,12 @@ impl Ui {
                 Style::default().fg(Color::DarkGray),
             )),
         ];
-        // (radio_mode not shown for local playback — recommendations require Spotify)
 
         frame.render_widget(
             Paragraph::new(lines).alignment(Alignment::Center),
             info_area,
         );
 
-        // ── Visualizer (reuse existing renderer) ──────────────────────────────
         self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area);
     }
 
@@ -1090,8 +1029,6 @@ impl Ui {
             inner,
         );
     }
-
-    // ── Tracks ────────────────────────────────────────────────────────────────
 
     fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
@@ -1141,8 +1078,6 @@ impl Ui {
         frame.render_stateful_widget(list, area, &mut state.track_list);
     }
 
-    // ── Albums ────────────────────────────────────────────────────────────────
-
     fn render_albums(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
 
@@ -1178,8 +1113,6 @@ impl Ui {
         frame.render_stateful_widget(list, area, &mut state.album_list);
     }
 
-    // ── Artists ───────────────────────────────────────────────────────────────
-
     fn render_artists(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
 
@@ -1212,8 +1145,6 @@ impl Ui {
 
         frame.render_stateful_widget(list, area, &mut state.artist_list);
     }
-
-    // ── Shows/Podcasts ────────────────────────────────────────────────────────
 
     fn render_shows(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
@@ -1249,8 +1180,6 @@ impl Ui {
 
         frame.render_stateful_widget(list, area, &mut state.show_list);
     }
-
-    // ── Search Panels (4 columns) ─────────────────────────────────────────────
 
     fn render_search_panels(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let rows = Layout::default()
@@ -1289,7 +1218,6 @@ impl Ui {
         };
 
         if let Some(sr) = &mut state.search_results {
-            // Tracks (top-left)
             let track_items: Vec<ListItem> = sr.tracks.iter().enumerate().map(|(idx, t)| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰓇 ", Style::default().fg(Color::Green)),
@@ -1306,7 +1234,6 @@ impl Ui {
                 .highlight_symbol("  ");
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
-            // Artists (top-right)
             let artist_items: Vec<ListItem> = sr.artists.iter().map(|a| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰋌 ", Style::default().fg(Color::Green)),
@@ -1325,7 +1252,6 @@ impl Ui {
                 .highlight_symbol("  ");
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
-            // Albums (bottom-left)
             let album_items: Vec<ListItem> = sr.albums.iter().map(|a| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰀥 ", Style::default().fg(Color::Green)),
@@ -1341,7 +1267,6 @@ impl Ui {
                 .highlight_symbol("  ");
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
-            // Playlists (bottom-right)
             let playlist_items: Vec<ListItem> = sr.playlists.iter().map(|p| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰲚 ", Style::default().fg(Color::Green)),
@@ -1358,8 +1283,6 @@ impl Ui {
             frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
         }
     }
-
-    // ── Progress bar ──────────────────────────────────────────────────────────
 
     fn render_progress(&self, frame: &mut Frame, pb: &PlaybackState, area: Rect) {
         let ratio = if pb.duration_ms > 0 {
@@ -1396,8 +1319,6 @@ impl Ui {
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
     }
 
-    // ── Marquee ───────────────────────────────────────────────────────────────
-
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
             "isi-music v0.1.0".to_string()
@@ -1417,8 +1338,6 @@ impl Ui {
         );
     }
 
-    // ── Album Art ─────────────────────────────────────────────────────────────
-
     fn render_album_art(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1431,7 +1350,6 @@ impl Ui {
 
         if inner.width == 0 || inner.height == 0 { return; }
 
-        // Square image: width = height * 2 cells (terminal cells are ~2:1 height:width in pixels)
         let img_h = inner.height.min(inner.width / 2);
         let img_w = img_h * 2;
         let padding = inner.width.saturating_sub(img_w) / 2;
@@ -1455,8 +1373,6 @@ impl Ui {
             }
         }
     }
-
-    // ── Queue ─────────────────────────────────────────────────────────────────
 
     fn render_queue(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Queue;
@@ -1496,8 +1412,6 @@ impl Ui {
 
         frame.render_stateful_widget(list, area, &mut state.queue_list);
     }
-
-    // ── Help / Status ─────────────────────────────────────────────────────────
 
     fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let content = if let Some(msg) = &state.status_msg {

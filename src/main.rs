@@ -227,7 +227,6 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let arg1 = args.get(1).map(|s| s.as_str());
 
-    // ── Daemon: fork → detach from terminal → single-thread runtime ──────────
     if arg1 == Some("--daemon") {
         // Fork BEFORE building the tokio runtime (forking after is unsafe with threads)
         let child_pid = unsafe { libc::fork() };
@@ -271,7 +270,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── IPC commands: tiny single-thread runtime ──────────────────────────────
     let ipc_cmd: Option<String> = match arg1 {
         Some(cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-"
                     | "--status" | "--ls" | "--liked" | "--quit-daemon")) => {
@@ -309,7 +307,6 @@ fn main() -> Result<()> {
             .block_on(run_lastfm_setup(&mut cfg));
     }
 
-    // ── TUI mode: multi-thread but capped at 2 workers ───────────────────────
     if cfg.needs_setup() {
         run_setup(&mut cfg)?;
     }

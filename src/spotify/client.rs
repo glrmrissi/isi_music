@@ -18,6 +18,7 @@ pub struct PlaylistSummary {
     pub name: String,
     pub uri: String,
     pub total_tracks: u32,
+    #[allow(dead_code)]
     pub art_url: Option<String>
 }
 
@@ -49,6 +50,7 @@ pub struct ShowSummary {
     pub id: String,
     pub name: String,
     pub publisher: String,
+    #[allow(dead_code)]
     pub uri: String,
     pub total_episodes: u32,
 }
@@ -70,7 +72,6 @@ pub struct SpotifyClient {
     shuffle_state: bool,
     repeat_state: RepeatState,
     user_market: Option<String>,
-    /// False when running without Spotify login (local-only mode).
     pub authenticated: bool,
 }
 
@@ -78,23 +79,14 @@ impl SpotifyClient {
     pub async fn new() -> Result<Self> {
         let mut client = SpotifyAuth::build_client()?;
 
-        // rspotify drops the refresh_token from token.json after every auto-refresh
-        // (Spotify omits it from the refresh response meaning "keep using the same one",
-        // but rspotify replaces the whole Token object). We persist it ourselves,
-        // exchange it for a fresh access_token via direct HTTP, write a valid token.json,
-        // and only fall back to full browser OAuth if the refresh_token is missing or revoked.
         let saved_rt = config::load_refresh_token();
 
         let needs_auth = if let Some(ref rt) = saved_rt {
             match Self::exchange_refresh_token(rt).await {
                 Ok((access_token, expires_in_secs, new_rt)) => {
-                    // PKCE rotates the refresh_token on every exchange — persist the new one
-                    // immediately so the next launch uses the fresh token.
                     let effective_rt = new_rt.as_deref().unwrap_or(rt.as_str());
                     config::save_refresh_token(effective_rt);
 
-                    // Build a Token and set it directly in the client's in-memory slot.
-                    // (read_token_cache only returns the token, it does not set client.token.)
                     use chrono::{Duration, Utc};
                     use std::collections::HashSet;
                     let expires_at = Utc::now() + Duration::try_seconds(expires_in_secs as i64)
@@ -117,7 +109,7 @@ impl SpotifyClient {
                     if let Ok(mut guard) = client.token.lock().await {
                         *guard = Some(token);
                     }
-                    false // token loaded — no OAuth needed
+                    false 
                 }
                 Err(e) => {
                     warn!("Refresh token exchange failed ({e}), re-authenticating...");
@@ -139,7 +131,6 @@ impl SpotifyClient {
                 .context("Failed to exchange code for token")?;
         }
 
-        // Snapshot the refresh_token for future launches (rspotify may drop it later).
         {
             if let Ok(guard) = client.token.lock().await {
                 if let Some(token) = guard.as_ref() {
@@ -163,23 +154,6 @@ impl SpotifyClient {
         Ok(spotify)
     }
 
-    /// Creates a stub client for local-only mode (no Spotify login required).
-    /// All API calls will return errors gracefully.
-    pub fn new_unauthenticated() -> Self {
-        // Build a dummy client — it won't be used for any real requests.
-        let client = SpotifyAuth::build_client()
-            .unwrap_or_else(|_| AuthCodePkceSpotify::default());
-        Self {
-            client,
-            http: reqwest::Client::new(),
-            shuffle_state: false,
-            repeat_state: RepeatState::Off,
-            user_market: None,
-            authenticated: false,
-        }
-    }
-
-    /// Returns the current access token for use with librespot.
     pub async fn get_access_token(&self) -> Option<String> {
         if !self.authenticated { return None; }
         let guard = self.client.token.lock().await.ok()?;
@@ -421,22 +395,6 @@ impl SpotifyClient {
 
     pub async fn prev_track(&self) -> Result<()> {
         self.client.previous_track(None).await?;
-        Ok(())
-    }
-
-    pub async fn toggle_shuffle(&mut self) -> Result<()> {
-        self.shuffle_state = !self.shuffle_state;
-        self.client.shuffle(self.shuffle_state, None).await?;
-        Ok(())
-    }
-
-    pub async fn cycle_repeat(&mut self) -> Result<()> {
-        self.repeat_state = match self.repeat_state {
-            RepeatState::Off => RepeatState::Context,
-            RepeatState::Context => RepeatState::Track,
-            RepeatState::Track => RepeatState::Off,
-        };
-        self.client.repeat(self.repeat_state, None).await?;
         Ok(())
     }
 
@@ -792,14 +750,10 @@ impl SpotifyClient {
         Ok((tracks, total))
     }
 
-    /// Return a cheap clone of the inner HTTP client (reqwest::Client is Arc-backed).
     pub fn http_client(&self) -> reqwest::Client {
         self.http.clone()
     }
 
-    /// Exchange a refresh_token for a fresh access_token via Spotify's token endpoint.
-    /// Returns (access_token, expires_in_seconds, new_refresh_token).
-    /// PKCE flow always rotates the refresh_token — callers must save the new one.
     async fn exchange_refresh_token(refresh_token: &str) -> Result<(String, u64, Option<String>)> {
         let cfg = config::AppConfig::load()?;
         let client_id = cfg.get_client_id()
@@ -828,7 +782,6 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("no access_token in response"))?
             .to_string();
         let expires_in = json["expires_in"].as_u64().unwrap_or(3600);
-        // PKCE rotates the refresh_token on every exchange; capture it if present.
         let new_rt = json["refresh_token"].as_str().map(|s| s.to_string());
 
         Ok((access_token, expires_in, new_rt))
@@ -992,7 +945,6 @@ impl SpotifyClient {
             .bearer_auth(&token)
             .send().await.ok()?
             .json().await.ok()?;
-        // images are sorted largest→smallest; last() is smallest (64×64)
         json["album"]["images"].as_array()?
             .last()
             .and_then(|img| img["url"].as_str())

@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
 use crate::audio_sink::AnalyzingSource;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -12,17 +12,19 @@ use tracing::{error, info, warn};
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode};
 use crate::audio_sink::N_BANDS;
 
-/// Tracks queued for playback (local files), carrying full metadata.
 struct LocalTrack {
     path: PathBuf,
+    #[allow(dead_code)]
     name: String,
+    #[allow(dead_code)]
     artist: String,
+    #[allow(dead_code)]
     album: String,
+    #[allow(dead_code)]
     duration_ms: u64,
 }
 
 pub struct LocalPlayer {
-    // rodio output stream — must be kept alive for audio to play
     _stream: OutputStream,
     sink: Sink,
     queue: Vec<LocalTrack>,
@@ -35,7 +37,6 @@ pub struct LocalPlayer {
     pub repeat: RepeatMode,
     event_tx: mpsc::UnboundedSender<PlayerNotification>,
     event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
-    /// Shared frequency-band energies (stub — always zeros for local player)
     pub band_energies: Arc<Mutex<Vec<f32>>>,
 }
 
@@ -66,7 +67,6 @@ impl LocalPlayer {
         })
     }
 
-    /// Parse a file:// URI or plain path into a PathBuf.
     fn uri_to_path(uri: &str) -> PathBuf {
         if let Some(stripped) = uri.strip_prefix("file://") {
             PathBuf::from(stripped)
@@ -103,7 +103,6 @@ impl LocalPlayer {
             }
         };
 
-        // Wrap with analyzer so band energies are updated in real time
         let analyzing = AnalyzingSource::new(
             decoder,
             Arc::clone(&self.band_energies),
@@ -113,12 +112,8 @@ impl LocalPlayer {
         self.current_index = Some(idx);
         self.is_playing = true;
         let _ = self.event_tx.send(PlayerNotification::Playing);
-
-        // Track-end detection is done by polling in try_recv_event:
-        // each tick checks sink.empty() + was_playing → sends TrackEnded.
     }
 
-    /// Called each tick to detect when the current track finishes.
     fn poll_sink(&mut self) {
         if self.is_playing && self.sink.empty() {
             self.is_playing = false;
@@ -143,7 +138,6 @@ impl LocalPlayer {
         if !self.user_queue.is_empty() {
             let track = self.user_queue.remove(0);
             let path = Self::uri_to_path(&track.uri);
-            // Temporarily add to queue end and play it
             let lt = LocalTrack {
                 path,
                 name: track.name.clone(),
@@ -247,7 +241,6 @@ impl AudioPlayer for LocalPlayer {
     fn prev(&mut self) -> bool { self.prev() }
     fn play_at(&mut self, index: usize) { self.play_at(index); }
     fn seek(&self, position_ms: u32) {
-        // rodio 0.21 supports seek via sink.try_seek
         let pos = std::time::Duration::from_millis(position_ms as u64);
         let _ = self.sink.try_seek(pos);
     }

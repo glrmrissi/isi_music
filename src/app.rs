@@ -356,7 +356,7 @@ impl App {
             #[cfg(feature = "mpris")]
             if let Some(mpris) = &mut self.mpris {
                 let pb = &self.state.playback;
-                let art_url = self.state.art_url.clone(); 
+                let _art_url = self.state.art_url.clone(); 
 
                 mpris.update(MprisState {
                     title: pb.title.clone(),

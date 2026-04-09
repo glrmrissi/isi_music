@@ -12,10 +12,6 @@ const FFT_SIZE: usize = 2048;
 const SAMPLE_RATE: f32 = 44100.0;
 const STEP: usize = 512;
 
-// ── Shared FFT analyzer ────────────────────────────────────────────────────────
-
-/// Core FFT band-energy analyzer. Feed mono f32 samples via `push_mono`,
-/// and the shared `bands` arc is updated in real time.
 pub struct BandAnalyzer {
     bands: Arc<Mutex<Vec<f32>>>,
     buffer: Vec<f32>,
@@ -46,7 +42,6 @@ impl BandAnalyzer {
         }
     }
 
-    /// Push a single mono f32 sample (already mixed to mono from stereo).
     pub fn push_mono(&mut self, sample: f32) {
         self.buffer.push(sample);
         while self.buffer.len() >= FFT_SIZE {
@@ -56,7 +51,6 @@ impl BandAnalyzer {
         }
     }
 
-    /// Push a stereo/multichannel slice of f64 samples (librespot format).
     pub fn push_f64_stereo(&mut self, samples: &[f64]) {
         let mono = samples.chunks(2).map(|ch| {
             let l = ch[0] as f32;
@@ -126,8 +120,6 @@ impl BandAnalyzer {
     }
 }
 
-// ── Librespot sink wrapper ─────────────────────────────────────────────────────
-
 pub struct AnalyzerSink {
     inner: Box<dyn Sink>,
     analyzer: BandAnalyzer,
@@ -156,9 +148,6 @@ impl Sink for AnalyzerSink {
     }
 }
 
-// ── Rodio source wrapper ───────────────────────────────────────────────────────
-
-/// Wraps any rodio `Source<Item=f32>` and feeds samples into `BandAnalyzer`.
 pub struct AnalyzingSource<S> {
     inner: S,
     analyzer: BandAnalyzer,
