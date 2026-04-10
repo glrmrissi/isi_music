@@ -3,73 +3,184 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
 
 permissions:
   contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
+  validate:
+    name: Validate Tag Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate semantic version
+        run: |
+          if [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must follow semantic versioning: v1.2.3"
+            exit 1
+          fi
+          echo "Tag format valid: ${{ github.ref_name }}"
+
   build:
     name: Build (${{ matrix.label }})
+    needs: validate
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            label: linux
-            target: x86_64-unknown-linux-gnu 
+            label: Linux x86_64
+            target: x86_64-unknown-linux-gnu
             artifact_name: isi-music
-            asset_name: isi-music-linux-x86_64 
+            asset_name: isi-music-linux-x86_64
+            use_cross: false
+
+          - os: macos-latest
+            label: macOS Intel
+            target: x86_64-apple-darwin
+            artifact_name: isi-music
+            asset_name: isi-music-macos-intel
+            use_cross: false
+
+          - os: macos-latest
+            label: macOS ARM64
+            target: aarch64-apple-darwin
+            artifact_name: isi-music
+            asset_name: isi-music-macos-arm64
+            use_cross: false
+
+          - os: windows-latest
+            label: Windows x86_64
+            target: x86_64-pc-windows-msvc
+            artifact_name: isi-music.exe
+            asset_name: isi-music-windows-x86_64.exe
+            use_cross: false
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libpulse-dev libdbus-1-dev libssl-dev
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            pkg-config \
+            libasound2-dev \
+            libpulse-dev \
+            libdbus-1-dev \
+            libssl-dev
 
-      - name: Setup Rust
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release
-        run: OPENSSL_STATIC=1 cargo build --release --locked --target ${{ matrix.target }}
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      - name: Prepare asset
+      - name: Build release binary
+        env:
+          OPENSSL_STATIC: 1
         run: |
-          cd target/${{ matrix.target }}/release/
-          cp ${{ matrix.artifact_name }} ../../../${{ matrix.asset_name }}
+          cargo build \
+            --release \
+            --locked \
+            --target ${{ matrix.target }} \
+            --verbose
 
-      - name: Upload artifact
+      - name: Create release artifacts
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+          
+          if [ -f "$BINARY_PATH" ]; then
+            cp "$BINARY_PATH" "release-artifacts/${{ matrix.asset_name }}"
+            echo "Artifact ready: ${{ matrix.asset_name }}"
+            
+            # Exibir informações do binário
+            if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
+              ls -lh "release-artifacts/${{ matrix.asset_name }}"
+              file "release-artifacts/${{ matrix.asset_name }}"
+            fi
+          else
+            echo "Binary not found at: $BINARY_PATH"
+            exit 1
+          fi
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }} 
+          path: release-artifacts/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 1
 
-  release:
-    name: Create Release
+  create-release:
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true 
+          merge-multiple: true
+
+      - name: Verify artifacts
+        run: |
+          echo "Artifacts downloaded:"
+          ls -lh artifacts/
+          
+          if [ -z "$(ls -A artifacts/)" ]; then
+            echo "No artifacts found"
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## Release ${{ github.ref_name }}
+            
+            ### ✨ What's New
+            - See commits and PRs merged in this release
+            
+            ### 📥 Downloads
+            Precompiled binaries are available for:
+            - **Linux** (x86_64)
+            - **macOS** (Intel & Apple Silicon)
+            - **Windows** (x86_64)
+            
+            ### 📝 Installation
+            Extract the binary and add it to your PATH.
           generate_release_notes: true
-          files: artifacts/* 
+          files: artifacts/*
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        if: success()
+        run: |
+          echo "Release ${{ github.ref_name }} created successfully!"
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
