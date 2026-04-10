@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use rodio::{Decoder, OutputStreamBuilder, Sink};
 use crate::audio_sink::AnalyzingSource;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -25,12 +25,11 @@ struct LocalTrack {
 }
 
 pub struct LocalPlayer {
-    _stream: OutputStream,
     sink: Sink,
     queue: Vec<LocalTrack>,
     user_queue: Vec<QueuedTrack>,
     playing_queued: Option<QueuedTrack>,
-    current_index: Option<usize>,
+    current_idx: Option<usize>, 
     pub is_playing: bool,
     pub volume: u8,
     pub shuffle: bool,
@@ -44,19 +43,24 @@ impl LocalPlayer {
     pub fn new(volume: u8) -> anyhow::Result<Self> {
         let stream = OutputStreamBuilder::open_default_stream()
             .map_err(|e| anyhow::anyhow!("Audio output unavailable: {e}"))?;
-        let sink = Sink::connect_new(stream.mixer());
+
+        let sink = Sink::connect_new(&stream.mixer());
+
+        std::thread::spawn(move || {
+            let _keep_alive = stream;
+            std::thread::park(); 
+        });
 
         sink.set_volume(volume as f32 / 100.0);
 
         let (tx, rx) = mpsc::unbounded_channel();
 
         Ok(Self {
-            _stream: stream,
             sink,
             queue: Vec::new(),
             user_queue: Vec::new(),
             playing_queued: None,
-            current_index: None,
+            current_idx: None,
             is_playing: false,
             volume,
             shuffle: false,
@@ -109,7 +113,7 @@ impl LocalPlayer {
         );
         self.sink.append(analyzing);
         self.sink.play();
-        self.current_index = Some(idx);
+        self.current_idx = Some(idx);
         self.is_playing = true;
         let _ = self.event_tx.send(PlayerNotification::Playing);
     }
@@ -129,7 +133,7 @@ impl LocalPlayer {
         self.playing_queued = None;
 
         if self.repeat == RepeatMode::Track {
-            if let Some(idx) = self.current_index {
+            if let Some(idx) = self.current_idx {
                 self.load_and_play(idx);
                 return true;
             }
@@ -152,7 +156,7 @@ impl LocalPlayer {
             return true;
         }
 
-        if let Some(idx) = self.current_index {
+        if let Some(idx) = self.current_idx {
             let len = self.queue.len();
             let next = if self.shuffle && len > 1 {
                 use rand::seq::SliceRandom;
@@ -176,7 +180,7 @@ impl LocalPlayer {
     }
 
     pub fn prev(&mut self) -> bool {
-        if let Some(idx) = self.current_index {
+        if let Some(idx) = self.current_idx {
             if idx > 0 {
                 self.load_and_play(idx - 1);
                 return true;
@@ -195,24 +199,14 @@ impl LocalPlayer {
         }
     }
 
-    pub fn play(&mut self) {
-        self.sink.play();
-        self.is_playing = true;
-    }
-
-    pub fn pause(&mut self) {
-        self.sink.pause();
-        self.is_playing = false;
-    }
-
     fn apply_volume(&self) {
         self.sink.set_volume(self.volume as f32 / 100.0);
     }
 
-    fn current_uri(&self) -> Option<String> {
-        self.current_index
-            .and_then(|i| self.queue.get(i))
-            .map(|t| format!("file://{}", t.path.display()))
+     fn current_uri(&self) -> Option<String> {
+        self.current_idx.and_then(|idx| {
+            self.queue.get(idx).map(|track| track.path.to_string_lossy().to_string())
+        })
     }
 }
 
@@ -220,7 +214,6 @@ impl AudioPlayer for LocalPlayer {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
         self.queue = uris.into_iter().map(|uri| {
             let path = Self::uri_to_path(&uri);
-            // Try to extract name from filename
             let name = path.file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Unknown")
@@ -238,8 +231,8 @@ impl AudioPlayer for LocalPlayer {
     fn remove_from_user_queue(&mut self, index: usize) { self.user_queue.remove(index); }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
 
-    fn play(&mut self) { self.play(); }
-    fn pause(&mut self) { self.pause(); }
+    fn play(&mut self) { self.sink.play(); self.is_playing = true; }
+    fn pause(&mut self) { self.sink.pause(); self.is_playing = false; }
     fn toggle(&mut self) { self.toggle(); }
     fn next(&mut self) -> bool { self.next() }
     fn prev(&mut self) -> bool { self.prev() }
@@ -253,7 +246,8 @@ impl AudioPlayer for LocalPlayer {
     fn volume(&self) -> u8 { self.volume }
     fn shuffle(&self) -> bool { self.shuffle }
     fn repeat(&self) -> RepeatMode { self.repeat }
-    fn current_index(&self) -> Option<usize> { self.current_index() }
+    
+    fn current_index(&self) -> Option<usize> { self.current_idx }
     fn current_uri(&self) -> Option<String> { self.current_uri() }
 
     fn volume_up(&mut self) {
