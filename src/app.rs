@@ -78,6 +78,7 @@ fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
 use crate::discord::DiscordRpc;
 use crate::lastfm::LastfmClient;
 use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification, RepeatMode};
+use crate::theme::Theme;
 #[cfg(feature = "mpris")]
 use crate::mpris::{MprisCmd, MprisHandle, MprisState};
 use rspotify::model::RepeatState;
@@ -129,10 +130,11 @@ pub struct App {
     /// Kept separate from `state.tracks` so that navigating to another playlist
     /// while music is playing does not corrupt playback metadata.
     playing_tracks: Vec<crate::spotify::TrackSummary>,
+    theme: Theme
 }
 
 impl App {
-    pub async fn new(picker: Picker) -> Result<Self> {
+    pub async fn new(picker: Picker, theme: Theme) -> Result<Self> {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
             (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(k.clone(), s.clone(), sk.clone()))),
@@ -212,7 +214,7 @@ impl App {
             parked_player,
             local_active,
             lastfm,
-            ui: Ui::new(),
+            ui: Ui::new(theme.clone()),
             state,
             last_tick: Instant::now(),
             should_quit: false,
@@ -236,6 +238,7 @@ impl App {
             radio_mode: false,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
+            theme
         })
     }
 

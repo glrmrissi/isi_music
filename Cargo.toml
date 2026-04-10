@@ -84,6 +84,9 @@ mpris-server = { version = "0.8", optional = true }
 # Discord Rich Presence
 discord-rich-presence = { version = "0.2", optional = true }
 
+# Hot reload
+notify = "4.0"
+
 [features]
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]

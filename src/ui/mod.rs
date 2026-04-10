@@ -8,6 +8,7 @@ use ratatui::{
 use rspotify::model::RepeatState;
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
+use crate::theme::Theme;
 
 
 pub struct AlbumArtData {
@@ -431,10 +432,20 @@ fn scroll_down(state: &mut ListState, len: usize) {
     state.select(Some(i));
 }
 
-pub struct Ui;
+pub struct Ui {
+    theme: Theme,
+}
 
 impl Ui {
-    pub fn new() -> Self { Self }
+    pub fn new(theme: Theme) -> Self { 
+        Self { theme }
+    }
+
+    pub fn with_default_theme() -> Self {
+        Self { 
+            theme: Theme::default() 
+        }
+    }
 
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
         let area = frame.area();
@@ -623,27 +634,27 @@ impl Ui {
             Line::from(""),
             Line::from(Span::styled(
                 truncate(&pb.title, info.width as usize),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 truncate(&pb.artist, info.width as usize),
-                Style::default().fg(Color::Green),
+                Style::default().fg(self.theme.accent_color),
             )),
             Line::from(Span::styled(
                 truncate(&pb.album, info.width as usize),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled(fmt_duration(pb.progress_ms), Style::default().fg(Color::DarkGray)),
+                Span::styled(fmt_duration(pb.progress_ms), Style::default().fg(self.theme.border_inactive)),
                 Span::raw(" "),
-                Span::styled(bar, Style::default().fg(Color::Green)),
+                Span::styled(bar, Style::default().fg(self.theme.accent_color)),
                 Span::raw(" "),
-                Span::styled(fmt_duration(pb.duration_ms), Style::default().fg(Color::DarkGray)),
+                Span::styled(fmt_duration(pb.duration_ms), Style::default().fg(self.theme.border_inactive)),
             ]),
             Line::from(Span::styled(
                 format!("{}  {}  {}  vol {}%", play_icon, shuffle_icon, repeat_icon, pb.volume),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )),
         ];
 
@@ -689,10 +700,10 @@ impl Ui {
             let bar_h = ((amp * px_rows as f64) as usize).min(px_rows);
             if bar_h == 0 { continue; }
 
-            let color = if amp > 0.75 { Color::White }
-                        else if amp > 0.5 { Color::LightGreen }
-                        else if amp > 0.25 { Color::Green }
-                        else { Color::DarkGray };
+            let color = if amp > 0.75 { self.theme.text_primary }
+                        else if amp > 0.5 { self.theme.accent_color }
+                        else if amp > 0.25 { self.theme.accent_color }
+                        else { self.theme.border_inactive };
 
             for cell_y in 0..inner.height as usize {
                 let bottom_idx = inner.height as usize - 1 - cell_y;
@@ -724,33 +735,28 @@ impl Ui {
     fn render_header(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let pb = &state.playback;
 
-        let _repeat_label = match pb.repeat {
-            RepeatState::Off     => "",
-            RepeatState::Context => "  󰑖 Rep",
-            RepeatState::Track   => "  󰑘 Rep1",
-        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(if state.search_active { Color::Green } else { Color::DarkGray }));
+            .border_style(Style::default().fg(if state.search_active { self.theme.border_active } else { self.theme.border_inactive }));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let content = if state.search_active {
             Line::from(vec![
-                Span::styled("   Search: ", Style::default().fg(Color::Green)),
-                Span::styled(&state.search_query, Style::default().fg(Color::White)),
-                Span::styled("█", Style::default().fg(Color::Green).add_modifier(Modifier::SLOW_BLINK)),
+                Span::styled("   Search: ", Style::default().fg(self.theme.border_active)),
+                Span::styled(&state.search_query, Style::default().fg(self.theme.text_primary)),
+                Span::styled("█", Style::default().fg(self.theme.border_active).add_modifier(Modifier::SLOW_BLINK)),
             ])
         } else if state.search_results.is_some() {
             Line::from(vec![
-                Span::styled(" 󰍉  Search Results", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled("  [TAB] switch panel  [ENTER] open  [ESC] close", Style::default().fg(Color::DarkGray)),
+                Span::styled(" 󰍉  Search Results", Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)),
+                Span::styled("  [TAB] switch panel  [ENTER] open  [ESC] close", Style::default().fg(self.theme.border_inactive)),
             ])
         } else {
             Line::from(vec![
-                Span::styled("", Style::default().fg(Color::DarkGray)),
+                Span::styled("", Style::default().fg(self.theme.border_inactive)),
             ])
         };
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Left), inner);
@@ -758,7 +764,6 @@ impl Ui {
 
     fn render_library(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Library;
-        let _pb = &state.playback;
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -766,7 +771,7 @@ impl Ui {
             .title(Line::from(vec![
                 Span::raw(" 󰋑 Library "),
             ]).alignment(Alignment::Left))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         let items: Vec<ListItem> = LIBRARY_ITEMS.iter().map(|name| {
             ListItem::new(Line::from(vec![
@@ -776,7 +781,7 @@ impl Ui {
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.library_list);
@@ -800,22 +805,22 @@ impl Ui {
                 Span::raw(" 󰲚 Playlists "),
             ]).alignment(Alignment::Left))
             .title_bottom(Line::from(vec![
-                Span::styled(format!(" Vol: {}% ", pb.volume), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!(" {} ", status_icon), Style::default().fg(Color::DarkGray)),
-                Span::styled(repeat_str, Style::default().fg(Color::Green)),
+                Span::styled(format!(" Vol: {}% ", pb.volume), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(format!(" {} ", status_icon), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(repeat_str, Style::default().fg(self.theme.border_active)),
             ]))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         let items: Vec<ListItem> = state.playlists.iter().map(|p| {
             ListItem::new(Line::from(vec![
                 Span::raw(format!(" {} ", p.name)),
-                Span::styled(format!("({})", p.total_tracks), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("({})", p.total_tracks), Style::default().fg(self.theme.border_inactive)),
             ]))
         }).collect();
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.playlist_list);
@@ -827,7 +832,7 @@ impl Ui {
         }
 
         let focused = state.focus == Focus::Tracks;
-        let accent = if focused { Color::Green } else { Color::DarkGray };
+        let accent = if focused { self.theme.border_active } else { self.theme.border_inactive };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -863,7 +868,6 @@ impl Ui {
         let info_area = sections[1];
         let viz_area  = sections[2];
 
-        // ── Album art ────────────────────────────────────────────────────────
         let padding = art_area.width.saturating_sub(art_w) / 2;
         let art_cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -900,21 +904,21 @@ impl Ui {
                 Line::from(""),
                 Line::from(Span::styled(
                     pb.title.clone(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     pb.artist.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(self.theme.border_inactive),
                 )),
                 Line::from(Span::styled(
                     pb.album.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(self.theme.border_inactive),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("{}  {}  {}  vol {}%{}", play_icon, shuffle_icon, repeat_icon, pb.volume, radio_icon),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(self.theme.border_inactive),
                 )),
             ];
 
@@ -931,7 +935,7 @@ impl Ui {
 
     fn render_local_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
-        let accent = if focused { Color::Green } else { Color::DarkGray };
+        let accent = if focused { self.theme.border_active } else { self.theme.border_inactive };
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -972,7 +976,7 @@ impl Ui {
             Line::from(""),
             Line::from(Span::styled(
                 pb.title.clone(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -981,12 +985,12 @@ impl Ui {
             )),
             Line::from(Span::styled(
                 ext_hint,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 format!("{}  {}  {}  vol {}%", play_icon, shuffle_icon, repeat_icon, pb.volume),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )),
         ];
 
@@ -1002,7 +1006,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(self.theme.border_inactive));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1011,21 +1015,21 @@ impl Ui {
             Line::from(""),
             Line::from(Span::styled(
                 " 󰓇  isi-music",
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "Select a playlist from the Library or Playlists panel,",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )),
             Line::from(Span::styled(
                 "or press / to search Spotify.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "[TAB] navigate panels   [ENTER] select   [/] search",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM),
             )),
         ];
 
@@ -1057,27 +1061,27 @@ impl Ui {
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_bottom(Line::from(vec![
-                Span::styled(format!(" {count}{loading} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {count}{loading} "), Style::default().fg(self.theme.border_inactive)),
             ]))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         let items: Vec<ListItem> = state.tracks.iter().enumerate().map(|(idx, t)| {
             let is_playing = state.playback.title == t.name;
             let style = if is_playing {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(self.theme.text_primary)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
                 Span::styled(t.name.clone(), style),
-                Span::styled(format!("  󰠃 {}", t.artist), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("  󰠃 {}", t.artist), Style::default().fg(self.theme.border_inactive)),
             ]))
         }).collect();
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.track_list);
@@ -1097,22 +1101,22 @@ impl Ui {
             .border_type(BorderType::Rounded)
             .title(" Albums ")
             .title_bottom(Line::from(vec![
-                Span::styled(format!(" {count} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {count} "), Style::default().fg(self.theme.border_inactive)),
             ]))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         let items: Vec<ListItem> = state.albums.iter().enumerate().map(|(idx, a)| {
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
                 Span::raw(a.name.clone()),
-                Span::styled(format!("  󰠃 {}", a.artist), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!(" ({} tracks)", a.total_tracks), Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+                Span::styled(format!("  󰠃 {}", a.artist), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(format!(" ({} tracks)", a.total_tracks), Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)),
             ]))
         }).collect();
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.album_list);
@@ -1128,24 +1132,24 @@ impl Ui {
             .border_type(BorderType::Rounded)
             .title(" Artists ")
             .title_bottom(Line::from(vec![
-                Span::styled(format!(" {count} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {count} "), Style::default().fg(self.theme.border_inactive)),
             ]))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         let items: Vec<ListItem> = state.artists.iter().enumerate().map(|(idx, a)| {
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
                 Span::raw(a.name.clone()),
                 Span::styled(
                     if a.genres.is_empty() { String::new() } else { format!("  {}", a.genres) },
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(self.theme.border_inactive),
                 ),
             ]))
         }).collect();
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.artist_list);
@@ -1165,22 +1169,22 @@ impl Ui {
             .border_type(BorderType::Rounded)
             .title(" Podcasts ")
             .title_bottom(Line::from(vec![
-                Span::styled(format!(" {count} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {count} "), Style::default().fg(self.theme.border_inactive)),
             ]))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         let items: Vec<ListItem> = state.shows.iter().enumerate().map(|(idx, s)| {
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
                 Span::raw(s.name.clone()),
-                Span::styled(format!("  {}", s.publisher), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!(" ({} eps)", s.total_episodes), Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+                Span::styled(format!("  {}", s.publisher), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(format!(" ({} eps)", s.total_episodes), Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)),
             ]))
         }).collect();
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.show_list);
@@ -1208,9 +1212,9 @@ impl Ui {
 
         let panel_border = |panel: SearchPanel| -> Style {
             if is_search_focus && focused_panel == panel {
-                Style::default().fg(Color::Green)
+                Style::default().fg(self.theme.border_active)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(self.theme.border_inactive)
             }
         };
 
@@ -1225,27 +1229,27 @@ impl Ui {
         if let Some(sr) = &mut state.search_results {
             let track_items: Vec<ListItem> = sr.tracks.iter().enumerate().map(|(idx, t)| {
                 ListItem::new(Line::from(vec![
-                    Span::styled(" 󰓇 ", Style::default().fg(Color::Green)),
-                    Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(Color::DarkGray)),
+                    Span::styled(" 󰓇 ", Style::default().fg(self.theme.border_active)),
+                    Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
                     Span::raw(t.name.clone()),
-                    Span::styled(format!("  󰠃 {}", t.artist), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("  󰠃 {}", t.artist), Style::default().fg(self.theme.border_inactive)),
                 ]))
             }).collect();
             let track_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(panel_title(SearchPanel::Tracks, " 󰎆 Tracks ")).border_style(panel_border(SearchPanel::Tracks));
             let track_list = List::new(track_items).block(track_block)
-                .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
             let artist_items: Vec<ListItem> = sr.artists.iter().map(|a| {
                 ListItem::new(Line::from(vec![
-                    Span::styled(" 󰋌 ", Style::default().fg(Color::Green)),
+                    Span::styled(" 󰋌 ", Style::default().fg(self.theme.border_active)),
                     Span::raw(a.name.clone()),
                     Span::styled(
                         if a.genres.is_empty() { String::new() } else { format!("  {}", a.genres) },
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(self.theme.border_inactive),
                     ),
                 ]))
             }).collect();
@@ -1253,37 +1257,37 @@ impl Ui {
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(panel_title(SearchPanel::Artists, " 󰋌 Artists ")).border_style(panel_border(SearchPanel::Artists));
             let artist_list = List::new(artist_items).block(artist_block)
-                .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
             let album_items: Vec<ListItem> = sr.albums.iter().map(|a| {
                 ListItem::new(Line::from(vec![
-                    Span::styled(" 󰀥 ", Style::default().fg(Color::Green)),
+                    Span::styled(" 󰀥 ", Style::default().fg(self.theme.border_active)),
                     Span::raw(a.name.clone()),
-                    Span::styled(format!("  󰠃 {}", a.artist), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("  󰠃 {}", a.artist), Style::default().fg(self.theme.border_inactive)),
                 ]))
             }).collect();
             let album_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(panel_title(SearchPanel::Albums, " 󰀥 Albums ")).border_style(panel_border(SearchPanel::Albums));
             let album_list = List::new(album_items).block(album_block)
-                .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
             let playlist_items: Vec<ListItem> = sr.playlists.iter().map(|p| {
                 ListItem::new(Line::from(vec![
-                    Span::styled(" 󰲚 ", Style::default().fg(Color::Green)),
+                    Span::styled(" 󰲚 ", Style::default().fg(self.theme.border_active)),
                     Span::raw(p.name.clone()),
-                    Span::styled(format!("  ({})", p.total_tracks), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("  ({})", p.total_tracks), Style::default().fg(self.theme.border_inactive)),
                 ]))
             }).collect();
             let pl_block = Block::default()
                 .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(panel_title(SearchPanel::Playlists, " 󰲚 Playlists ")).border_style(panel_border(SearchPanel::Playlists));
             let pl_list = List::new(playlist_items).block(pl_block)
-                .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
         }
@@ -1310,16 +1314,16 @@ impl Ui {
         let content = Line::from(vec![
             Span::styled(
                 fmt_duration(pb.progress_ms),
-                Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
+                Style::default().fg(self.theme.accent_color).add_modifier(Modifier::ITALIC),
             ),
             Span::raw(" "),
-            Span::styled(bar, Style::default().fg(Color::Green)),
+            Span::styled(bar, Style::default().fg(self.theme.accent_color)),
             Span::raw(" "),
             Span::styled(
                 fmt_duration(pb.duration_ms),
-                Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC),
+                Style::default().fg(self.theme.accent_color).add_modifier(Modifier::ITALIC),
             ),
-            Span::styled(shuffle_label, Style::default().fg(Color::Green)),
+            Span::styled(shuffle_label, Style::default().fg(self.theme.accent_color)),
         ]);
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
     }
@@ -1338,7 +1342,7 @@ impl Ui {
             (0..area.width as usize).map(|i| chars[(offset + i) % chars.len()]).collect()
         };
         frame.render_widget(
-            Paragraph::new(display).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(display).style(Style::default().fg(self.theme.border_inactive)),
             area,
         );
     }
@@ -1348,7 +1352,7 @@ impl Ui {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(" 󰋩 Cover ")
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(self.theme.border_inactive));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1388,15 +1392,15 @@ impl Ui {
             .title(" 󰲸 Queue ")
             .title_bottom(Line::from(Span::styled(
                 format!(" {} tracks ", state.queue_items.len()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             )))
-            .border_style(if focused { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) });
+            .border_style(if focused { Style::default().fg(self.theme.border_active) } else { Style::default().fg(self.theme.border_inactive) });
 
         if state.queue_items.is_empty() {
             frame.render_widget(
                 Paragraph::new("  Queue empty — press [A] on a track to add")
                     .block(block)
-                    .style(Style::default().fg(Color::DarkGray)),
+                    .style(Style::default().fg(self.theme.border_inactive)),
                 area,
             );
             return;
@@ -1404,15 +1408,15 @@ impl Ui {
 
         let items: Vec<ListItem> = state.queue_items.iter().enumerate().map(|(idx, (name, artist))| {
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>2}. ", idx + 1), Style::default().fg(Color::DarkGray)),
-                Span::styled(name.clone(), Style::default().fg(Color::White)),
-                Span::styled(format!("  󰠃 {}", artist), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:>2}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(name.clone(), Style::default().fg(self.theme.text_primary)),
+                Span::styled(format!("  󰠃 {}", artist), Style::default().fg(self.theme.border_inactive)),
             ]))
         }).collect();
 
         let list = List::new(items)
             .block(block)
-            .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Green).add_modifier(Modifier::BOLD))
+            .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
             .highlight_symbol("  ");
 
         frame.render_stateful_widget(list, area, &mut state.queue_list);
@@ -1420,31 +1424,31 @@ impl Ui {
 
     fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let content = if let Some(msg) = &state.status_msg {
-            Line::from(Span::styled(msg.clone(), Style::default().fg(Color::Green)))
+            Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
         } else if state.focus == Focus::Search {
             Line::from(Span::styled(
                 " [TAB] Switch panel  [↑↓] Navigate  [ENTER] Select  [ESC] Close search ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             ))
         } else if state.search_active {
             Line::from(Span::styled(
                 " [ESC] Cancel  [ENTER] Search  [Type] Query ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             ))
         } else if state.focus == Focus::Queue {
             Line::from(Span::styled(
                 " [↑↓] Navigate  [DEL] Remove from queue  [TAB] Focus  [A] Add track ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             ))
         } else if state.previous_search.is_some() {
             Line::from(Span::styled(
                 " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [←→] Seek  [BACKSPACE] Back to search ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             ))
         } else {
             Line::from(Span::styled(
                 " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Q] Quit ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.theme.border_inactive),
             ))
         };
 
