@@ -7,6 +7,8 @@
 A terminal music player written in Rust. Stream from Spotify via librespot or play local audio files — no browser, no Electron.
 
 ![preview](https://github.com/user-attachments/assets/f67383b5-cc7d-4486-8d7a-ffea9ad2e997)
+![purple](https://github.com/user-attachments/assets/27d7420e-918f-4d04-9986-34301b60d22c)
+
 
 ## Features
 
