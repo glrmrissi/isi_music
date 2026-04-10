@@ -29,7 +29,7 @@ pub struct LocalPlayer {
     queue: Vec<LocalTrack>,
     user_queue: Vec<QueuedTrack>,
     playing_queued: Option<QueuedTrack>,
-    current_idx: Option<usize>, 
+    current_idx: Option<usize>,
     pub is_playing: bool,
     pub volume: u8,
     pub shuffle: bool,
@@ -41,15 +41,29 @@ pub struct LocalPlayer {
 
 impl LocalPlayer {
     pub fn new(volume: u8) -> anyhow::Result<Self> {
-        let stream = OutputStreamBuilder::open_default_stream()
-            .map_err(|e| anyhow::anyhow!("Audio output unavailable: {e}"))?;
-
-        let sink = Sink::connect_new(&stream.mixer());
+        let (sync_tx, sync_rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
-            let _keep_alive = stream;
-            std::thread::park(); 
+            match OutputStreamBuilder::open_default_stream() {
+                Ok(stream) => {
+                    let sink = Sink::connect_new(&stream.mixer());
+                    
+                    if sync_tx.send(Ok(sink)).is_ok() {
+                        let _keep_alive = stream;
+                        loop {
+                            std::thread::park();
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = sync_tx.send(Err(anyhow::anyhow!("Audio output unavailable: {e}")));
+                }
+            }
         });
+
+        let sink = sync_rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("Audio thread panicked during startup"))??;
 
         sink.set_volume(volume as f32 / 100.0);
 
@@ -107,10 +121,7 @@ impl LocalPlayer {
             }
         };
 
-        let analyzing = AnalyzingSource::new(
-            decoder,
-            Arc::clone(&self.band_energies),
-        );
+        let analyzing = AnalyzingSource::new(decoder, Arc::clone(&self.band_energies));
         self.sink.append(analyzing);
         self.sink.play();
         self.current_idx = Some(idx);
@@ -203,52 +214,98 @@ impl LocalPlayer {
         self.sink.set_volume(self.volume as f32 / 100.0);
     }
 
-     fn current_uri(&self) -> Option<String> {
-        self.current_idx.and_then(|idx| {
-            self.queue.get(idx).map(|track| track.path.to_string_lossy().to_string())
-        })
+    fn current_uri(&self) -> Option<String> {
+        self.current_idx
+            .and_then(|idx| self.queue.get(idx).map(|track| track.path.to_string_lossy().to_string()))
     }
 }
 
 impl AudioPlayer for LocalPlayer {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
-        self.queue = uris.into_iter().map(|uri| {
-            let path = Self::uri_to_path(&uri);
-            let name = path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Unknown")
-                .to_string();
-            LocalTrack { path, name, artist: String::new(), album: String::new(), duration_ms: 0, }
-        }).collect();
+        self.queue = uris
+            .into_iter()
+            .map(|uri| {
+                let path = Self::uri_to_path(&uri);
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                LocalTrack {
+                    path,
+                    name,
+                    artist: String::new(),
+                    album: String::new(),
+                    duration_ms: 0,
+                }
+            })
+            .collect();
         self.play_at(start_index);
     }
 
     fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) {
-        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms });
+        self.user_queue.push(QueuedTrack {
+            uri,
+            name,
+            artist,
+            duration_ms,
+        });
     }
 
-    fn user_queue(&self) -> &[QueuedTrack] { &self.user_queue }
-    fn remove_from_user_queue(&mut self, index: usize) { self.user_queue.remove(index); }
-    fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
+    fn user_queue(&self) -> &[QueuedTrack] {
+        &self.user_queue
+    }
+    fn remove_from_user_queue(&mut self, index: usize) {
+        self.user_queue.remove(index);
+    }
+    fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
+        self.playing_queued.take()
+    }
 
-    fn play(&mut self) { self.sink.play(); self.is_playing = true; }
-    fn pause(&mut self) { self.sink.pause(); self.is_playing = false; }
-    fn toggle(&mut self) { self.toggle(); }
-    fn next(&mut self) -> bool { self.next() }
-    fn prev(&mut self) -> bool { self.prev() }
-    fn play_at(&mut self, index: usize) { self.play_at(index); }
+    fn play(&mut self) {
+        self.sink.play();
+        self.is_playing = true;
+    }
+    fn pause(&mut self) {
+        self.sink.pause();
+        self.is_playing = false;
+    }
+    fn toggle(&mut self) {
+        self.toggle();
+    }
+    fn next(&mut self) -> bool {
+        self.next()
+    }
+    fn prev(&mut self) -> bool {
+        self.prev()
+    }
+    fn play_at(&mut self, index: usize) {
+        self.play_at(index);
+    }
     fn seek(&self, position_ms: u32) {
         let pos = std::time::Duration::from_millis(position_ms as u64);
         let _ = self.sink.try_seek(pos);
     }
 
-    fn is_playing(&self) -> bool { self.is_playing }
-    fn volume(&self) -> u8 { self.volume }
-    fn shuffle(&self) -> bool { self.shuffle }
-    fn repeat(&self) -> RepeatMode { self.repeat }
-    
-    fn current_index(&self) -> Option<usize> { self.current_idx }
-    fn current_uri(&self) -> Option<String> { self.current_uri() }
+    fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+    fn volume(&self) -> u8 {
+        self.volume
+    }
+    fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+    fn repeat(&self) -> RepeatMode {
+        self.repeat
+    }
+
+    fn current_index(&self) -> Option<usize> {
+        self.current_idx
+    }
+    fn current_uri(&self) -> Option<String> {
+        self.current_uri()
+    }
 
     fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
@@ -265,10 +322,12 @@ impl AudioPlayer for LocalPlayer {
         self.apply_volume();
         crate::config::save_volume(self.volume);
     }
-    fn toggle_shuffle(&mut self) { self.shuffle = !self.shuffle; }
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+    }
     fn cycle_repeat(&mut self) {
         self.repeat = match self.repeat {
-            RepeatMode::Off   => RepeatMode::Queue,
+            RepeatMode::Off => RepeatMode::Queue,
             RepeatMode::Queue => RepeatMode::Track,
             RepeatMode::Track => RepeatMode::Off,
         };
