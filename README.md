@@ -158,6 +158,69 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 
 ---
 
+## Theme Configuration
+
+```
+# Place this file at: ~/.config/isi-music/theme.toml
+
+# ================================================================
+# THEME EXAMPLES
+# ================================================================
+
+# Minimal Dark Theme
+# border_active = "cyan"
+# border_inactive = "dark_gray"
+# highlight_bg = "rgb(30, 30, 30)"
+# text_primary = "white"
+# accent_color = "cyan"
+
+# Vibrant Theme
+# border_active = "magenta"
+# border_inactive = "dark_gray"
+# highlight_bg = "rgb(203, 23, 203)"
+# text_primary = "white"
+# accent_color = "light_magenta"
+
+# Cool Blue Theme
+border_active = "light_blue"
+border_inactive = "dark_gray"
+highlight_bg = "rgb(20, 40, 60)"
+text_primary = "white"
+accent_color = "light_cyan"
+
+# Warm Orange Theme
+# border_active = "yellow"
+# border_inactive = "dark_gray"
+# highlight_bg = "rgb(60, 30, 20)"
+# text_primary = "white"
+# accent_color = "light_yellow"
+
+# ================================================================
+# AVAILABLE COLORS
+# ================================================================
+# Named colors (web-safe):
+#   - black, dark_gray, gray, light_gray, white
+#   - red, light_red
+#   - green, light_green
+#   - yellow, light_yellow
+#   - blue, light_blue
+#   - magenta, light_magenta
+#   - cyan, light_cyan
+#
+# Custom RGB colors:
+#   - rgb(r, g, b) where r, g, b are 0-255
+#   - Examples: rgb(255, 0, 0), rgb(100, 200, 50), rgb(30, 30, 30)
+#
+# ================================================================
+# COLOR MAPPING IN UI
+# ================================================================
+# border_active:      Focused panel borders, active status indicators
+# border_inactive:    Unfocused panel borders, secondary text, timestamps
+# highlight_bg:       Background of selected list items
+# text_primary:       Track titles, artist names, primary UI text
+# accent_color:       Progress bars, icons, loading indicators, seek bar
+``
+
 ## Local Files
 
 Play local audio files without any Spotify account. Supported formats: **MP3, FLAC, OGG, WAV, AIFF**.

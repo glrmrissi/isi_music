@@ -19,8 +19,10 @@ mod mpris;
 mod player;
 mod spotify;
 mod ui;
+mod theme;
 
 use app::App;
+use theme::Theme;
 
 fn prompt(label: &str) -> String {
     print!("{}", label);
@@ -167,11 +169,11 @@ TUI KEYBINDINGS
   Esc                  Close search / exit fullscreen
   q / Ctrl-C           Quit
 
-DAEMON MODE  (background playback — terminal can be closed)
+DAEMON MODE
   isi-music --daemon                 Start daemon in background
   isi-music --quit-daemon            Stop the daemon
 
-PLAYBACK CONTROL  (requires daemon running)
+PLAYBACK CONTROL
   isi-music --toggle                 Play / pause
   isi-music --next                   Next track
   isi-music --prev                   Previous track
@@ -214,7 +216,6 @@ FILES
 }
 
 fn main() -> Result<()> {
-    // Reset any leftover terminal state from a previous crash
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
 
@@ -228,21 +229,14 @@ fn main() -> Result<()> {
     let arg1 = args.get(1).map(|s| s.as_str());
 
     if arg1 == Some("--daemon") {
-        // Fork BEFORE building the tokio runtime (forking after is unsafe with threads)
         let child_pid = unsafe { libc::fork() };
-        if child_pid < 0 {
-            anyhow::bail!("fork() failed");
-        }
+        if child_pid < 0 { anyhow::bail!("fork() failed"); }
         if child_pid > 0 {
-            // Parent: tell the user the daemon PID and exit immediately
             println!("isi-music daemon started (PID {child_pid})");
             return Ok(());
         }
-
-        // Child: create a new session so closing the terminal doesn't send SIGHUP
         unsafe {
             libc::setsid();
-            // Redirect stdin / stdout / stderr → /dev/null
             let null = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
             if null >= 0 {
                 libc::dup2(null, 0);
@@ -251,7 +245,6 @@ fn main() -> Result<()> {
                 libc::close(null);
             }
         }
-
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
@@ -307,13 +300,8 @@ fn main() -> Result<()> {
             .block_on(run_lastfm_setup(&mut cfg));
     }
 
-    if cfg.needs_setup() {
-        run_setup(&mut cfg)?;
-    }
-
-    if cfg.discord.enabled.is_none() {
-        run_discord_setup(&mut cfg)?;
-    }
+    if cfg.needs_setup() { run_setup(&mut cfg)?; }
+    if cfg.discord.enabled.is_none() { run_discord_setup(&mut cfg)?; }
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -321,23 +309,16 @@ fn main() -> Result<()> {
         .build()?
         .block_on(async {
             let log_path = config::log_path()?;
-            let log_file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)?;
+            let log_file = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
 
             tracing_subscriber::fmt()
                 .with_writer(std::sync::Mutex::new(log_file))
                 .with_ansi(false)
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("isi_music=warn".parse()?),
-                )
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("isi_music=warn".parse()?),)
                 .init();
 
-            // Query terminal for image protocol support BEFORE entering raw mode
-            let picker = Picker::from_query_stdio()
-                .unwrap_or_else(|_| Picker::halfblocks());
+            let theme = Theme::load();
+            let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
             enable_raw_mode()?;
             let mut stdout = io::stdout();
@@ -345,17 +326,14 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker).await?;
+            let mut app = App::new(picker, theme).await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             terminal.show_cursor()?;
 
-            if let Err(err) = res {
-                eprintln!("[Error]: {err:?}");
-            }
-
+            if let Err(err) = res { eprintln!("[Error]: {err:?}"); }
             Ok(())
         })
 }
