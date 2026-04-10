@@ -219,7 +219,7 @@ accent_color = "light_cyan"
 # highlight_bg:       Background of selected list items
 # text_primary:       Track titles, artist names, primary UI text
 # accent_color:       Progress bars, icons, loading indicators, seek bar
-``
+``` 
 
 ## Local Files
 
