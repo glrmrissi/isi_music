@@ -55,13 +55,6 @@ jobs:
             asset_name: isi-music-macos-arm64
             use_cross: false
 
-          - os: windows-latest
-            label: Windows x86_64
-            target: x86_64-pc-windows-msvc
-            artifact_name: isi-music.exe
-            asset_name: isi-music-windows-x86_64.exe
-            use_cross: false
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -169,7 +162,6 @@ jobs:
             Precompiled binaries are available for:
             - **Linux** (x86_64)
             - **macOS** (Intel & Apple Silicon)
-            - **Windows** (x86_64)
             
             ### 📝 Installation
             Extract the binary and add it to your PATH.
