@@ -9,6 +9,7 @@ use rspotify::model::RepeatState;
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 use crate::theme::Theme;
+use crate::theme::{LayoutNode, UiWidget, SerializableDirection};
 
 
 pub struct AlbumArtData {
@@ -447,132 +448,143 @@ impl Ui {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
-        let area = frame.area();
+   pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
+    let area = frame.area();
 
-        if state.fullscreen_player && !state.playback.title.is_empty() {
-            let root = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints([
-                    Constraint::Length(12),  // art + compact info strip
-                    Constraint::Min(5),      // visualizer — gets all remaining height
-                    Constraint::Length(1),   // help
-                ])
-                .split(area);
-            self.render_player_compact(frame, state, root[0]);
-            self.render_visualizer(frame, &state.playback, &state.viz_bands, root[1], state);
-            self.render_help(frame, state, root[2]);
-            return;
-        }
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(4),   // Header / Search
+            Constraint::Min(10),     // Main Content
+            Constraint::Length(2),   // Progress
+            Constraint::Length(1),   // Help/Status
+        ])
+        .split(area);
 
-        let showing_now_playing = state.search_results.is_none()
-            && state.active_content == ActiveContent::None
-            && !state.playback.title.is_empty();
-
-        if showing_now_playing {
-            let root = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints([
-                    Constraint::Length(3),   // header (full width)
-                    Constraint::Min(10),     // main panels
-                    Constraint::Length(2),   // progress bar + volume
-                    Constraint::Length(1),   // help
-                ])
-                .split(area);
-
-            let main_cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-                .split(root[1]);
-
-            let left_rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(7), Constraint::Min(0)])
-                .split(main_cols[0]);
-
-            let right_rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(8)])
-                .split(main_cols[1]);
-
-            self.render_header(frame, state, root[0]);
-            self.render_library(frame, state, left_rows[0]);
-            self.render_playlists(frame, state, left_rows[1]);
-            self.render_now_playing(frame, state, right_rows[0]);
-            self.render_queue(frame, state, right_rows[1]);
-            self.render_progress(frame, &state.playback, root[2]);
-            self.render_help(frame, state, root[3]);
-            return;
-        }
-
-        let root = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([
-                Constraint::Length(4),
-                Constraint::Min(10),
-                Constraint::Length(2),
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-        let top_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-            .split(root[0]);
-
-        let main_cols = Layout::default()
+        let main_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
             .split(root[1]);
 
-        let art_h = if state.show_album_art { Constraint::Length(16) } else { Constraint::Length(0) };
-        let left_rows = Layout::default()
+        let art_h = if state.show_album_art { Constraint::Length(12) } else { Constraint::Length(0) };
+        let left_column = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(7), Constraint::Min(0), art_h])
-            .split(main_cols[0]);
+            .split(main_layout[0]);
 
-        let right_rows = Layout::default()
+        let right_column = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(8)])
-            .split(main_cols[1]);
+            .split(main_layout[1]);
 
-        self.render_visualizer(frame, &state.playback, &state.viz_bands, top_cols[0], state);
-        self.render_header(frame, state, top_cols[1]);
-        self.render_library(frame, state, left_rows[0]);
-        self.render_playlists(frame, state, left_rows[1]);
+        self.render_header(frame, state, root[0]);
+        self.render_library(frame, state, left_column[0]);
+        self.render_playlists(frame, state, left_column[1]);
+        
         if state.show_album_art {
-            self.render_album_art(frame, state, left_rows[2]);
+            self.render_album_art(frame, state, left_column[2]);
         }
 
         if state.search_results.is_some() {
-            self.render_search_panels(frame, state, right_rows[0]);
+            self.render_search_panels(frame, state, right_column[0]);
+        } else {
+            match state.active_content {
+                ActiveContent::None => {
+                    if state.playback.title.is_empty() {
+                        self.render_welcome(frame, right_column[0]);
+                    } else {
+                        self.render_now_playing(frame, state, right_column[0]);
+                    }
+                }
+                ActiveContent::Tracks | ActiveContent::LocalFiles => self.render_tracks(frame, state, right_column[0]),
+                ActiveContent::Albums  => self.render_albums(frame, state, right_column[0]),
+                ActiveContent::Artists => self.render_artists(frame, state, right_column[0]),
+                ActiveContent::Shows   => self.render_shows(frame, state, right_column[0]),
+            }
+        }
+
+        self.render_queue(frame, state, right_column[1]);
+
+        let footer_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(root[2]);
+
+        self.render_marquee(frame, &state.playback, state.marquee_offset, footer_cols[0]);
+        self.render_progress(frame, &state.playback, footer_cols[1]);
+        self.render_help(frame, state, root[3]);
+    }
+
+    fn render_recursive(&self, frame: &mut Frame, state: &mut UiState, area: Rect, node: &LayoutNode) {
+        if let Some(widget_type) = &node.widget {
+            match widget_type {
+                UiWidget::Header => self.render_header(frame, state, area),
+                UiWidget::Library => self.render_library(frame, state, area),
+                UiWidget::Playlists => self.render_playlists(frame, state, area),
+                UiWidget::AlbumArt => if state.show_album_art { self.render_album_art(frame, state, area) },
+                UiWidget::MainContent => self.render_main_area_logic(frame, state, area),
+                UiWidget::Queue => self.render_queue(frame, state, area),
+                UiWidget::Progress => self.render_progress(frame, &state.playback, area),
+                UiWidget::Marquee => self.render_marquee(frame, &state.playback, state.marquee_offset, area),
+                UiWidget::Visualizer => self.render_visualizer(frame, &state.playback, &state.viz_bands, area, state),
+                UiWidget::Help => self.render_help(frame, state, area),
+                UiWidget::Spacer => {},
+            }
+            return; 
+        }
+
+        if let (Some(dir), Some(raw_constraints), Some(children)) = (node.direction, &node.constraints, &node.children) {
+            if children.is_empty() { return; }
+
+            let parsed_constraints: Vec<Constraint> = raw_constraints
+                .iter()
+                .map(|s| self.parse_constraint(s))
+                .collect::<Vec<Constraint>>();
+
+            let chunks = Layout::default()
+                .direction(Direction::from(dir))
+                .constraints(parsed_constraints)
+                .split(area);
+
+            for (i, child) in children.iter().enumerate() {
+                if let Some(chunk) = chunks.get(i) {
+                    self.render_recursive(frame, state, *chunk, child);
+                }
+            }
+        }
+    }
+
+    fn render_main_area_logic(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.search_results.is_some() {
+            self.render_search_panels(frame, state, area);
         } else {
             match &state.active_content {
                 ActiveContent::None => {
                     if state.playback.title.is_empty() {
-                        self.render_welcome(frame, right_rows[0])
+                        self.render_welcome(frame, area)
                     } else {
-                        self.render_now_playing(frame, state, right_rows[0])
+                        self.render_now_playing(frame, state, area)
                     }
                 }
-                ActiveContent::Tracks | ActiveContent::LocalFiles => self.render_tracks(frame, state, right_rows[0]),
-                ActiveContent::Albums  => self.render_albums(frame, state, right_rows[0]),
-                ActiveContent::Artists => self.render_artists(frame, state, right_rows[0]),
-                ActiveContent::Shows   => self.render_shows(frame, state, right_rows[0]),
+                ActiveContent::Tracks | ActiveContent::LocalFiles => self.render_tracks(frame, state, area),
+                ActiveContent::Albums => self.render_albums(frame, state, area),
+                ActiveContent::Artists => self.render_artists(frame, state, area),
+                ActiveContent::Shows => self.render_shows(frame, state, area),
             }
         }
-        self.render_queue(frame, state, right_rows[1]);
+    }
 
-        let playback_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(root[2]);
-        self.render_progress(frame, &state.playback, playback_row[1]);
-        self.render_marquee(frame, &state.playback, state.marquee_offset, playback_row[0]);
-        self.render_help(frame, state, root[3]);
+    fn parse_constraint(&self, s: &str) -> Constraint {
+        let s = s.to_lowercase().replace(' ', "");
+        if s.ends_with('%') {
+            if let Ok(p) = s.trim_end_matches('%').parse::<u16>() { return Constraint::Percentage(p); }
+        }
+        if s.starts_with("min(") && s.ends_with(')') {
+            if let Ok(v) = s[4..s.len()-1].parse::<u16>() { return Constraint::Min(v); }
+        }
+        if let Ok(l) = s.parse::<u16>() { return Constraint::Length(l); }
+        Constraint::Min(0)
     }
 
     fn render_player_compact(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {

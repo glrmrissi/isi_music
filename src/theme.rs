@@ -1,11 +1,83 @@
 use serde::{Deserialize, Serialize};
 use ratatui::style::Color;
+use ratatui::layout::{Constraint, Direction};
 use std::path::PathBuf;
 use std::fs;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use std::time::Duration;
 
+#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum SerializableDirection {
+    Horizontal,
+    Vertical,
+}
+
+impl From<SerializableDirection> for Direction {
+    fn from(d: SerializableDirection) -> Self {
+        match d {
+            SerializableDirection::Horizontal => Direction::Horizontal,
+            SerializableDirection::Vertical => Direction::Vertical,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum UiWidget {
+    Header,
+    Library,
+    Playlists,
+    AlbumArt,
+    MainContent,
+    Queue,
+    Progress,
+    Marquee,
+    Visualizer,
+    Help,
+    Spacer,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LayoutNode {
+    pub direction: Option<SerializableDirection>,
+    pub constraints: Option<Vec<String>>,
+    pub children: Option<Vec<LayoutNode>>,
+    pub widget: Option<UiWidget>,
+}
+
+impl Default for LayoutNode {
+    fn default() -> Self {
+        Self {
+            direction: Some(SerializableDirection::Vertical),
+            constraints: Some(vec!["4".into(), "min(0)".into(), "2".into(), "1".into()]),
+            widget: None,
+            children: Some(vec![
+                LayoutNode { widget: Some(UiWidget::Header), direction: None, constraints: None, children: None },
+                LayoutNode { 
+                    direction: Some(SerializableDirection::Horizontal),
+                    constraints: Some(vec!["25%".into(), "min(0)".into()]),
+                    widget: None,
+                    children: Some(vec![
+                        LayoutNode { 
+                            direction: Some(SerializableDirection::Vertical),
+                            constraints: Some(vec!["7".into(), "min(0)".into()]),
+                            widget: None,
+                            children: Some(vec![
+                                LayoutNode { widget: Some(UiWidget::Library), direction: None, constraints: None, children: None },
+                                LayoutNode { widget: Some(UiWidget::Playlists), direction: None, constraints: None, children: None },
+                            ]),
+                        },
+                        LayoutNode { widget: Some(UiWidget::MainContent), direction: None, constraints: None, children: None },
+                    ]),
+                },
+                LayoutNode { widget: Some(UiWidget::Progress), direction: None, constraints: None, children: None },
+                LayoutNode { widget: Some(UiWidget::Help), direction: None, constraints: None, children: None },
+            ]),
+        }
+    }
+}
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Theme {
     #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
@@ -18,6 +90,8 @@ pub struct Theme {
     pub text_primary: Color,
     #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
     pub accent_color: Color,
+    #[serde(default)]
+    pub layout_tree: LayoutNode
 }
 
 impl Default for Theme {
@@ -28,6 +102,7 @@ impl Default for Theme {
             highlight_bg: Color::Rgb(40, 40, 40),
             text_primary: Color::White,
             accent_color: Color::Green,
+            layout_tree: LayoutNode::default(),
         }
     }
 }
