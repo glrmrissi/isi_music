@@ -88,6 +88,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
+        shell: bash
         env:
           OPENSSL_STATIC: 1
         run: |
