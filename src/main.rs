@@ -318,6 +318,7 @@ fn main() -> Result<()> {
                 .init();
 
             let theme = Theme::load();
+            let theme_rx = Theme::watch()?;
             let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
             enable_raw_mode()?;
@@ -326,7 +327,7 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker, theme).await?;
+            let mut app = App::new(picker, theme, theme_rx).await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

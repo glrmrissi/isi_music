@@ -130,11 +130,12 @@ pub struct App {
     /// Kept separate from `state.tracks` so that navigating to another playlist
     /// while music is playing does not corrupt playback metadata.
     playing_tracks: Vec<crate::spotify::TrackSummary>,
-    theme: Theme
+    theme: Theme,
+    theme_rx: std::sync::mpsc::Receiver<Theme>,
 }
 
 impl App {
-    pub async fn new(picker: Picker, theme: Theme) -> Result<Self> {
+    pub async fn new(picker: Picker, theme: Theme, theme_rx: std::sync::mpsc::Receiver<Theme>) -> Result<Self> {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
             (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(k.clone(), s.clone(), sk.clone()))),
@@ -238,7 +239,8 @@ impl App {
             radio_mode: false,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
-            theme
+            theme,
+            theme_rx
         })
     }
 
@@ -247,9 +249,14 @@ impl App {
         self.last_tick = Instant::now();
 
         loop {
+            if let Ok(new_theme) = self.theme_rx.try_recv() {
+                self.theme = new_theme.clone();
+                self.ui = Ui::new(new_theme); 
+            }
             let now = Instant::now();
             let delta_ms = now.duration_since(self.last_tick).as_millis() as u64;
             self.last_tick = now;
+
 
             let mut needs_sync = false;
             let mut needs_reconnect = false;
