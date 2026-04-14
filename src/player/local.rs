@@ -214,7 +214,7 @@ impl LocalPlayer {
         self.sink.set_volume(self.volume as f32 / 100.0);
     }
 
-    fn current_uri(&self) -> Option<String> {
+    fn _current_uri(&self) -> Option<String> {
         self.current_idx
             .and_then(|idx| self.queue.get(idx).map(|track| track.path.to_string_lossy().to_string()))
     }
@@ -304,7 +304,7 @@ impl AudioPlayer for LocalPlayer {
         self.current_idx
     }
     fn current_uri(&self) -> Option<String> {
-        self.current_uri()
+        self._current_uri()
     }
 
     fn volume_up(&mut self) {

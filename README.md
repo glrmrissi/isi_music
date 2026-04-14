@@ -198,6 +198,20 @@ accent_color = "light_cyan"
 # text_primary = "white"
 # accent_color = "light_yellow"
 
+# Blood Moon
+#border_active = "red"
+#border_inactive = "rgb(146, 7, 7)"
+#highlight_bg = "rgb(50, 10, 10)"
+#text_primary = "white"
+#accent_color = "light_red"
+
+# MacOS Be Like
+border_active = "rgb(0,122,255)"   
+border_inactive = "rgb(60,60,60)"   
+highlight_bg = "rgb(45,45,45)"      
+text_primary = "white"             
+accent_color = "rgb(0,122,255)" 
+
 # ================================================================
 # AVAILABLE COLORS
 # ================================================================
@@ -212,7 +226,7 @@ accent_color = "light_cyan"
 #
 # Custom RGB colors:
 #   - rgb(r, g, b) where r, g, b are 0-255
-#   - Examples: rgb(255, 0, 0), rgb(100, 200, 50), rgb(30, 30, 30)
+#   - Examples: rgb(255, 0, 0), rgb(36, 75, 17), rgb(30, 30, 30)
 #
 # ================================================================
 # COLOR MAPPING IN UI
@@ -222,6 +236,68 @@ accent_color = "light_cyan"
 # highlight_bg:       Background of selected list items
 # text_primary:       Track titles, artist names, primary UI text
 # accent_color:       Progress bars, icons, loading indicators, seek bar
+
+border_active = "green"
+border_inactive = "dark_gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+
+# ================================================================
+# Layout
+# ================================================================
+
+[layout_tree]
+direction = "vertical"
+constraints = ["4", "min(0)", "1", "1"]
+
+# ── Header ────────────────────────────────────────────
+[[layout_tree.children]]
+widget = "header"
+
+# ── Main body ─────────────────────────────────────────
+[[layout_tree.children]]
+direction = "horizontal"
+constraints = ["25%", "min(0)"]
+
+  # Sidebar
+  [[layout_tree.children.children]]
+  direction = "vertical"
+  constraints = ["7", "min(0)"]
+
+    [[layout_tree.children.children.children]]
+    widget = "library"
+
+    [[layout_tree.children.children.children]]
+    widget = "playlists"
+
+  # Right column
+  [[layout_tree.children.children]]
+  direction = "vertical"
+  constraints = ["min(0)", "8"]
+
+    [[layout_tree.children.children.children]]
+    widget = "main_content"
+
+    [[layout_tree.children.children.children]]
+    widget = "queue"
+
+# ── Progress row ──────────────────────────────────────
+[[layout_tree.children]]
+direction = "horizontal"
+constraints = ["30%", "min(0)"]
+
+  [[layout_tree.children.children]]
+  widget = "marquee"
+
+  [[layout_tree.children.children]]
+  widget = "progress"
+
+# ── Help ──────────────────────────────────────────────
+[[layout_tree.children]]
+widget = "help"
+
+``
 ``` 
 
 ## Local Files
