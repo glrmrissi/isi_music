@@ -237,12 +237,6 @@ accent_color = "rgb(0,122,255)"
 # text_primary:       Track titles, artist names, primary UI text
 # accent_color:       Progress bars, icons, loading indicators, seek bar
 
-border_active = "green"
-border_inactive = "dark_gray"
-highlight_bg = "rgb(40,40,40)"
-text_primary = "white"
-accent_color = "green"
-
 # ================================================================
 # Layout
 # ================================================================
