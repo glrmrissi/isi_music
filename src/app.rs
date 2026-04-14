@@ -572,9 +572,6 @@ impl App {
                 KeyCode::Backspace                  => self.state.search_pop(),
                 KeyCode::Tab                        => self.state.switch_focus(),
                 KeyCode::Char(c)                    => self.state.search_push(c),
-                // KeyCode::Char('v') => {
-                //     state.show_visualizer = !state.show_visualizer;
-                // }
                 _ => {}
             }
             return Ok(());
@@ -613,6 +610,10 @@ impl App {
             (KeyCode::Down, KeyModifiers::CONTROL) => {
                 self.state.nav_last();
                 self.maybe_load_more().await;
+            }
+
+            (KeyCode::Char('v'), _) => {
+                    self.state.show_visualizer = !self.state.show_visualizer;
             }
 
             (KeyCode::Up, _) | (KeyCode::Char('k'), _) => self.state.nav_up(),
@@ -758,9 +759,6 @@ impl App {
             (KeyCode::Char('z'), _) => {
                 if !self.state.playback.title.is_empty() {
                     self.state.fullscreen_player = !self.state.fullscreen_player;
-                    if self.state.fullscreen_player {
-                        self.state.active_content = ActiveContent::None;
-                    }
                 }
             }
             (KeyCode::Char('c'), _) if modifiers != KeyModifiers::CONTROL
