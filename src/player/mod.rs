@@ -32,6 +32,7 @@ pub enum PlayerNotification {
     Playing,
     Paused,
     SessionLost,
+    FreeAccountDetected,
 }
 
 pub trait AudioPlayer: Send {
@@ -86,7 +87,7 @@ pub struct NativePlayer {
     pub playing_queued: Option<QueuedTrack>,
     current_index: Option<usize>,
     pub is_playing: bool,
-    pub volume: u8, // 0–100
+    pub volume: u8,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
@@ -130,10 +131,12 @@ impl NativePlayer {
         let mut event_channel = player.get_player_event_channel();
         let session_for_monitor = session.clone();
         tokio::spawn(async move {
+            let mut unavailable_count = 0u32;
             while let Some(event) = event_channel.recv().await {
                 match event {
                     PlayerEvent::Playing { track_id, .. } => {
                         info!("Playing: {}", track_id);
+                        unavailable_count = 0;
                         let _ = notif_tx.send(PlayerNotification::Playing);
                     }
                     PlayerEvent::Paused { track_id, .. } => {
@@ -142,14 +145,18 @@ impl NativePlayer {
                     }
                     PlayerEvent::EndOfTrack { track_id, .. } => {
                         info!("End of track: {}", track_id);
+                        unavailable_count = 0;
                         let _ = notif_tx.send(PlayerNotification::TrackEnded);
                     }
                     PlayerEvent::Unavailable { track_id, .. } => {
-                        if session_for_monitor.is_invalid() {
-                            error!("Session lost — track unavailable: {}", track_id);
+                        error!("Track unavailable: {}", track_id);
+                        unavailable_count += 1;
+                        if unavailable_count >= 2 {
+                            warn!("Multiple consecutive unavailable tracks — likely free account");
+                            let _ = notif_tx.send(PlayerNotification::FreeAccountDetected);
+                        } else if session_for_monitor.is_invalid() {
                             let _ = notif_tx.send(PlayerNotification::SessionLost);
                         } else {
-                            error!("Track unavailable (Premium required?): {}", track_id);
                             let _ = notif_tx.send(PlayerNotification::TrackUnavailable);
                         }
                     }
@@ -227,8 +234,10 @@ impl NativePlayer {
     }
 
     pub fn pause(&mut self) {
-        self.player.pause();
-        self.is_playing = false;
+        if self.is_playing {
+            self.player.pause();
+            self.is_playing = false;
+        }
     }
 
     pub fn toggle(&mut self) {
