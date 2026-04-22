@@ -76,6 +76,26 @@ pub struct SpotifyClient {
 }
 
 impl SpotifyClient {
+    pub fn new_unauthenticated() -> Self {
+        let client = SpotifyAuth::build_client().unwrap_or_else(|_| {
+            let creds = rspotify::Credentials::new_pkce("dummy");
+            let oauth = rspotify::OAuth {
+                redirect_uri: "http://127.0.0.1:8888/callback".to_string(),
+                scopes: rspotify::scopes!("streaming"),
+                ..Default::default()
+            };
+            rspotify::AuthCodePkceSpotify::new(creds, oauth)
+        });
+        Self {
+            client,
+            http: reqwest::Client::new(),
+            shuffle_state: false,
+            repeat_state: RepeatState::Off,
+            user_market: None,
+            authenticated: false,
+        }
+    }
+
     pub async fn new() -> Result<Self> {
         let mut client = SpotifyAuth::build_client()?;
 
@@ -109,7 +129,7 @@ impl SpotifyClient {
                     if let Ok(mut guard) = client.token.lock().await {
                         *guard = Some(token);
                     }
-                    false 
+                    false
                 }
                 Err(e) => {
                     warn!("Refresh token exchange failed ({e}), re-authenticating...");
@@ -176,6 +196,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_liked_tracks(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let page = self
             .client
             .current_user_saved_tracks_manual(None, Some(50), Some(offset))
@@ -204,6 +225,7 @@ impl SpotifyClient {
     }
 
     pub async fn play_track_uri(&self, track_uri: &str) -> Result<()> {
+        if !self.authenticated { return Ok(()); }
         use rspotify::model::PlayableId;
         let id = TrackId::from_uri(track_uri)
             .map_err(|e| anyhow::anyhow!("Invalid track URI: {e}"))?;
@@ -242,6 +264,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_playlist_tracks(&self, playlist_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let token = self
             .get_access_token()
             .await
@@ -276,16 +299,14 @@ impl SpotifyClient {
                     continue;
                 };
 
-                if track.is_null() || track["type"].as_str() == Some("episode") { 
-                    continue; 
+                if track.is_null() || track["type"].as_str() == Some("episode") {
+                    continue;
                 }
 
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
-                
                 let artist = track["artists"].as_array()
                     .map(|a| a.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
-
                 let album = track["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
                 let uri = track["uri"].as_str().unwrap_or("").to_string();
@@ -300,6 +321,7 @@ impl SpotifyClient {
     }
 
     pub async fn play_in_context(&self, playlist_uri: &str, track_uri: &str) -> Result<()> {
+        if !self.authenticated { return Ok(()); }
         let id = PlaylistId::from_uri(playlist_uri)
             .map_err(|e| anyhow::anyhow!("Invalid playlist URI: {e}"))?;
         self.client
@@ -339,15 +361,10 @@ impl SpotifyClient {
                 let duration = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
 
                 let url = if let Some(img) = track.album.images.first() {
-                    tracing::debug!("art_url from album.images: {}", img.url);
                     Some(img.url.clone())
                 } else if let Some(id) = &track.id {
-                    tracing::debug!("album.images vazio, buscando via API track: {}", id.uri());
-                    let fetched = self.fetch_track_art_url(&id.uri()).await;
-                    tracing::debug!("fetch_track_art_url retornou: {:?}", fetched);
-                    fetched
+                    self.fetch_track_art_url(&id.uri()).await
                 } else {
-                    tracing::warn!("sem imagem e sem track id");
                     None
                 };
 
@@ -380,6 +397,7 @@ impl SpotifyClient {
     }
 
     pub async fn toggle_playback(&self) -> Result<()> {
+        if !self.authenticated { return Ok(()); }
         let ctx = self.client.current_playback(None, None::<&[_]>).await?;
         match ctx {
             Some(c) if c.is_playing => self.client.pause_playback(None).await?,
@@ -389,20 +407,34 @@ impl SpotifyClient {
     }
 
     pub async fn next_track(&self) -> Result<()> {
+        if !self.authenticated { return Ok(()); }
         self.client.next_track(None).await?;
         Ok(())
     }
 
     pub async fn prev_track(&self) -> Result<()> {
+        if !self.authenticated { return Ok(()); }
         self.client.previous_track(None).await?;
         Ok(())
     }
 
     pub async fn search_all(&self, query: &str) -> Result<FullSearchResults> {
+        if !self.authenticated {
+            return Ok(FullSearchResults {
+                tracks: vec![], artists: vec![], albums: vec![], playlists: vec![],
+                tracks_total: 0, artists_total: 0, albums_total: 0, playlists_total: 0,
+            });
+        }
         self.search_internal(query, "track,artist,album,playlist", 0, 10).await
     }
 
     pub async fn search_more(&self, query: &str, search_type: &str, offset: u32) -> Result<FullSearchResults> {
+        if !self.authenticated {
+            return Ok(FullSearchResults {
+                tracks: vec![], artists: vec![], albums: vec![], playlists: vec![],
+                tracks_total: 0, artists_total: 0, albums_total: 0, playlists_total: 0,
+            });
+        }
         self.search_internal(query, search_type, offset, 10).await
     }
 
@@ -497,12 +529,10 @@ impl SpotifyClient {
                     let name = item["name"].as_str().unwrap_or("Unknown").to_string();
                     let uri = item["uri"].as_str().unwrap_or("").to_string();
                     let total_tracks = item["tracks"]["total"].as_u64().unwrap_or(0) as u32;
-                    
                     let art_url = item["images"].as_array()
                         .and_then(|imgs| imgs.first())
                         .and_then(|img| img["url"].as_str())
                         .map(|s| s.to_string());
-
                     playlists.push(PlaylistSummary { id, name, uri, total_tracks, art_url });
                 }
             }
@@ -512,14 +542,14 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_album_tracks(&self, album_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
-        let client = &self.http;
-        let response = client
+        let response = self.http
             .get(format!("https://api.spotify.com/v1/albums/{album_id}/tracks"))
             .bearer_auth(&token)
             .query(&[("limit", "50"), ("offset", &offset_str)])
@@ -553,6 +583,7 @@ impl SpotifyClient {
     }
 
     pub async fn save_current_track(&self) -> Result<()> {
+        if !self.authenticated { return Ok(()); }
         let ctx = self.client.current_playback(None, None::<&[_]>).await?;
         if let Some(PlayableItem::Track(track)) = ctx.and_then(|c| c.item) {
             if let Some(id) = track.id {
@@ -565,6 +596,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_saved_albums(&self, offset: u32) -> Result<(Vec<AlbumSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let page = self
             .client
             .current_user_saved_albums_manual(None, Some(20), Some(offset))
@@ -582,18 +614,13 @@ impl SpotifyClient {
             let id = album.id.id().to_owned();
             let uri = album.id.uri();
             let total_tracks = album.tracks.total;
-            albums.push(AlbumSummary {
-                id,
-                name: album.name,
-                artist,
-                uri,
-                total_tracks,
-            });
+            albums.push(AlbumSummary { id, name: album.name, artist, uri, total_tracks });
         }
         Ok((albums, total))
     }
 
     pub async fn fetch_followed_artists(&self) -> Result<Vec<ArtistSummary>> {
+        if !self.authenticated { return Ok(Vec::new()); }
         let page = self
             .client
             .current_user_followed_artists(None, Some(50))
@@ -610,6 +637,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_artist_tracks(&self, artist_name: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let token = self
             .get_access_token()
             .await
@@ -658,14 +686,14 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_saved_shows(&self, offset: u32) -> Result<(Vec<ShowSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
-        let client = &self.http;
-        let response = client
+        let response = self.http
             .get("https://api.spotify.com/v1/me/shows")
             .bearer_auth(&token)
             .query(&[("limit", "20"), ("offset", &offset_str)])
@@ -698,20 +726,20 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_show_episodes(&self, show_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated { return Ok((Vec::new(), 0)); }
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
-        let client = &self.http;
         let mut query = vec![("limit", "50"), ("offset", &offset_str)];
         let market_owned;
         if let Some(m) = &self.user_market {
             market_owned = m.clone();
             query.push(("market", &market_owned));
         }
-        let response = client
+        let response = self.http
             .get(format!("https://api.spotify.com/v1/shows/{show_id}/episodes"))
             .bearer_auth(&token)
             .query(&query)
@@ -792,12 +820,13 @@ impl SpotifyClient {
         seed_uris: &[String],
         limit: u8,
     ) -> Result<Vec<TrackSummary>> {
+        if !self.authenticated { return Ok(Vec::new()); }
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let mut seed_artists: Vec<(String, String)> = Vec::new(); // (id, name)
+        let mut seed_artists: Vec<(String, String)> = Vec::new();
 
         for uri in seed_uris {
             if let Some(id) = uri.strip_prefix("spotify:artist:") {
@@ -830,7 +859,7 @@ impl SpotifyClient {
         let seed_artist_names: Vec<String> = seed_artists.iter().map(|(_, n)| n.clone()).collect();
         let market = self.user_market.as_deref().unwrap_or("BR");
 
-        let mut featured_artists: Vec<String> = Vec::new(); // artist names
+        let mut featured_artists: Vec<String> = Vec::new();
 
         for (artist_id, _) in seed_artists.iter().take(2) {
             if let Ok(resp) = self.http
@@ -928,7 +957,6 @@ impl SpotifyClient {
             if pool.len() >= (limit as usize * 2) { break; }
         }
 
-
         use rand::seq::SliceRandom;
         pool.shuffle(&mut rand::thread_rng());
         pool.truncate(limit as usize);
@@ -938,6 +966,7 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_track_art_url(&self, track_uri: &str) -> Option<String> {
+        if !self.authenticated { return None; }
         let track_id = track_uri.strip_prefix("spotify:track:")?;
         let token = self.get_access_token().await?;
         let json: serde_json::Value = self.http
@@ -951,4 +980,3 @@ impl SpotifyClient {
             .map(|s| s.to_string())
     }
 }
-

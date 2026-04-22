@@ -7,8 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
-/// Read title/artist/album/duration from an audio file using symphonia.
-/// Falls back to filename for missing tags.
 fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
     use symphonia::core::{
         formats::FormatOptions,
@@ -53,7 +51,6 @@ fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
         })
         .unwrap_or(0);
 
-    // Pull tags from the first available metadata revision
     let mut title = fallback_name.clone();
     let mut artist = String::new();
     let mut album = String::new();
@@ -75,6 +72,32 @@ fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
     (title, artist, album, duration_ms)
 }
 
+fn extract_embedded_art(path: &Path) -> Option<Vec<u8>> {
+    use symphonia::core::{
+        formats::FormatOptions,
+        io::MediaSourceStream,
+        meta::MetadataOptions,
+        probe::Hint,
+    };
+
+    let file = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .ok()?;
+
+    let mut format = probed.format;
+    let meta = format.metadata();
+    let rev = meta.current()?;
+
+    rev.visuals().first().map(|v| v.data.to_vec())
+}
+
 use crate::discord::DiscordRpc;
 use crate::lastfm::LastfmClient;
 use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification, RepeatMode};
@@ -87,51 +110,38 @@ use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, 
 
 pub struct App {
     spotify: SpotifyClient,
-    /// The currently active player (Spotify or local).
     player: Option<Box<dyn AudioPlayer>>,
-    /// The Spotify player kept aside while local playback is active, and vice-versa.
     parked_player: Option<Box<dyn AudioPlayer>>,
-    /// True when `player` is the LocalPlayer, false when it's the NativePlayer.
     local_active: bool,
     lastfm: Option<Arc<LastfmClient>>,
     ui: Ui,
     state: UiState,
     last_tick: Instant,
     should_quit: bool,
-    // Seek hold detection
     last_seek_time: Option<Instant>,
     seek_hold_count: u32,
-    // Scrobbling state
     scrobble_sent: bool,
     track_start_unix: u64,
-    // Album art
     current_track_uri: String,
     last_art_uri: String,
     album_art_pending: Option<tokio::sync::oneshot::Receiver<(Option<String>, Option<Vec<u8>>)>>,
     picker: Picker,
-    // MPRIS D-Bus integration
     #[cfg(feature = "mpris")]
     mpris: Option<MprisHandle>,
-    // Discord Rich Presence
     discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
     discord_pending_since: Option<Instant>,
-    // Real-time audio band energies from AnalyzerSink
     band_energies: Option<Arc<Mutex<Vec<f32>>>>,
     art_url: Option<String>,
-    // Session reconnection state
     session_reconnecting: bool,
-    // Radio Mode: auto-fetch recommendations when the queue runs dry
     radio_mode: bool,
-    /// Ring buffer of the last 5 Spotify track URIs played — used as seeds for recommendations.
     recent_track_uris: std::collections::VecDeque<String>,
-    /// Snapshot of the track list that is currently loaded into the player queue.
-    /// Kept separate from `state.tracks` so that navigating to another playlist
-    /// while music is playing does not corrupt playback metadata.
     playing_tracks: Vec<crate::spotify::TrackSummary>,
     theme: Theme,
     theme_rx: std::sync::mpsc::Receiver<Theme>,
+    consecutive_unavailable: u32,
+    spotify_streaming_disabled: bool,
 }
 
 impl App {
@@ -142,11 +152,18 @@ impl App {
             _ => None,
         };
 
-        let mut spotify = SpotifyClient::new().await?;
+        let mut spotify = match SpotifyClient::new().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Spotify unavailable ({e:#}), starting in local-only mode");
+                SpotifyClient::new_unauthenticated()
+            }
+        };
 
         let volume = crate::config::load_volume();
 
-        // Try to start the Spotify (native) player if authenticated
+        let mut startup_warning: Option<String> = None;
+
         let spotify_player: Option<Box<dyn AudioPlayer>> = if spotify.authenticated {
             match spotify.get_access_token().await {
                 Some(token) => match NativePlayer::new(token, false).await {
@@ -154,7 +171,18 @@ impl App {
                         tracing::info!("Native player started");
                         Some(Box::new(p) as Box<dyn AudioPlayer>)
                     }
-                    Err(e) => { warn!("Native player unavailable: {e:#}"); None }
+                    Err(e) => {
+                        let msg = e.to_string().to_lowercase();
+                        if msg.contains("free") || msg.contains("premium") {
+                            warn!("Spotify free account detected — streaming disabled");
+                            startup_warning = Some(
+                                "⚠ Spotify Premium required for streaming. Starting in local-only mode.".to_string()
+                            );
+                        } else {
+                            warn!("Native player unavailable: {e:#}");
+                        }
+                        None
+                    }
                 },
                 None => { warn!("Token not available for native player"); None }
             }
@@ -162,7 +190,6 @@ impl App {
             None
         };
 
-        // Always try to start the local player (used for local files regardless of Spotify)
         let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume) {
             Ok(p) => {
                 tracing::info!("Local player started");
@@ -171,7 +198,6 @@ impl App {
             Err(e) => { warn!("Local player unavailable: {e:#}"); None }
         };
 
-        // Active player: Spotify when available, otherwise local
         let (player, parked_player, local_active) = match (spotify_player, local_player) {
             (Some(sp), local) => (Some(sp), local, false),
             (None, Some(lp)) => (Some(lp), None, true),
@@ -182,14 +208,20 @@ impl App {
 
         let mut state = UiState::new();
 
-        match spotify.fetch_playlists().await {
-            Ok(playlists) => {
-                state.playlists = playlists;
-                if !state.playlists.is_empty() {
-                    state.playlist_list.select(Some(0));
+        if let Some(msg) = startup_warning {
+            state.status_msg = Some(msg);
+        }
+
+        if spotify.authenticated {
+            match spotify.fetch_playlists().await {
+                Ok(playlists) => {
+                    state.playlists = playlists;
+                    if !state.playlists.is_empty() {
+                        state.playlist_list.select(Some(0));
+                    }
                 }
+                Err(e) => warn!("Failed to load playlists: {e}"),
             }
-            Err(e) => warn!("Failed to load playlists: {e}"),
         }
 
         let initial_playback = spotify.fetch_playback().await.unwrap_or_default();
@@ -240,7 +272,9 @@ impl App {
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
             theme,
-            theme_rx
+            theme_rx,
+            consecutive_unavailable: 0,
+            spotify_streaming_disabled: false,
         })
     }
 
@@ -251,12 +285,11 @@ impl App {
         loop {
             if let Ok(new_theme) = self.theme_rx.try_recv() {
                 self.theme = new_theme.clone();
-                self.ui = Ui::new(new_theme); 
+                self.ui = Ui::new(new_theme);
             }
             let now = Instant::now();
             let delta_ms = now.duration_since(self.last_tick).as_millis() as u64;
             self.last_tick = now;
-
 
             let mut needs_sync = false;
             let mut needs_reconnect = false;
@@ -272,8 +305,8 @@ impl App {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded => {
+                            self.consecutive_unavailable = 0;
                             if parked_has_queue {
-                                // Cross-player queue has priority over the active playlist
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
                             } else if player.next() {
@@ -285,9 +318,13 @@ impl App {
                                 self.state.playback.is_playing = false;
                             }
                         }
-                        PlayerNotification::Playing => self.state.playback.is_playing = true,
+                        PlayerNotification::Playing => {
+                            self.consecutive_unavailable = 0;
+                            self.state.playback.is_playing = true;
+                        }
                         PlayerNotification::Paused => self.state.playback.is_playing = false,
                         PlayerNotification::TrackUnavailable => {
+                            self.consecutive_unavailable += 1;
                             self.state.status_msg = Some("Track unavailable, skipping...".to_string());
                             if parked_has_queue {
                                 needs_crossover = true;
@@ -302,11 +339,32 @@ impl App {
                             }
                         }
                         PlayerNotification::SessionLost => {
-                            self.state.status_msg = Some("Session lost, reconnecting...".to_string());
-                            needs_reconnect = true;
+                            if !self.spotify_streaming_disabled {
+                                self.state.status_msg = Some("Session lost, reconnecting...".to_string());
+                                needs_reconnect = true;
+                            }
+                        }
+                        PlayerNotification::FreeAccountDetected => {
+                            self.spotify_streaming_disabled = true;
+                            self.consecutive_unavailable = 0;
+                            self.state.status_msg = Some(
+                                "⚠ Spotify Premium required for streaming. Switched to local-only mode.".to_string()
+                            );
+                            self.player = None;
+                            self.band_energies = None;
+                            if self.parked_player.is_some() {
+                                std::mem::swap(&mut self.player, &mut self.parked_player);
+                                self.local_active = true;
+                                self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+                            }
+                            needs_sync = false;
+                            break;
                         }
                     }
                 }
+            }
+
+            if let Some(player) = &mut self.player {
                 self.state.playback.is_playing = player.is_playing();
                 self.state.playback.volume = player.volume();
                 self.state.playback.shuffle = player.shuffle();
@@ -317,14 +375,17 @@ impl App {
                 };
             }
 
-            // If the active player's queue ended, check if the parked player has queued tracks
             if needs_crossover {
                 let parked_has_queue = self.parked_player
                     .as_ref()
                     .map(|p| !p.user_queue().is_empty())
                     .unwrap_or(false);
                 if parked_has_queue {
-                    // Swap players and play next from the newly-active player's user queue
+                    if let Some(ref mut p) = self.player {
+                        if p.is_playing() {
+                            p.pause();
+                        }
+                    }
                     std::mem::swap(&mut self.player, &mut self.parked_player);
                     self.local_active = !self.local_active;
                     self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
@@ -342,13 +403,8 @@ impl App {
             }
 
             if needs_sync {
-                // sync_track_selection must run first — it reads take_playing_queued()
-                // which is consumed once, and sets local metadata from the native player.
                 self.sync_track_selection();
                 self.sync_queue_display();
-                // Only ask Spotify's API when no native player is in control.
-                // With librespot running, the API lags behind and would overwrite
-                // the correct local state we just set above.
                 if self.player.is_none() {
                     if let Ok(current_pb) = self.spotify.fetch_playback().await {
                         self.state.playback = current_pb.clone();
@@ -441,12 +497,10 @@ impl App {
                 let playing_changed = pb.is_playing != self.discord_last_playing;
 
                 if title_changed {
-                    // Track changed — wait for art_url before sending
                     self.discord_pending_since = Some(Instant::now());
                     self.discord_last_title = pb.title.clone();
                     self.discord_last_playing = pb.is_playing;
                 } else if playing_changed {
-                    // Pause/resume — send immediately, no need to wait for art
                     self.discord_last_playing = pb.is_playing;
                     self.discord_pending_since = None;
                     if pb.title.is_empty() {
@@ -458,7 +512,6 @@ impl App {
                     }
                 }
 
-                // Flush pending track update once art arrives or after 5s timeout
                 if let Some(since) = self.discord_pending_since {
                     let art_ready = pb.art_url.is_some();
                     let timed_out = since.elapsed() >= Duration::from_secs(5);
@@ -474,6 +527,7 @@ impl App {
                     }
                 }
             }
+
             self.maybe_fetch_album_art().await;
 
             terminal.draw(|f| self.ui.render(f, &mut self.state))?;
@@ -532,7 +586,6 @@ impl App {
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
 
-        // Search input mode
         if self.state.search_active {
             match code {
                 KeyCode::Esc => self.state.cancel_search(),
@@ -540,6 +593,9 @@ impl App {
                     let query = self.state.search_query.trim().to_string();
                     if query.is_empty() {
                         self.state.cancel_search();
+                    } else if !self.spotify.authenticated {
+                        self.state.status_msg = Some("Search requires Spotify".to_string());
+                        self.state.search_active = false;
                     } else {
                         self.state.status_msg = Some(format!("Searching \"{query}\"..."));
                         match self.spotify.search_all(&query).await {
@@ -577,7 +633,6 @@ impl App {
             return Ok(());
         }
 
-        // Seek: ← → with hold acceleration
         match code {
             KeyCode::Left | KeyCode::Right => {
                 let is_held = self.last_seek_time
@@ -613,7 +668,7 @@ impl App {
             }
 
             (KeyCode::Char('v'), _) => {
-                    self.state.show_visualizer = !self.state.show_visualizer;
+                self.state.show_visualizer = !self.state.show_visualizer;
             }
 
             (KeyCode::Up, _) | (KeyCode::Char('k'), _) => self.state.nav_up(),
@@ -622,7 +677,6 @@ impl App {
                 self.maybe_load_more().await;
             }
 
-            // Tab: cycle focus forward; Shift+Tab: cycle focus backward
             (KeyCode::Tab, _) => {
                 if self.state.focus == Focus::Search {
                     self.state.switch_search_panel();
@@ -638,7 +692,6 @@ impl App {
 
             (KeyCode::Char('/'), _) => self.state.start_search(),
 
-            // Backspace → go back to previous search results if available
             (KeyCode::Backspace, _) => {
                 if let Some(prev) = self.state.previous_search.take() {
                     self.state.search_results = Some(prev);
@@ -647,7 +700,6 @@ impl App {
                 }
             }
 
-            // Esc: exit fullscreen or exit search
             (KeyCode::Esc, _) => {
                 if self.state.fullscreen_player {
                     self.state.fullscreen_player = false;
@@ -662,7 +714,7 @@ impl App {
             (KeyCode::Char(' '), _) => {
                 if let Some(player) = &mut self.player {
                     player.toggle();
-                } else {
+                } else if self.spotify.authenticated {
                     let _ = self.spotify.toggle_playback().await;
                 }
             }
@@ -671,7 +723,6 @@ impl App {
                     .and_then(|i| self.state.tracks.get(i))
                     .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms));
                 if let Some((uri, name, artist, duration_ms)) = track {
-                    // Route to the player that owns this URI type
                     let is_local = uri.starts_with("file://");
                     let target = if is_local == self.local_active {
                         self.player.as_mut()
@@ -717,7 +768,7 @@ impl App {
                     player.next();
                     self.sync_track_selection();
                     self.sync_queue_display();
-                } else {
+                } else if self.spotify.authenticated {
                     let _ = self.spotify.next_track().await;
                 }
             }
@@ -725,7 +776,7 @@ impl App {
                 if let Some(player) = &mut self.player {
                     player.prev();
                     self.sync_track_selection();
-                } else {
+                } else if self.spotify.authenticated {
                     let _ = self.spotify.prev_track().await;
                 }
             }
@@ -735,11 +786,9 @@ impl App {
                     self.state.playback.shuffle = player.shuffle();
                 }
             }
-            // Alt+r → Get similar tracks for the selected track or artist
             (KeyCode::Char('r'), KeyModifiers::ALT) => {
                 self.get_similar_tracks().await;
             }
-            // Shift+r (uppercase R) → Toggle Radio Mode
             (KeyCode::Char('R'), _) => {
                 self.radio_mode = !self.radio_mode;
                 self.state.playback.radio_mode = self.radio_mode;
@@ -768,7 +817,6 @@ impl App {
                      && !self.state.playback.title.is_empty()) => {
                 self.state.show_album_art = !self.state.show_album_art;
                 if self.state.show_album_art {
-                    // Reset so maybe_fetch_album_art triggers a new fetch
                     self.last_art_uri.clear();
                 } else {
                     self.state.album_art = None;
@@ -776,9 +824,13 @@ impl App {
                 }
             }
             (KeyCode::Char('l'), _) => {
-                match self.spotify.save_current_track().await {
-                    Ok(_)  => self.state.status_msg = Some("♥ Liked!".to_string()),
-                    Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
+                if !self.spotify.authenticated {
+                    self.state.status_msg = Some("Spotify not connected".to_string());
+                } else {
+                    match self.spotify.save_current_track().await {
+                        Ok(_)  => self.state.status_msg = Some("♥ Liked!".to_string()),
+                        Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
+                    }
                 }
             }
             (KeyCode::Char('+'), _) | (KeyCode::Char('='), _) => {
@@ -801,11 +853,14 @@ impl App {
 
     async fn handle_enter(&mut self) {
         match self.state.focus {
-            // Library: Liked Songs, Albums (placeholder), Artists (placeholder), Podcasts (placeholder)
             Focus::Library => {
                 let idx = match self.state.library_list.selected() { Some(i) => i, None => return };
+                if idx != 4 && !self.spotify.authenticated {
+                    self.state.status_msg = Some("Spotify not connected — only Local Files available".to_string());
+                    return;
+                }
                 match idx {
-                    0 => { // Liked Songs
+                    0 => {
                         self.state.status_msg = Some("Loading Liked Songs…".to_string());
                         match self.spotify.fetch_liked_tracks(0).await {
                             Ok((tracks, total)) => {
@@ -823,7 +878,7 @@ impl App {
                             Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
-                    1 => { // Albums
+                    1 => {
                         self.state.status_msg = Some("Loading saved albums…".to_string());
                         match self.spotify.fetch_saved_albums(0).await {
                             Ok((albums, total)) => {
@@ -839,7 +894,7 @@ impl App {
                             Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
-                    2 => { // Artists
+                    2 => {
                         self.state.status_msg = Some("Loading followed artists…".to_string());
                         match self.spotify.fetch_followed_artists().await {
                             Ok(artists) => {
@@ -853,10 +908,10 @@ impl App {
                             Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
-                    3 => { // Podcasts — coming soon
+                    3 => {
                         self.state.status_msg = Some("Podcasts — coming soon".to_string());
                     }
-                    4 => { // Local Files
+                    4 => {
                         self.load_local_files().await;
                     }
                     _ => {}
@@ -958,20 +1013,21 @@ impl App {
                     }
                     ActiveContent::LocalFiles | ActiveContent::Tracks | ActiveContent::None => {
                         if let Some(idx) = self.state.selected_track_index() {
-                            // Switch to the appropriate player based on content type
                             if self.state.active_content == ActiveContent::LocalFiles {
                                 self.activate_local_player();
                             } else {
+                                if self.spotify_streaming_disabled {
+                                    self.state.status_msg = Some("⚠ Spotify Premium required for streaming".to_string());
+                                    return;
+                                }
                                 self.activate_spotify_player();
                             }
-                            // Podcast episodes cannot be played via librespot
                             if self.state.tracks.get(idx)
                                 .map(|t| t.uri.starts_with("spotify:episode:"))
                                 .unwrap_or(false)
                             {
                                 self.state.status_msg = Some("Podcast playback not supported".to_string());
-                            } else
-                            if let Some(player) = &mut self.player {
+                            } else if let Some(player) = &mut self.player {
                                 let uris: Vec<String> = self.state.tracks.iter()
                                     .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                     .map(|t| t.uri.clone())
@@ -980,9 +1036,6 @@ impl App {
                                     .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                     .count();
                                 player.set_queue(uris, adjusted_idx);
-                                // Snapshot the playing track list so sync_track_selection
-                                // always reads from the correct source, even if the user
-                                // navigates away to another playlist while this one plays.
                                 self.playing_tracks = self.state.tracks.clone();
                                 if let Some(track) = self.state.tracks.get(idx) {
                                     self.state.playback.title = track.name.clone();
@@ -994,7 +1047,7 @@ impl App {
                                     self.current_track_uri = track.uri.clone();
                                     self.on_track_started();
                                 }
-                            } else {
+                            } else if self.spotify.authenticated {
                                 let track_uri = self.state.tracks[idx].uri.clone();
                                 let is_playlist = self.state.active_playlist_uri
                                     .as_deref()
@@ -1023,9 +1076,12 @@ impl App {
                             .and_then(|sr| sr.selected_track_uri())
                             .map(|s| s.to_string());
                         if let Some(track_uri) = uri {
+                            if self.spotify_streaming_disabled {
+                                self.state.status_msg = Some("⚠ Spotify Premium required for streaming".to_string());
+                                return;
+                            }
                             self.activate_spotify_player();
                             if let Some(player) = &mut self.player {
-                                // load just this track into queue
                                 self.current_track_uri = track_uri.clone();
                                 player.set_queue(vec![track_uri], 0);
                                 if let Some(sr) = &self.state.search_results {
@@ -1037,8 +1093,6 @@ impl App {
                                             self.state.playback.duration_ms = t.duration_ms;
                                             self.state.playback.progress_ms = 0;
                                             self.state.playback.is_playing = true;
-                                            // Single track from search — snapshot it so
-                                            // sync_track_selection can find it later.
                                             self.playing_tracks = vec![crate::spotify::TrackSummary {
                                                 uri: t.uri.clone(),
                                                 name: t.name.clone(),
@@ -1050,7 +1104,7 @@ impl App {
                                         }
                                     }
                                 }
-                            } else {
+                            } else if self.spotify.authenticated {
                                 let _ = self.spotify.play_track_uri(&track_uri).await;
                             }
                         }
@@ -1142,7 +1196,6 @@ impl App {
         self.state.playback.is_local = self.local_active;
         self.state.playback.radio_mode = self.radio_mode;
 
-        // Keep a rolling window of the last 5 Spotify tracks for radio seeds
         if self.current_track_uri.starts_with("spotify:track:") {
             self.recent_track_uris.push_back(self.current_track_uri.clone());
             if self.recent_track_uris.len() > 5 {
@@ -1150,7 +1203,6 @@ impl App {
             }
         }
 
-        // Reset album art so maybe_fetch_album_art will kick off a new fetch
         self.state.album_art = None;
         self.state.playback.art_url = None;
         self.album_art_pending = None;
@@ -1166,9 +1218,7 @@ impl App {
         }
     }
 
-    /// Load next page of tracks for the active context.
     async fn maybe_load_more(&mut self) {
-        // Handle search results pagination
         if self.state.focus == Focus::Search {
             let should_load = self.state.search_results.as_ref().map(|sr| {
                 if sr.loading { return None; }
@@ -1207,7 +1257,6 @@ impl App {
             return;
         }
 
-        // Handle album list pagination
         if self.state.active_content == ActiveContent::Albums {
             let selected = self.state.album_list.selected().unwrap_or(0);
             let len = self.state.albums.len();
@@ -1225,7 +1274,6 @@ impl App {
             return;
         }
 
-        // Handle show list pagination
         if self.state.active_content == ActiveContent::Shows {
             let selected = self.state.show_list.selected().unwrap_or(0);
             let len = self.state.shows.len();
@@ -1292,7 +1340,6 @@ impl App {
             && self.state.active_content == ActiveContent::None
             && !self.state.playback.title.is_empty();
 
-        // Always fetch art so Discord RPC and MPRIS have the URL regardless of TUI state
         if (!self.state.show_album_art && !need_art_for_now_playing)
             && self.discord.is_none()
         {
@@ -1305,6 +1352,14 @@ impl App {
         {
             return;
         }
+
+        if self.current_track_uri.starts_with("file://") {
+            self.fetch_local_album_art();
+            return;
+        }
+
+        if !self.spotify.authenticated { return; }
+
         let uri = self.current_track_uri.clone();
         let Some(token) = self.spotify.get_access_token().await else { return };
         let http = self.spotify.http_client();
@@ -1330,7 +1385,6 @@ impl App {
                 let _ = tx.send((None, None));
                 return;
             };
-            // Use the largest image (first) for better quality in terminal
             let Some(url) = json["album"]["images"].as_array()
                 .and_then(|imgs| imgs.first())
                 .and_then(|img| img["url"].as_str())
@@ -1347,8 +1401,28 @@ impl App {
         });
     }
 
+    fn fetch_local_album_art(&mut self) {
+        if self.current_track_uri == self.last_art_uri || self.album_art_pending.is_some() {
+            return;
+        }
+        self.last_art_uri = self.current_track_uri.clone();
+
+        let path = self.current_track_uri
+            .strip_prefix("file://")
+            .map(std::path::PathBuf::from);
+
+        let Some(path) = path else { return };
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.album_art_pending = Some(rx);
+
+        tokio::spawn(async move {
+            let bytes = extract_embedded_art(&path);
+            let _ = tx.send((None, bytes));
+        });
+    }
+
     fn sync_track_selection(&mut self) {
-        // If we just played a user_queue track, update playback from that.
         let queued = self.player.as_mut().and_then(|p| p.take_playing_queued());
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
@@ -1364,9 +1438,6 @@ impl App {
 
         if let Some(player) = &self.player {
             if let Some(idx) = player.current_index() {
-                // Read metadata from playing_tracks, NOT from state.tracks.
-                // state.tracks reflects whatever playlist the user is currently
-                // browsing, which may differ from the one loaded into the player.
                 if let Some(track) = self.playing_tracks.get(idx) {
                     self.state.playback.title = track.name.clone();
                     self.state.playback.artist = track.artist.clone();
@@ -1376,8 +1447,6 @@ impl App {
                     self.current_track_uri = track.uri.clone();
                     self.on_track_started();
                 }
-                // Only move the visual cursor if the user is still looking at
-                // the same playlist that is playing.
                 if self.playing_tracks.len() == self.state.tracks.len()
                     && self.playing_tracks.get(idx).map(|t| &t.uri)
                         == self.state.tracks.get(idx).map(|t| &t.uri)
@@ -1388,25 +1457,24 @@ impl App {
         }
     }
 
-    /// Swap the active player to the LocalPlayer.
-    /// Pauses Spotify playback and moves it to `parked_player`.
     fn activate_local_player(&mut self) {
         if self.local_active { return; }
-        // Pause whatever is currently playing in the Spotify player
         if let Some(ref mut p) = self.player {
-            p.pause();
+            if p.is_playing() {
+                p.pause();
+            }
         }
         std::mem::swap(&mut self.player, &mut self.parked_player);
         self.local_active = true;
         self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
     }
 
-    /// Swap the active player back to the Spotify/NativePlayer.
-    /// Pauses local playback and moves it to `parked_player`.
     fn activate_spotify_player(&mut self) {
         if !self.local_active { return; }
         if let Some(ref mut p) = self.player {
-            p.pause();
+            if p.is_playing() {
+                p.pause();
+            }
         }
         std::mem::swap(&mut self.player, &mut self.parked_player);
         self.local_active = false;
@@ -1425,7 +1493,6 @@ impl App {
             }
         };
 
-        // Expand leading ~
         let dir = if raw_dir.starts_with('~') {
             if let Some(home) = dirs::home_dir() {
                 home.join(&raw_dir[2..])
@@ -1484,7 +1551,6 @@ impl App {
         }
     }
 
-    /// Fetch recommendations from Spotify and add them to the active player's user queue.
     async fn radio_refill(&mut self) {
         let seeds: Vec<String> = self.recent_track_uris.iter().cloned().collect();
         if seeds.is_empty() {
@@ -1504,7 +1570,6 @@ impl App {
                 }
             }
             Ok(_) | Err(_) => {
-                // Could not find recommendations — turn off radio so the player doesn't get stuck
                 self.radio_mode = false;
                 self.state.playback.radio_mode = false;
                 self.state.status_msg = Some("Radio: could not find tracks, radio off".to_string());
@@ -1512,7 +1577,6 @@ impl App {
         }
     }
 
-    /// Fetch similar tracks for the currently selected track or artist and display them.
     async fn get_similar_tracks(&mut self) {
         let seed_uri = match self.state.focus {
             Focus::Tracks => self
@@ -1568,11 +1632,9 @@ impl App {
     fn sync_queue_display(&mut self) {
         let mut items: Vec<(String, String)> = Vec::new();
 
-        // Active player's queue comes first
         if let Some(p) = &self.player {
             items.extend(p.user_queue().iter().map(|t| (t.name.clone(), t.artist.clone())));
         }
-        // Parked player's queue appended after (shown with a marker)
         if let Some(p) = &self.parked_player {
             let prefix = if self.local_active { " " } else { "󰈣 " };
             items.extend(p.user_queue().iter().map(|t| {
@@ -1583,12 +1645,14 @@ impl App {
         self.state.queue_items = items;
     }
 
-    /// Recreates the librespot session after it has been invalidated.
-    /// Saves the current queue and index, creates a new player, then restores playback.
     async fn reconnect_player(&mut self) {
         warn!("Session lost — attempting to reconnect librespot...");
 
-        // Snapshot what was queued before the session died
+        if self.spotify_streaming_disabled {
+            self.session_reconnecting = false;
+            return;
+        }
+
         let (saved_queue, saved_index) = self
             .player
             .as_ref()
@@ -1596,7 +1660,6 @@ impl App {
             .unwrap_or_default();
         let saved_volume = self.player.as_ref().map(|p| p.volume()).unwrap_or(50);
 
-        // Drop the old (dead) player
         self.player = None;
         self.band_energies = None;
 
@@ -1610,7 +1673,6 @@ impl App {
         match NativePlayer::new(token, false).await {
             Ok(mut p) => {
                 p.set_volume(saved_volume);
-                // Restore the queue at the track that was playing, without auto-playing
                 if !saved_queue.is_empty() {
                     let start = saved_index.unwrap_or(0);
                     p.set_queue(saved_queue, start);
@@ -1621,8 +1683,22 @@ impl App {
                 warn!("Librespot session reconnected successfully");
             }
             Err(e) => {
-                warn!("Reconnect failed: {e:#}");
-                self.state.status_msg = Some(format!("Reconnect failed: {e}"));
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("free") || msg.contains("premium") {
+                    warn!("Spotify free account — disabling streaming permanently");
+                    self.spotify_streaming_disabled = true;
+                    self.state.status_msg = Some(
+                        "⚠ Spotify Premium required. Switched to local-only mode.".to_string()
+                    );
+                    if self.parked_player.is_some() {
+                        std::mem::swap(&mut self.player, &mut self.parked_player);
+                        self.local_active = true;
+                        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+                    }
+                } else {
+                    warn!("Reconnect failed: {e:#}");
+                    self.state.status_msg = Some(format!("Reconnect failed: {e}"));
+                }
             }
         }
 
