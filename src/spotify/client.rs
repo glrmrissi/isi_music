@@ -97,6 +97,14 @@ impl SpotifyClient {
     }
 
     pub async fn new() -> Result<Self> {
+        let cfg = config::AppConfig::load()?;
+        let client_id = cfg.get_client_id().unwrap_or_default();
+
+        if client_id.is_empty() || client_id == "your_client_id_here" {
+            warn!("Spotify client_id is empty or default. Starting in unauthenticated mode.");
+            return Ok(Self::new_unauthenticated());
+        }
+        
         let mut client = SpotifyAuth::build_client()?;
 
         let saved_rt = config::load_refresh_token();
