@@ -719,9 +719,16 @@ impl App {
                 }
             }
             (KeyCode::Char('a'), _) => {
-                let track = self.state.track_list.selected()
-                    .and_then(|i| self.state.tracks.get(i))
-                    .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms));
+                let track = if self.state.active_content == ActiveContent::LocalFiles {
+                    self.state.local_tree_list.selected()
+                        .and_then(|vi| self.state.local_tree.get_visible(vi))
+                        .and_then(|n| n.track().cloned())
+                        .map(|t| (t.uri, t.name, t.artist, t.duration_ms))
+                } else {
+                    self.state.track_list.selected()
+                        .and_then(|i| self.state.tracks.get(i))
+                        .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms))
+                };
                 if let Some((uri, name, artist, duration_ms)) = track {
                     let is_local = uri.starts_with("file://");
                     let target = if is_local == self.local_active {
@@ -1011,17 +1018,48 @@ impl App {
                             }
                         }
                     }
-                    ActiveContent::LocalFiles | ActiveContent::Tracks | ActiveContent::None => {
-                        if let Some(idx) = self.state.selected_track_index() {
-                            if self.state.active_content == ActiveContent::LocalFiles {
-                                self.activate_local_player();
-                            } else {
-                                if self.spotify_streaming_disabled {
-                                    self.state.status_msg = Some("⚠ Spotify Premium required for streaming".to_string());
-                                    return;
-                                }
-                                self.activate_spotify_player();
+                    ActiveContent::LocalFiles => {
+                        let vi = match self.state.local_tree_list.selected() { Some(i) => i, None => return };
+                        let node = match self.state.local_tree.get_visible(vi) {
+                            Some(n) => n.clone(),
+                            None => return,
+                        };
+                        match node {
+                            crate::ui::LocalNode::Folder { .. } => {
+                                self.state.local_tree.toggle_folder(vi);
+                                let new_len = self.state.local_tree.visible_len();
+                                let cur = self.state.local_tree_list.selected().unwrap_or(0);
+                                self.state.local_tree_list.select(Some(cur.min(new_len.saturating_sub(1))));
                             }
+                            crate::ui::LocalNode::Track { track, .. } => {
+                                self.activate_local_player();
+                                let all_tracks = self.state.local_tree.all_tracks_flat();
+                                let start_idx = all_tracks.iter()
+                                    .position(|t| t.uri == track.uri)
+                                    .unwrap_or(0);
+                                let uris: Vec<String> = all_tracks.iter().map(|t| t.uri.clone()).collect();
+                                if let Some(player) = &mut self.player {
+                                    player.set_queue(uris, start_idx);
+                                    self.playing_tracks = all_tracks;
+                                    self.state.playback.title = track.name.clone();
+                                    self.state.playback.artist = track.artist.clone();
+                                    self.state.playback.album = track.album.clone();
+                                    self.state.playback.duration_ms = track.duration_ms;
+                                    self.state.playback.progress_ms = 0;
+                                    self.state.playback.is_playing = true;
+                                    self.current_track_uri = track.uri.clone();
+                                    self.on_track_started();
+                                }
+                            }
+                        }
+                    }
+                    ActiveContent::Tracks | ActiveContent::None => {
+                        if let Some(idx) = self.state.selected_track_index() {
+                            if self.spotify_streaming_disabled {
+                                self.state.status_msg = Some("⚠ Spotify Premium required for streaming".to_string());
+                                return;
+                            }
+                            self.activate_spotify_player();
                             if self.state.tracks.get(idx)
                                 .map(|t| t.uri.starts_with("spotify:episode:"))
                                 .unwrap_or(false)
@@ -1511,43 +1549,115 @@ impl App {
         self.state.status_msg = Some("Scanning local files…".to_string());
 
         let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "m4a", "opus"];
-        let mut tracks = Vec::new();
+        let mut nodes: Vec<crate::ui::LocalNode> = Vec::new();
 
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            let mut paths: Vec<_> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file() && p.extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| extensions.contains(&e.to_lowercase().as_str()))
-                        .unwrap_or(false)
-                })
-                .collect();
-            paths.sort();
+        fn scan_dir(
+            dir: &std::path::Path,
+            depth: usize,
+            nodes: &mut Vec<crate::ui::LocalNode>,
+            extensions: &[&str],
+        ) {
+            let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
+            let mut files: Vec<std::path::PathBuf> = Vec::new();
 
-            for path in paths {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+                entries.sort();
+                for path in entries {
+                    if path.is_dir() {
+                        subdirs.push(path);
+                    } else if path.is_file() {
+                        let ext_ok = path.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| extensions.contains(&e.to_lowercase().as_str()))
+                            .unwrap_or(false);
+                        if ext_ok {
+                            files.push(path);
+                        }
+                    }
+                }
+            }
+
+            for subdir in subdirs {
+                let name = subdir.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let folder_idx = nodes.len();
+                nodes.push(crate::ui::LocalNode::Folder {
+                    name,
+                    depth,
+                    expanded: true,
+                    children_start: folder_idx + 1,
+                    children_count: 0,
+                });
+                let before = nodes.len();
+                scan_dir(&subdir, depth + 1, nodes, extensions);
+                let added = nodes.len() - before;
+                if let crate::ui::LocalNode::Folder { children_count, .. } = &mut nodes[folder_idx] {
+                    *children_count = added;
+                }
+                if added == 0 {
+                    nodes.pop();
+                }
+            }
+
+            for path in files {
                 let (name, artist, album, duration_ms) = read_audio_metadata(&path);
                 let uri = format!("file://{}", path.display());
-                tracks.push(crate::spotify::TrackSummary { name, artist, album, duration_ms, uri });
+                nodes.push(crate::ui::LocalNode::Track {
+                    track: crate::spotify::TrackSummary { name, artist, album, duration_ms, uri },
+                    depth,
+                });
             }
         }
 
-        let count = tracks.len();
-        self.state.tracks = tracks;
-        self.state.tracks_total = count as u32;
-        self.state.tracks_offset = count as u32;
+        scan_dir(&dir, 0, &mut nodes, &extensions);
+
+        let track_count = nodes.iter().filter(|n| !n.is_folder()).count();
+        let has_root_tracks = nodes.iter().any(|n| matches!(n, crate::ui::LocalNode::Track { depth: 0, .. }));
+        let has_subdirs = nodes.iter().any(|n| n.is_folder());
+
+        if !has_root_tracks && has_subdirs {
+        } else if has_root_tracks && has_subdirs {
+            let root_name = dir.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Music")
+                .to_string();
+            let wrapper = crate::ui::LocalNode::Folder {
+                name: root_name,
+                depth: 0,
+                expanded: true,
+                children_start: 1,
+                children_count: nodes.len(),
+            };
+            nodes.insert(0, wrapper);
+            for node in nodes.iter_mut().skip(1) {
+                match node {
+                    crate::ui::LocalNode::Folder { depth, .. } => *depth += 1,
+                    crate::ui::LocalNode::Track { depth, .. } => *depth += 1,
+                }
+            }
+        }
+
+        let tree = crate::ui::LocalFileTree::new(nodes);
+        let vis_len = tree.visible_len();
+
+        self.state.tracks = tree.all_tracks_flat();
+        self.state.tracks_total = track_count as u32;
+        self.state.tracks_offset = track_count as u32;
+        self.state.local_tree = tree;
+        self.state.local_tree_list.select(if vis_len == 0 { None } else { Some(0) });
         self.state.active_playlist_uri = Some("local_files".to_string());
         self.state.active_playlist_id = Some("local_files".to_string());
-        self.state.track_list.select(if count == 0 { None } else { Some(0) });
         self.state.active_content = crate::ui::ActiveContent::LocalFiles;
         self.state.search_results = None;
         self.state.focus = crate::ui::Focus::Tracks;
 
-        if count == 0 {
+        if track_count == 0 {
             self.state.status_msg = Some(format!("No audio files found in {}", dir.display()));
         } else {
-            self.state.status_msg = Some(format!("{count} local tracks loaded"));
+            self.state.status_msg = Some(format!("{track_count} local tracks loaded"));
         }
     }
 

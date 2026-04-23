@@ -90,6 +90,131 @@ pub enum ActiveContent {
     LocalFiles,
 }
 
+/// A node in the local file tree.
+#[derive(Clone)]
+pub enum LocalNode {
+    Folder {
+        name: String,
+        depth: usize,
+        expanded: bool,
+        children_start: usize,
+        children_count: usize,
+    },
+    Track {
+        track: TrackSummary,
+        depth: usize,
+    },
+}
+
+impl LocalNode {
+    pub fn depth(&self) -> usize {
+        match self {
+            LocalNode::Folder { depth, .. } => *depth,
+            LocalNode::Track { depth, .. } => *depth,
+        }
+    }
+
+    pub fn is_folder(&self) -> bool {
+        matches!(self, LocalNode::Folder { .. })
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        match self {
+            LocalNode::Folder { expanded, .. } => *expanded,
+            LocalNode::Track { .. } => false,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            LocalNode::Folder { name, .. } => name,
+            LocalNode::Track { track, .. } => &track.name,
+        }
+    }
+
+    pub fn track(&self) -> Option<&TrackSummary> {
+        match self {
+            LocalNode::Track { track, .. } => Some(track),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct LocalFileTree {
+    pub all_nodes: Vec<LocalNode>,
+    pub visible: Vec<usize>,
+}
+
+impl LocalFileTree {
+    pub fn new(nodes: Vec<LocalNode>) -> Self {
+        let mut tree = Self { all_nodes: nodes, visible: Vec::new() };
+        tree.rebuild_visible();
+        tree
+    }
+
+    pub fn rebuild_visible(&mut self) {
+        self.visible.clear();
+        let mut skip_until_depth: Option<usize> = None;
+
+        for (i, node) in self.all_nodes.iter().enumerate() {
+            if let Some(min_depth) = skip_until_depth {
+                if node.depth() > min_depth {
+                    continue;
+                } else {
+                    skip_until_depth = None;
+                }
+            }
+            self.visible.push(i);
+            if let LocalNode::Folder { expanded, depth, .. } = node {
+                if !expanded {
+                    skip_until_depth = Some(*depth);
+                }
+            }
+        }
+    }
+
+    pub fn toggle_folder(&mut self, visible_idx: usize) {
+        let Some(&node_idx) = self.visible.get(visible_idx) else { return };
+        if let LocalNode::Folder { expanded, .. } = &mut self.all_nodes[node_idx] {
+            *expanded = !*expanded;
+        }
+        self.rebuild_visible();
+    }
+
+    pub fn visible_len(&self) -> usize {
+        self.visible.len()
+    }
+
+    pub fn get_visible(&self, visible_idx: usize) -> Option<&LocalNode> {
+        self.visible.get(visible_idx).and_then(|&i| self.all_nodes.get(i))
+    }
+
+    pub fn all_tracks_flat(&self) -> Vec<TrackSummary> {
+        self.all_nodes.iter().filter_map(|n| n.track().cloned()).collect()
+    }
+
+    pub fn tracks_under_folder(&self, visible_idx: usize) -> Vec<TrackSummary> {
+        let Some(&node_idx) = self.visible.get(visible_idx) else { return vec![] };
+        let folder_depth = self.all_nodes[node_idx].depth();
+        self.all_nodes[node_idx + 1..]
+            .iter()
+            .take_while(|n| n.depth() > folder_depth)
+            .filter_map(|n| n.track().cloned())
+            .collect()
+    }
+
+    pub fn flat_track_index(&self, visible_idx: usize) -> Option<usize> {
+        let Some(&node_idx) = self.visible.get(visible_idx) else { return None };
+        let node = self.all_nodes.get(node_idx)?;
+        if node.is_folder() { return None; }
+        let target_uri = node.track()?.uri.as_str();
+        self.all_nodes.iter()
+            .filter_map(|n| n.track())
+            .position(|t| t.uri == target_uri)
+    }
+}
+
 const LIBRARY_ITEMS: &[&str] = &[
     "Liked Songs",
     "Albums",
@@ -202,6 +327,8 @@ pub struct UiState {
     pub active_content: ActiveContent,
     pub tracks: Vec<TrackSummary>,
     pub track_list: ListState,
+    pub local_tree: LocalFileTree,
+    pub local_tree_list: ListState,
     pub active_playlist_uri: Option<String>,
     pub active_playlist_id: Option<String>,
     pub tracks_offset: u32,
@@ -249,6 +376,8 @@ impl UiState {
             active_content: ActiveContent::None,
             tracks: Vec::new(),
             track_list: ListState::default(),
+            local_tree: LocalFileTree::default(),
+            local_tree_list: ListState::default(),
             active_playlist_uri: None,
             active_playlist_id: None,
             tracks_offset: 0,
@@ -333,9 +462,10 @@ impl UiState {
             }
             Focus::Playlists => scroll_up(&mut self.playlist_list, self.playlists.len()),
             Focus::Tracks => match self.active_content {
-                ActiveContent::Albums  => scroll_up(&mut self.album_list, self.albums.len()),
-                ActiveContent::Artists => scroll_up(&mut self.artist_list, self.artists.len()),
-                ActiveContent::Shows   => scroll_up(&mut self.show_list, self.shows.len()),
+                ActiveContent::Albums    => scroll_up(&mut self.album_list, self.albums.len()),
+                ActiveContent::Artists   => scroll_up(&mut self.artist_list, self.artists.len()),
+                ActiveContent::Shows     => scroll_up(&mut self.show_list, self.shows.len()),
+                ActiveContent::LocalFiles => scroll_up(&mut self.local_tree_list, self.local_tree.visible_len()),
                 _ => scroll_up(&mut self.track_list, self.tracks.len()),
             },
             Focus::Search    => { if let Some(sr) = &mut self.search_results { sr.nav_up(); } }
@@ -353,9 +483,10 @@ impl UiState {
             }
             Focus::Playlists => scroll_down(&mut self.playlist_list, self.playlists.len()),
             Focus::Tracks => match self.active_content {
-                ActiveContent::Albums  => scroll_down(&mut self.album_list, self.albums.len()),
-                ActiveContent::Artists => scroll_down(&mut self.artist_list, self.artists.len()),
-                ActiveContent::Shows   => scroll_down(&mut self.show_list, self.shows.len()),
+                ActiveContent::Albums    => scroll_down(&mut self.album_list, self.albums.len()),
+                ActiveContent::Artists   => scroll_down(&mut self.artist_list, self.artists.len()),
+                ActiveContent::Shows     => scroll_down(&mut self.show_list, self.shows.len()),
+                ActiveContent::LocalFiles => scroll_down(&mut self.local_tree_list, self.local_tree.visible_len()),
                 _ => scroll_down(&mut self.track_list, self.tracks.len()),
             },
             Focus::Search    => { if let Some(sr) = &mut self.search_results { sr.nav_down(); } }
@@ -368,9 +499,10 @@ impl UiState {
             Focus::Library   => self.library_list.select(Some(0)),
             Focus::Playlists => { if !self.playlists.is_empty() { self.playlist_list.select(Some(0)); } }
             Focus::Tracks    => match self.active_content {
-                ActiveContent::Albums  => { if !self.albums.is_empty()  { self.album_list.select(Some(0));  } }
-                ActiveContent::Artists => { if !self.artists.is_empty() { self.artist_list.select(Some(0)); } }
-                ActiveContent::Shows   => { if !self.shows.is_empty()   { self.show_list.select(Some(0));   } }
+                ActiveContent::Albums    => { if !self.albums.is_empty()  { self.album_list.select(Some(0));  } }
+                ActiveContent::Artists   => { if !self.artists.is_empty() { self.artist_list.select(Some(0)); } }
+                ActiveContent::Shows     => { if !self.shows.is_empty()   { self.show_list.select(Some(0));   } }
+                ActiveContent::LocalFiles => { if self.local_tree.visible_len() > 0 { self.local_tree_list.select(Some(0)); } }
                 _ => { if !self.tracks.is_empty() { self.track_list.select(Some(0)); } }
             },
             Focus::Search => { if let Some(sr) = &mut self.search_results { if sr.current_len() > 0 { sr.current_list_mut().select(Some(0)); } } }
@@ -383,9 +515,10 @@ impl UiState {
             Focus::Library   => self.library_list.select(Some(LIBRARY_ITEMS.len() - 1)),
             Focus::Playlists => { let n = self.playlists.len(); if n > 0 { self.playlist_list.select(Some(n - 1)); } }
             Focus::Tracks    => match self.active_content {
-                ActiveContent::Albums  => { let n = self.albums.len();  if n > 0 { self.album_list.select(Some(n - 1));  } }
-                ActiveContent::Artists => { let n = self.artists.len(); if n > 0 { self.artist_list.select(Some(n - 1)); } }
-                ActiveContent::Shows   => { let n = self.shows.len();   if n > 0 { self.show_list.select(Some(n - 1));   } }
+                ActiveContent::Albums    => { let n = self.albums.len();  if n > 0 { self.album_list.select(Some(n - 1));  } }
+                ActiveContent::Artists   => { let n = self.artists.len(); if n > 0 { self.artist_list.select(Some(n - 1)); } }
+                ActiveContent::Shows     => { let n = self.shows.len();   if n > 0 { self.show_list.select(Some(n - 1));   } }
+                ActiveContent::LocalFiles => { let n = self.local_tree.visible_len(); if n > 0 { self.local_tree_list.select(Some(n - 1)); } }
                 _ => { let n = self.tracks.len(); if n > 0 { self.track_list.select(Some(n - 1)); } }
             },
             Focus::Search => { if let Some(sr) = &mut self.search_results { let n = sr.current_len(); if n > 0 { sr.current_list_mut().select(Some(n - 1)); } } }
@@ -443,9 +576,7 @@ impl Ui {
     }
 
     pub fn with_default_theme() -> Self {
-        Self {
-            theme: Theme::default()
-        }
+        Self { theme: Theme::default() }
     }
 
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
@@ -492,7 +623,6 @@ impl Ui {
             return;
         }
 
-        // Nó interno: divide a área e processa cada filho
         if let (Some(dir), Some(raw_constraints), Some(children)) =
             (node.direction, &node.constraints, &node.children)
         {
@@ -516,7 +646,6 @@ impl Ui {
         }
     }
 
-    /// Lógica da área central: search, tracks, álbuns, artistas, etc.
     fn render_main_area_logic(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.search_results.is_some() {
             self.render_search_panels(frame, state, area);
@@ -529,10 +658,11 @@ impl Ui {
                         self.render_now_playing(frame, state, area);
                     }
                 }
-                ActiveContent::Tracks | ActiveContent::LocalFiles => self.render_tracks(frame, state, area),
-                ActiveContent::Albums  => self.render_albums(frame, state, area),
-                ActiveContent::Artists => self.render_artists(frame, state, area),
-                ActiveContent::Shows   => self.render_shows(frame, state, area),
+                ActiveContent::Tracks    => self.render_tracks(frame, state, area),
+                ActiveContent::LocalFiles => self.render_local_tree(frame, state, area),
+                ActiveContent::Albums    => self.render_albums(frame, state, area),
+                ActiveContent::Artists   => self.render_artists(frame, state, area),
+                ActiveContent::Shows     => self.render_shows(frame, state, area),
             }
         }
     }
@@ -553,6 +683,93 @@ impl Ui {
             return Constraint::Length(l);
         }
         Constraint::Min(0)
+    }
+
+    fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let focused = state.focus == Focus::Tracks;
+
+        let total_tracks: usize = state.local_tree.all_nodes.iter()
+            .filter(|n| !n.is_folder())
+            .count();
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" 󰈣 Local Files ")
+            .title_bottom(Line::from(vec![
+                Span::styled(
+                    format!(" {} tracks  [ENTER] play/expand  [A] queue ", total_tracks),
+                    Style::default().fg(self.theme.border_inactive),
+                ),
+            ]))
+            .border_style(if focused {
+                Style::default().fg(self.theme.border_active)
+            } else {
+                Style::default().fg(self.theme.border_inactive)
+            });
+
+        let items: Vec<ListItem> = (0..state.local_tree.visible_len())
+            .filter_map(|vi| {
+                let node = state.local_tree.get_visible(vi)?;
+                let indent = "  ".repeat(node.depth());
+                let item = match node {
+                    LocalNode::Folder { name, expanded, .. } => {
+                        let icon = if *expanded { "󰝰 " } else { "󰉋 " };
+                        let child_count = state.local_tree.tracks_under_folder(vi).len();
+                        ListItem::new(Line::from(vec![
+                            Span::raw(indent),
+                            Span::styled(icon, Style::default().fg(self.theme.accent_color).add_modifier(Modifier::BOLD)),
+                            Span::styled(name.clone(), Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD)),
+                            Span::styled(
+                                format!("  ({} tracks)", child_count),
+                                Style::default().fg(self.theme.border_inactive),
+                            ),
+                        ]))
+                    }
+                    LocalNode::Track { track, .. } => {
+                        let is_playing = state.playback.title == track.name
+                            && state.playback.is_local;
+                        let icon = if is_playing { "󰎈 " } else { "󰝚 " };
+                        let title_style = if is_playing {
+                            Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(self.theme.text_primary)
+                        };
+                        let dur = fmt_duration(track.duration_ms);
+                        ListItem::new(Line::from(vec![
+                            Span::raw(indent),
+                            Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
+                            Span::styled(track.name.clone(), title_style),
+                            if !track.artist.is_empty() {
+                                Span::styled(
+                                    format!("  󰠃 {}", track.artist),
+                                    Style::default().fg(self.theme.border_inactive),
+                                )
+                            } else {
+                                Span::raw("")
+                            },
+                            Span::styled(
+                                format!("  {}", dur),
+                                Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM),
+                            ),
+                        ]))
+                    }
+                };
+                Some(item)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .bg(self.theme.highlight_bg)
+                    .fg(self.theme.border_active)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        frame.render_stateful_widget(list, area, &mut state.local_tree_list);
     }
 
     fn render_visualizer(
@@ -1062,7 +1279,7 @@ impl Ui {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(rows[1]);
 
-        let focused_panel  = state.search_results.as_ref().map(|sr| sr.panel).unwrap_or(SearchPanel::Tracks);
+        let focused_panel   = state.search_results.as_ref().map(|sr| sr.panel).unwrap_or(SearchPanel::Tracks);
         let is_search_focus = state.focus == Focus::Search;
         let is_loading      = state.search_results.as_ref().map(|sr| sr.loading).unwrap_or(false);
 
@@ -1079,7 +1296,6 @@ impl Ui {
         };
 
         if let Some(sr) = &mut state.search_results {
-            // Tracks
             let track_items: Vec<ListItem> = sr.tracks.iter().enumerate().map(|(idx, t)| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰓇 ", Style::default().fg(self.theme.border_active)),
@@ -1096,7 +1312,6 @@ impl Ui {
                 .highlight_symbol("  ");
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
-            // Artists
             let artist_items: Vec<ListItem> = sr.artists.iter().map(|a| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰋌 ", Style::default().fg(self.theme.border_active)),
@@ -1115,7 +1330,6 @@ impl Ui {
                 .highlight_symbol("  ");
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
-            // Albums
             let album_items: Vec<ListItem> = sr.albums.iter().map(|a| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰀥 ", Style::default().fg(self.theme.border_active)),
@@ -1131,7 +1345,6 @@ impl Ui {
                 .highlight_symbol("  ");
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
-            // Playlists
             let pl_items: Vec<ListItem> = sr.playlists.iter().map(|p| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰲚 ", Style::default().fg(self.theme.border_active)),
@@ -1293,6 +1506,11 @@ impl Ui {
                 " [↑↓] Navigate  [DEL] Remove from queue  [TAB] Focus  [A] Add track ",
                 Style::default().fg(self.theme.border_inactive),
             ))
+        } else if state.active_content == ActiveContent::LocalFiles {
+            Line::from(Span::styled(
+                " [↑↓] Navigate  [ENTER] play/expand folder  [A] Add to queue  [N/P] Skip  [SPACE] Pause ",
+                Style::default().fg(self.theme.border_inactive),
+            ))
         } else if state.previous_search.is_some() {
             Line::from(Span::styled(
                 " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [←→] Seek  [BACKSPACE] Back to search ",
@@ -1312,13 +1530,4 @@ impl Ui {
 fn fmt_duration(ms: u64) -> String {
     let s = ms / 1000;
     format!("{}:{:02}", s / 60, s % 60)
-}
-
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-        format!("{}…", truncated)
-    }
 }
