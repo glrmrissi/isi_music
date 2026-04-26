@@ -35,6 +35,15 @@ pub enum PlayerNotification {
     FreeAccountDetected,
 }
 
+#[derive(Clone, Debug)]
+pub struct TrackInfo {
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_ms: u64,
+    pub uri: String,
+}
+
 pub trait AudioPlayer: Send {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
     fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64);
@@ -65,10 +74,10 @@ pub trait AudioPlayer: Send {
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
-
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
-
     fn current_uri(&self) -> Option<String>;
+
+    fn current_track_info(&self) -> Option<TrackInfo> { None }
 }
 
 pub struct QueuedTrack {
@@ -106,8 +115,7 @@ impl NativePlayer {
         info!("Librespot session established");
 
         let audio_format = AudioFormat::default();
-        let backend = audio_backend::find(None)
-            .context("No audio backend found")?;
+        let backend = audio_backend::find(None).context("No audio backend found")?;
 
         let mixer_fn = mixer::find(None).context("No mixer found")?;
         let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
@@ -337,7 +345,7 @@ impl NativePlayer {
     }
 
     pub fn current_uri(&self) -> Option<String> {
-        self.current_index().and_then(|i| self.queue.get(i)).map(|u| u.clone())
+        self.current_index().and_then(|i| self.queue.get(i)).cloned()
     }
 }
 

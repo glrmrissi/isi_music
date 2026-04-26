@@ -33,6 +33,9 @@ symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "aiff"] 
 # .env support (desenvolvimento)
 dotenvy = "0.15"
 
+# sqllite support
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # URL parsing (OAuth callback)
 url = "2"
 

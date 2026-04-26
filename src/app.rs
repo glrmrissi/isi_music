@@ -2,12 +2,13 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Terminal;
 use ratatui_image::picker::Picker;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
+use tracing::info;
 
-fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
+pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<Vec<u8>>) {
     use symphonia::core::{
         formats::FormatOptions,
         io::MediaSourceStream,
@@ -22,7 +23,7 @@ fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
 
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return (fallback_name, String::new(), String::new(), 0),
+        Err(_) => return (fallback_name, String::new(), String::new(), 0, None),
     };
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -37,7 +38,7 @@ fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
         &MetadataOptions::default(),
     ) {
         Ok(p) => p,
-        Err(_) => return (fallback_name, String::new(), String::new(), 0),
+        Err(_) => return (fallback_name, String::new(), String::new(), 0, None),
     };
 
     let mut format = probed.format;
@@ -69,7 +70,7 @@ fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
         }
     }
 
-    (title, artist, album, duration_ms)
+    (title, artist, album, duration_ms, extract_embedded_art(path))
 }
 
 fn extract_embedded_art(path: &Path) -> Option<Vec<u8>> {
@@ -161,6 +162,66 @@ impl App {
         };
 
         let volume = crate::config::load_volume();
+        let db_path = crate::config::get_local_db_path();
+
+        let mut local_player =
+            crate::player::local::LocalPlayer::new(volume, &db_path)?;
+
+        if let Some(ref music_dir) = cfg.local.music_dir {
+            let real_path = if music_dir.starts_with("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    home.join(&music_dir[2..])
+                } else {
+                    PathBuf::from(music_dir)
+                }
+            } else {
+                PathBuf::from(music_dir)
+            };
+
+            let path = real_path.as_path();
+
+            if path.exists() && path.is_dir() {
+                fn visit_dirs(
+                    dir: &Path,
+                    player: &mut crate::player::local::LocalPlayer,
+                ) -> std::io::Result<()> {
+                    if dir.is_dir() {
+                        for entry in std::fs::read_dir(dir)? {
+                            let entry = entry?;
+                            let path = entry.path();
+
+                            if path.is_dir() {
+                                visit_dirs(&path, player)?;
+                            } else {
+                                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                    let ext = ext.to_lowercase();
+
+                                    if ["mp3", "flac", "wav", "ogg"]
+                                        .contains(&ext.as_str())
+                                    {
+                                        let _ = player.index_file(&path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Ok(())
+                }
+
+                let db_conn = rusqlite::Connection::open(&db_path).ok();
+                let has_tracks = db_conn.as_ref()
+                    .and_then(|conn| conn.query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get::<_, i64>(0)).ok())
+                    .map(|count| count > 0)
+                    .unwrap_or(false);
+
+                if !has_tracks {
+                    let _ = visit_dirs(path, &mut local_player);
+                }
+
+                let _ = local_player.reload_library_from_db();
+            }
+        }
 
         let mut startup_warning: Option<String> = None;
 
@@ -190,13 +251,7 @@ impl App {
             None
         };
 
-        let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume) {
-            Ok(p) => {
-                tracing::info!("Local player started");
-                Some(Box::new(p) as Box<dyn AudioPlayer>)
-            }
-            Err(e) => { warn!("Local player unavailable: {e:#}"); None }
-        };
+        let local_player: Option<Box<dyn AudioPlayer>> = Some(Box::new(local_player) as Box<dyn AudioPlayer>);
 
         let (player, parked_player, local_active) = match (spotify_player, local_player) {
             (Some(sp), local) => (Some(sp), local, false),
@@ -561,8 +616,8 @@ impl App {
                 if !self.scrobble_sent {
                     let progress = self.state.playback.progress_ms;
                     let duration = self.state.playback.duration_ms;
-                    let threshold = (duration / 2).min(4 * 60 * 1000);
-                    if progress >= 30_000 && progress >= threshold {
+
+                    if progress >= 30_000 && duration > 30_000 {
                         if let Some(lfm) = self.lastfm.clone() {
                             let artist = self.state.playback.artist.clone();
                             let track = self.state.playback.title.clone();
@@ -1226,16 +1281,20 @@ impl App {
 
     fn on_track_started(&mut self) {
         self.scrobble_sent = false;
+
         self.track_start_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+
+        self.state.playback.progress_ms = 0;
 
         self.state.playback.is_local = self.local_active;
         self.state.playback.radio_mode = self.radio_mode;
 
         if self.current_track_uri.starts_with("spotify:track:") {
             self.recent_track_uris.push_back(self.current_track_uri.clone());
+
             if self.recent_track_uris.len() > 5 {
                 self.recent_track_uris.pop_front();
             }
@@ -1250,9 +1309,15 @@ impl App {
             let artist = self.state.playback.artist.clone();
             let track = self.state.playback.title.clone();
             let duration = self.state.playback.duration_ms;
-            tokio::spawn(async move {
-                lfm.update_now_playing(&artist, &track, duration).await;
-            });
+
+            if !artist.trim().is_empty()
+                && !track.trim().is_empty()
+                && duration > 30_000
+            {
+                tokio::spawn(async move {
+                    lfm.update_now_playing(&artist, &track, duration).await;
+                });
+            }
         }
     }
 
@@ -1603,7 +1668,7 @@ impl App {
             }
 
             for path in files {
-                let (name, artist, album, duration_ms) = read_audio_metadata(&path);
+                let (name, artist, album, duration_ms, cover_art) = read_audio_metadata(&path);
                 let uri = format!("file://{}", path.display());
                 nodes.push(crate::ui::LocalNode::Track {
                     track: crate::spotify::TrackSummary { name, artist, album, duration_ms, uri },
