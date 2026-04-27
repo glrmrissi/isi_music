@@ -93,4 +93,5 @@ notify = "4.0"
 [features]
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]
-default = ["mpris", "discord"]
+default = ["mpris", "discord","spotify"]
+spotify = []

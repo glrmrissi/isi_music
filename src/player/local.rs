@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode, TrackInfo};
 use crate::audio_sink::{AnalyzingSource, N_BANDS};
+use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]
 pub struct LocalTrack {
@@ -43,6 +44,7 @@ pub struct LocalPlayer {
 impl LocalPlayer {
     pub fn new(volume: u8, db_path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tracks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,8 +57,10 @@ impl LocalPlayer {
             )",
             [],
         )?;
-        
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_path ON tracks (path)", [])?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_path ON tracks (path)",
+            [],
+        )?;
 
         let (sync_tx, sync_rx) = std::sync::mpsc::channel();
 
@@ -72,7 +76,8 @@ impl LocalPlayer {
                     }
                 }
                 Err(e) => {
-                    let _ = sync_tx.send(Err(anyhow::anyhow!("Audio output unavailable: {e}")));
+                    let _ = sync_tx
+                        .send(Err(anyhow::anyhow!("Audio output unavailable: {e}")));
                 }
             }
         });
@@ -85,7 +90,23 @@ impl LocalPlayer {
 
         let (tx, rx) = mpsc::unbounded_channel();
 
-        Ok(Self {
+        // Ok(Self {
+        //     sink,
+        //     db_conn: conn,
+        //     queue: Vec::new(),
+        //     user_queue: Vec::new(),
+        //     playing_queued: None,
+        //     current_idx: None,
+        //     is_playing: false,
+        //     volume,
+        //     shuffle: false,
+        //     repeat: RepeatMode::Off,
+        //     event_tx: tx,
+        //     event_rx: rx,
+        //     band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
+        // })
+
+        let mut instance = Self {
             sink,
             db_conn: conn,
             queue: Vec::new(),
@@ -99,69 +120,75 @@ impl LocalPlayer {
             event_tx: tx,
             event_rx: rx,
             band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
-        })
+        };
+
+        if let Err(e) = instance.reload_library_from_db() {
+            error!("Failed to load songs from SQLite: {}", e);
+        } else {
+            warn!("Songs loaded successfully: {} found", instance.queue.len());
+        }
+
+        Ok(instance)
     }
 
     pub fn reload_library_from_db(&mut self) -> anyhow::Result<()> {
         let mut stmt = self.db_conn.prepare(
-            "SELECT id, path, title, artist, album, duration_ms, cover_art
-            FROM tracks"
+            "SELECT id, path, title, artist, album, duration_ms, cover_art FROM tracks ORDER BY artist, album, title",
         )?;
-        let track_iter = stmt.query_map([], |row| {
+
+        let tracks = stmt.query_map([], |row| {
             let path_str: String = row.get(1)?;
             Ok(LocalTrack {
                 id: row.get(0)?,
                 path: PathBuf::from(&path_str),
                 uri: format!("file://{}", path_str),
-                name: row.get(2).unwrap_or_else(|_| "Unknown".to_string()),
-                artist: row.get(3).unwrap_or_else(|_| "Unknown Artist".to_string()),
-                album: row.get(4).unwrap_or_else(|_| "Unknown Album".to_string()),
-                duration_ms: row.get::<_, i64>(5)? as u64,
-                cover_art: row.get(6)?
+                name: row.get::<_, Option<String>>(2)?
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                artist: row.get::<_, Option<String>>(3)?
+                    .unwrap_or_else(|| "Unknown Artist".to_string()),
+                album: row.get::<_, Option<String>>(4)?
+                    .unwrap_or_else(|| "".to_string()),
+                duration_ms: row.get::<_, Option<i64>>(5)?
+                    .unwrap_or(0) as u64,
+                cover_art: row.get(6)?,
             })
-        })?;
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
 
-        self.queue = track_iter.collect::<Result<Vec<_>, _>>()?;
-        info!("Library reloaded: {} tracks from SQLite", self.queue.len());
+        info!("Library reloaded: {} tracks from SQLite", tracks.len());
+        self.queue = tracks;
         Ok(())
     }
-    
-    pub fn index_file(&self, path: &PathBuf) -> anyhow::Result<()> {
-        let (name, artist, album, duration_ms, cover_art) = crate::app::read_audio_metadata(path);
-        let path_str = path.to_str().unwrap_or_default();
-        
-        self.db_conn.execute(
-            "INSERT INTO tracks (
-                path,
-                title,
-                artist,
-                album,
-                duration_ms,
-                cover_art
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 
-            ON CONFLICT(path) DO UPDATE SET
-                title = excluded.title,
-                artist = excluded.artist,
-                album = excluded.album,
+    pub fn index_file(&self, path: &PathBuf) -> anyhow::Result<()> {
+        let (name, artist, album, duration_ms) =
+            crate::app::read_audio_metadata(path);
+        let cover_art = crate::app::extract_embedded_art(path);
+        let path_str = path.to_str().unwrap_or_default();
+
+        self.db_conn.execute(
+            "INSERT INTO tracks (path, title, artist, album, duration_ms, cover_art)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET
+                title      = excluded.title,
+                artist     = excluded.artist,
+                album      = excluded.album,
                 duration_ms = excluded.duration_ms,
-                cover_art = excluded.cover_art",
-            params![
-                path_str,
-                name,
-                artist,
-                album,
-                duration_ms,
-                cover_art
-            ],
+                cover_art  = excluded.cover_art",
+            params![path_str, name, artist, album, duration_ms as i64, cover_art],
         )?;
         Ok(())
     }
 
+    pub fn db_track_count(&self) -> i64 {
+        self.db_conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap_or(0)
+    }
+
     pub fn uri_to_path(uri: &str) -> PathBuf {
-        if let Some(stripped) = uri.strip_prefix("file://") {
-            PathBuf::from(stripped)
+        if let Some(s) = uri.strip_prefix("file://") {
+            PathBuf::from(s)
         } else {
             PathBuf::from(uri)
         }
@@ -169,7 +196,7 @@ impl LocalPlayer {
 
     fn load_and_play(&mut self, idx: usize) {
         let Some(track) = self.queue.get(idx) else {
-            warn!("LocalPlayer: index {idx} out of bounds");
+            warn!("LocalPlayer: index {idx} out of bounds (queue len={})", self.queue.len());
             return;
         };
         let path = track.path.clone();
@@ -210,15 +237,11 @@ impl LocalPlayer {
         }
     }
 
-    pub fn play_at(&mut self, index: usize) {
-        self.load_and_play(index);
-    }
-
     pub fn current_track_meta(&self) -> Option<&LocalTrack> {
         self.current_idx.and_then(|i| self.queue.get(i))
     }
 
-    pub fn next(&mut self) -> bool {
+    pub fn next_inner(&mut self) -> bool {
         self.playing_queued = None;
 
         if self.repeat == RepeatMode::Track {
@@ -232,7 +255,7 @@ impl LocalPlayer {
             let track = self.user_queue.remove(0);
             let path = Self::uri_to_path(&track.uri);
             let lt = LocalTrack {
-                id: -1, 
+                id: -1,
                 path,
                 uri: track.uri.clone(),
                 name: track.name.clone(),
@@ -252,7 +275,8 @@ impl LocalPlayer {
             let len = self.queue.len();
             let next = if self.shuffle && len > 1 {
                 use rand::seq::SliceRandom;
-                let mut candidates: Vec<usize> = (0..len).filter(|&i| i != idx).collect();
+                let mut candidates: Vec<usize> =
+                    (0..len).filter(|&i| i != idx).collect();
                 candidates.shuffle(&mut rand::thread_rng());
                 candidates[0]
             } else {
@@ -271,7 +295,7 @@ impl LocalPlayer {
         false
     }
 
-    pub fn prev(&mut self) -> bool {
+    pub fn prev_inner(&mut self) -> bool {
         if let Some(idx) = self.current_idx {
             if idx > 0 {
                 self.load_and_play(idx - 1);
@@ -281,7 +305,7 @@ impl LocalPlayer {
         false
     }
 
-    pub fn toggle(&mut self) {
+    pub fn toggle_inner(&mut self) {
         if self.sink.is_paused() {
             self.sink.play();
             self.is_playing = true;
@@ -294,25 +318,100 @@ impl LocalPlayer {
     fn apply_volume(&self) {
         self.sink.set_volume(self.volume as f32 / 100.0);
     }
+
+    pub fn queue_as_track_summaries(&self) -> Vec<crate::spotify::TrackSummary> {
+        self.queue
+            .iter()
+            .map(|t| crate::spotify::TrackSummary {
+                uri: t.uri.clone(),
+                name: t.name.clone(),
+                artist: t.artist.clone(),
+                album: t.album.clone(),
+                duration_ms: t.duration_ms,
+            })
+            .collect()
+    }
 }
 
 impl AudioPlayer for LocalPlayer {
-    fn set_queue(&mut self, _uris: Vec<String>, start_index: usize) {
+    fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
         if self.queue.is_empty() {
-            let _ = self.reload_library_from_db();
+            warn!("LocalPlayer: set_queue called but internal queue is empty — did you call reload_library_from_db?");
+            return;
         }
 
-        if self.current_idx.is_none() && !self.queue.is_empty() {
-           if let Some(target_uri) = _uris.get(start_index) {
-                if let Some(index) = self.queue.iter().position(|t| &t.uri == target_uri) {
-                    self.play_at(index);
-                }
+        let target_uri = match uris.get(start_index) {
+            Some(u) => u,
+            None => {
+                warn!("LocalPlayer: start_index {start_index} out of range for uris len={}", uris.len());
+                return;
+            }
+        };
+
+        match self.queue.iter().position(|t| &t.uri == target_uri) {
+            Some(idx) => self.load_and_play(idx),
+            None => {
+                warn!("LocalPlayer: URI not found in queue: {target_uri}");
+            }
+        }
+    }
+
+    fn get_tracks_paginated(&self, limit: usize, offset: usize) -> Vec<crate::player::TrackInfo> {
+        let mut stmt = match self.db_conn.prepare(
+            "SELECT title, artist, album, duration_ms FROM tracks LIMIT ? OFFSET ?"
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Error on queue: {e}");
+                return Vec::new();
+            }
+        };
+
+        let rows = stmt.query_map([limit, offset], |row| {
+            Ok(crate::player::TrackInfo {
+                name: row.get(0).unwrap_or_default(),
+                artist: row.get(1).unwrap_or_default(),
+                album: row.get(2).unwrap_or_default(),
+                duration_ms: row.get::<_, i64>(3).unwrap_or(0) as u64,
+                uri: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            })
+        });
+
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn set_queue_tracks(&mut self, tracks: Vec<TrackSummary>, start_index: usize) {
+        info!("Debug: Tentando dar play. Queue interna len: {}, Tracks recebidas len: {}", 
+            self.queue.len(), tracks.len());
+
+        if self.queue.is_empty() {
+            warn!("LocalPlayer: set_queue_tracks chamado mas a fila interna está vazia");
+            return;
+        }
+
+        let target_uri = match tracks.get(start_index) {
+            Some(t) => &t.uri,
+            None => return,
+        };
+
+        match self.queue.iter().position(|t| &t.uri == target_uri) {
+            Some(idx) => self.load_and_play(idx),
+            None => {
+                warn!("LocalPlayer: URI not found in internal queue: {target_uri}");
             }
         }
     }
 
     fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) {
-        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms });
+        self.user_queue.push(QueuedTrack {
+            uri,
+            name,
+            artist,
+            duration_ms,
+        });
     }
 
     fn user_queue(&self) -> &[QueuedTrack] {
@@ -320,7 +419,9 @@ impl AudioPlayer for LocalPlayer {
     }
 
     fn remove_from_user_queue(&mut self, index: usize) {
-        self.user_queue.remove(index);
+        if index < self.user_queue.len() {
+            self.user_queue.remove(index);
+        }
     }
 
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
@@ -338,25 +439,36 @@ impl AudioPlayer for LocalPlayer {
     }
 
     fn toggle(&mut self) {
-        self.toggle();
+        self.toggle_inner();
     }
 
     fn next(&mut self) -> bool {
-        self.next()
+        self.next_inner()
     }
 
     fn prev(&mut self) -> bool {
-        self.prev()
+        self.prev_inner()
     }
 
     fn play_at(&mut self, index: usize) {
-        self.play_at(index);
+        if let Some(track) = self.queue.get(index) {
+            let path = &track.path; 
+            
+            match std::fs::File::open(path) {
+                Ok(file) => {
+                    let source = rodio::Decoder::new(std::io::BufReader::new(file)).unwrap();
+                    self.sink.append(source);
+                    self.sink.play();
+                }
+                Err(e) => error!("Failed to load track: {}", e), 
+            }
+        }
     }
 
     fn seek(&self, position_ms: u32) {
         let pos = std::time::Duration::from_millis(position_ms as u64);
         if let Err(e) = self.sink.try_seek(pos) {
-            warn!("LocalPlayer: seek failed: {e}");
+            warn!("LocalPlayer: seek to {}ms failed: {e}", position_ms);
         }
     }
 
@@ -373,7 +485,7 @@ impl AudioPlayer for LocalPlayer {
     }
 
     fn repeat(&self) -> RepeatMode {
-        self.repeat
+        self.repeat.clone()
     }
 
     fn current_index(&self) -> Option<usize> {
@@ -382,8 +494,19 @@ impl AudioPlayer for LocalPlayer {
 
     fn current_uri(&self) -> Option<String> {
         self.current_idx
-            .and_then(|idx| self.queue.get(idx))
+            .and_then(|i| self.queue.get(i))
             .map(|t| t.uri.clone())
+    }
+
+    fn current_track_info(&self) -> Option<TrackInfo> {
+        let t = self.current_track_meta()?;
+        Some(TrackInfo {
+            uri: t.uri.clone(),
+            name: t.name.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            duration_ms: t.duration_ms,
+        })
     }
 
     fn volume_up(&mut self) {
@@ -425,14 +548,8 @@ impl AudioPlayer for LocalPlayer {
         Some(Arc::clone(&self.band_energies))
     }
 
-    fn current_track_info(&self) -> Option<TrackInfo> {
-        let t = self.current_track_meta()?;
-        Some(TrackInfo {
-            name: t.name.clone(),
-            artist: t.artist.clone(),
-            album: t.album.clone(),
-            duration_ms: t.duration_ms,
-            uri: t.uri.clone(),
-        })
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
+        let uris = self.queue.iter().map(|t| t.uri.clone()).collect();
+        (uris, self.current_idx)
     }
 }
