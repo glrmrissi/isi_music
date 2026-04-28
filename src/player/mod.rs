@@ -15,6 +15,7 @@ use librespot_playback::{
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
 use crate::audio_sink::{AnalyzerSink, N_BANDS};
+use crate::spotify::TrackSummary;
 use crate::config;
 use std::sync::{Arc, Mutex};
 use rand::seq::SliceRandom;
@@ -23,7 +24,7 @@ use libc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub enum RepeatMode { #[default] Off, Track, Queue }
 
 pub enum PlayerNotification {
@@ -35,12 +36,39 @@ pub enum PlayerNotification {
     FreeAccountDetected,
 }
 
+#[derive(Clone, Debug)]
+pub struct TrackInfo {
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_ms: u64,
+    pub uri: String,
+}
+
 pub trait AudioPlayer: Send {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
     fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64);
     fn user_queue(&self) -> &[QueuedTrack];
     fn remove_from_user_queue(&mut self, index: usize);
     fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
+
+    fn set_queue_tracks(&mut self, tracks: Vec<TrackSummary>, start_index: usize) {
+        let uris = tracks.iter().map(|t| t.uri.clone()).collect();
+        self.set_queue(uris, start_index);
+    }
+
+    fn get_tracks_paginated(&self, offset: usize, limit: usize) -> Vec<TrackInfo> {
+        let (queue, current_index) = self.snapshot_queue();
+        queue.into_iter().skip(offset).take(limit).map(|uri| {
+            TrackInfo {
+                name: uri.clone(),
+                artist: String::new(),
+                album: String::new(),
+                duration_ms: 0,
+                uri,
+            }
+        }).collect()
+    }
 
     fn play(&mut self);
     fn pause(&mut self);
@@ -65,10 +93,10 @@ pub trait AudioPlayer: Send {
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
-
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
-
     fn current_uri(&self) -> Option<String>;
+
+    fn current_track_info(&self) -> Option<TrackInfo> { None }
 }
 
 pub struct QueuedTrack {
@@ -106,8 +134,7 @@ impl NativePlayer {
         info!("Librespot session established");
 
         let audio_format = AudioFormat::default();
-        let backend = audio_backend::find(None)
-            .context("No audio backend found")?;
+        let backend = audio_backend::find(None).context("No audio backend found")?;
 
         let mixer_fn = mixer::find(None).context("No mixer found")?;
         let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
@@ -337,7 +364,7 @@ impl NativePlayer {
     }
 
     pub fn current_uri(&self) -> Option<String> {
-        self.current_index().and_then(|i| self.queue.get(i)).map(|u| u.clone())
+        self.current_index().and_then(|i| self.queue.get(i)).cloned()
     }
 }
 

@@ -117,6 +117,22 @@ pub fn load_refresh_token() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+pub fn get_local_db_path() -> String {
+    if let Some(mut path) = dirs::data_dir() {
+        path.push("isi_music");
+
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            eprintln!("Erro ao criar diretório: {e}");
+            return "local_files.db".into();
+        }
+
+        path.push("library.db");
+        return path.to_string_lossy().to_string();
+    }
+
+    "local_files.db".into()
+}
+
 pub fn volume_path() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("Could not determine cache directory")?;
     let dir = base.join("isi-music");

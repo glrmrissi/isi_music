@@ -44,24 +44,34 @@ impl DiscordRpc {
                         let result = match update {
                             RpcUpdate::Playing { title, artist, art_url } => {
                                 let mut act = activity::Activity::new()
-                                    .activity_type(activity::ActivityType::Listening)
+                                    .activity_type(activity::ActivityType::Playing)
                                     .details(&title)
-                                    .state(&artist);
+                                    .state(&artist)
+                                    .timestamps(activity::Timestamps::new().start(
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs() as i64
+                                    ));
 
+                                let mut assets = activity::Assets::new().large_text(&title);
+                                
                                 if let Some(url) = art_url.as_deref() {
-                                    act = act.assets(
-                                        activity::Assets::new()
-                                            .large_image(url)
-                                            .large_text(&title),
-                                    );
+                                    if url.starts_with("http") {
+                                        assets = assets.large_image(url);
+                                    } else {
+                                        assets = assets.large_image("default_music_icon");
+                                    }
+                                } else {
+                                    assets = assets.large_image("default_music_icon");
                                 }
 
-                                client.set_activity(act)
+                                client.set_activity(act.assets(assets))
                             }
                             RpcUpdate::Paused { title, artist } => {
                                 client.set_activity(
                                     activity::Activity::new()
-                                        .activity_type(activity::ActivityType::Listening)
+                                        .activity_type(activity::ActivityType::Playing)
                                         .details(&title)
                                         .state(&format!("{artist} · Paused")),
                                 )
