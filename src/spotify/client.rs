@@ -320,7 +320,7 @@ impl SpotifyClient {
                 let uri = track["uri"].as_str().unwrap_or("").to_string();
 
                 if !uri.is_empty() {
-                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri});
                 }
             }
         }
@@ -360,7 +360,7 @@ impl SpotifyClient {
         self.shuffle_state = ctx.shuffle_state;
         self.repeat_state = ctx.repeat_state;
 
-        let (title, artist, album, duration_ms, art_url) = match ctx.item {
+        let (title, artist, album, path, duration_ms, art_url) = match ctx.item {
             Some(PlayableItem::Track(track)) => {
                 let artist = track.artists.iter()
                     .map(|a| a.name.as_str())
@@ -376,12 +376,12 @@ impl SpotifyClient {
                     None
                 };
 
-                (track.name, artist, track.album.name, duration, url)
+                (track.name, artist, track.album.name, None, duration, url)
             }
             Some(PlayableItem::Episode(ep)) => {
                 let duration = ep.duration.num_milliseconds().try_into().unwrap_or(0u64);
                 let url = ep.images.first().map(|img| img.url.clone());
-                (ep.name, ep.show.name, String::new(), duration, url)
+                (ep.name, ep.show.name, String::new(), None, duration, url)
             }
             Some(PlayableItem::Unknown(_)) | None => return Ok(PlaybackState::default()),
         };
@@ -392,6 +392,7 @@ impl SpotifyClient {
             title,
             artist,
             album,
+            path,
             is_playing: ctx.is_playing,
             shuffle: self.shuffle_state,
             repeat: self.repeat_state,
@@ -487,7 +488,7 @@ impl SpotifyClient {
                     let album = item["album"]["name"].as_str().unwrap_or("").to_string();
                     let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                     let uri = item["uri"].as_str().unwrap_or("").to_string();
-                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri});
                 }
             }
         }
@@ -583,7 +584,7 @@ impl SpotifyClient {
                     .unwrap_or_default();
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri });
+                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri});
             }
         }
 
@@ -686,7 +687,7 @@ impl SpotifyClient {
                 let album = item["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album, duration_ms, uri });
+                tracks.push(TrackSummary { name, artist, album, duration_ms, uri});
             }
         }
 
@@ -779,7 +780,7 @@ impl SpotifyClient {
                 };
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri });
+                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri});
             }
         }
 

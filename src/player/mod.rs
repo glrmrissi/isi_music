@@ -36,6 +36,7 @@ pub enum PlayerNotification {
     FreeAccountDetected,
 }
 
+// TODO: FIX WARNS
 #[derive(Clone, Debug)]
 pub struct TrackInfo {
     pub name: String,
@@ -58,16 +59,8 @@ pub trait AudioPlayer: Send {
     }
 
     fn get_tracks_paginated(&self, offset: usize, limit: usize) -> Vec<TrackInfo> {
-        let (queue, current_index) = self.snapshot_queue();
-        queue.into_iter().skip(offset).take(limit).map(|uri| {
-            TrackInfo {
-                name: uri.clone(),
-                artist: String::new(),
-                album: String::new(),
-                duration_ms: 0,
-                uri,
-            }
-        }).collect()
+        let _ = (offset, limit);
+        Vec::new()
     }
 
     fn play(&mut self);
@@ -76,7 +69,17 @@ pub trait AudioPlayer: Send {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn play_at(&mut self, index: usize);
+
+    // Seek for Spotify (takes &self because librespot seek is non-mutating, IDIOT)
+    // For local files, the app should call seek_mut() instead
     fn seek(&self, position_ms: u32);
+
+    // Seek with mutable access - required for local files (reload + skip)
+    // Default implementation delegates to seek() for backwards compatibility
+    // (9-9)
+    fn seek_mut(&mut self, position_ms: u32) {
+        self.seek(position_ms);
+    }
 
     fn is_playing(&self) -> bool;
     fn volume(&self) -> u8;
@@ -383,6 +386,8 @@ impl AudioPlayer for NativePlayer {
     fn prev(&mut self) -> bool { self.prev() }
     fn play_at(&mut self, index: usize) { self.play_at(index); }
     fn seek(&self, position_ms: u32) { self.seek(position_ms); }
+    // seek_mut for NativePlayer just calls seek() - librespot handles it fine with &self
+    fn seek_mut(&mut self, position_ms: u32) { self.seek(position_ms); }
 
     fn is_playing(&self) -> bool { self.is_playing }
     fn volume(&self) -> u8 { self.volume }
