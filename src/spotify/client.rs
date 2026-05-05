@@ -22,13 +22,14 @@ pub struct PlaylistSummary {
     pub art_url: Option<String>
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrackSummary {
     pub name: String,
     pub artist: String,
     pub album: String,
     pub duration_ms: u64,
     pub uri: String,
+    pub cover_path: Option<String>
 }
 
 pub struct ArtistSummary {
@@ -221,12 +222,15 @@ impl SpotifyClient {
                 .join(", ");
             let duration_ms = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
             let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
+            // None because spotify uses another field to show cover art
+            let cover_path = None;
             tracks.push(TrackSummary {
                 name: track.name,
                 artist,
                 album: track.album.name,
                 duration_ms,
                 uri,
+                cover_path
             });
         }
         Ok((tracks, total))
@@ -318,9 +322,10 @@ impl SpotifyClient {
                 let album = track["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
                 let uri = track["uri"].as_str().unwrap_or("").to_string();
+                let cover_path = None;
 
                 if !uri.is_empty() {
-                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri});
+                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri, cover_path});
                 }
             }
         }
@@ -400,6 +405,7 @@ impl SpotifyClient {
             duration_ms,
             volume: 100,
             art_url,
+            cover_path: None,
             is_local: false,
             radio_mode: false,
         })
@@ -488,7 +494,8 @@ impl SpotifyClient {
                     let album = item["album"]["name"].as_str().unwrap_or("").to_string();
                     let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                     let uri = item["uri"].as_str().unwrap_or("").to_string();
-                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri});
+                    let cover_path = None;
+                    tracks.push(TrackSummary { name, artist, album, duration_ms, uri, cover_path});
                 }
             }
         }
@@ -584,7 +591,8 @@ impl SpotifyClient {
                     .unwrap_or_default();
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri});
+                let cover_path = None;
+                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri, cover_path});
             }
         }
 
@@ -687,7 +695,8 @@ impl SpotifyClient {
                 let album = item["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album, duration_ms, uri});
+                let cover_path = None;
+                tracks.push(TrackSummary { name, artist, album, duration_ms, uri, cover_path});
             }
         }
 
@@ -780,7 +789,8 @@ impl SpotifyClient {
                 };
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
-                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri});
+                let cover_path = None;
+                tracks.push(TrackSummary { name, artist, album: String::new(), duration_ms, uri, cover_path});
             }
         }
 
@@ -957,6 +967,7 @@ impl SpotifyClient {
                                     album: t["album"]["name"].as_str().unwrap_or_default().to_string(),
                                     duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
                                     uri,
+                                    cover_path: None, // None because spotify use another way to show cover art
                                 });
                             }
                         }
