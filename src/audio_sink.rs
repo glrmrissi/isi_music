@@ -238,7 +238,7 @@ impl Sink for AnalyzerSink {
 pub struct AnalyzingSource<S> {
     inner: S,
     ring: Arc<Mutex<RingBuffer>>,
-    bands: Arc<Mutex<Vec<f32>>>,
+    _bands: Arc<Mutex<Vec<f32>>>,
     channels: u16,
     channel_pos: u16,
     mix_acc: f32,
@@ -248,10 +248,10 @@ impl<S> AnalyzingSource<S>
 where
     S: rodio::Source<Item = f32>,
 {
-    pub fn new(inner: S, bands: Arc<Mutex<Vec<f32>>>) -> Self {
+    pub fn new(inner: S, _bands: Arc<Mutex<Vec<f32>>>) -> Self {
         let channels = inner.channels().max(1);
-        let ring = spawn_analyzer(Arc::clone(&bands));
-        Self { inner, ring, bands, channels, channel_pos: 0, mix_acc: 0.0 }
+        let ring = spawn_analyzer(Arc::clone(&_bands));
+        Self { inner, ring, _bands, channels, channel_pos: 0, mix_acc: 0.0 }
     }
 }
 
@@ -286,4 +286,8 @@ where
     fn channels(&self) -> u16 { self.inner.channels() }
     fn sample_rate(&self) -> u32 { self.inner.sample_rate() }
     fn total_duration(&self) -> Option<Duration> { self.inner.total_duration() }
+    
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)
+    }
 }

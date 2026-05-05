@@ -5,6 +5,8 @@ use ratatui_image::picker::Picker;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use symphonia::core::meta::Limit;
+use tokio::sync::oneshot;
 use tracing::warn;
 
 pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
@@ -82,12 +84,9 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64) {
     (title, artist, album, duration_ms)
 }
 
-pub fn extract_embedded_art(path: &Path) -> Option<Vec<u8>> {
+pub fn extract_embedded_art(path: &std::path::Path) -> Option<Vec<u8>> {
     use symphonia::core::{
-        formats::FormatOptions,
-        io::MediaSourceStream,
-        meta::MetadataOptions,
-        probe::Hint,
+        formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
     };
 
     let file = std::fs::File::open(path).ok()?;
@@ -97,32 +96,45 @@ pub fn extract_embedded_art(path: &Path) -> Option<Vec<u8>> {
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe()
+    let mut probed = symphonia::default::get_probe()
         .format(
             &hint,
             mss,
             &FormatOptions::default(),
-            &MetadataOptions::default(),
+            &MetadataOptions {
+                limit_metadata_bytes: Limit::Maximum(std::usize::MAX),
+                limit_visual_bytes: Limit::Maximum(std::usize::MAX),
+            },
         )
         .ok()?;
 
-    let mut format = probed.format;
-    let meta = format.metadata();
-    let rev = meta.current()?;
+    if let Some(rev) = probed.format.metadata().current() {
+        if let Some(v) = rev.visuals().first() {
+            return Some(v.data.to_vec());
+        }
+    }
 
-    rev.visuals().first().map(|v| v.data.to_vec())
+    if let Some(meta) = probed.metadata.get() {
+        if let Some(rev) = meta.current() {
+            if let Some(v) = rev.visuals().first() {
+                return Some(v.data.to_vec());
+            }
+        }
+    }
+
+    None
 }
 
 use crate::discord::DiscordRpc;
 use crate::lastfm::LastfmClient;
-use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification, RepeatMode};
-use crate::player::NativePlayer;
-use crate::theme::Theme;
 #[cfg(feature = "mpris")]
 use crate::mpris::{MprisCmd, MprisHandle, MprisState};
-use rspotify::model::RepeatState;
+use crate::player::NativePlayer;
+use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification, RepeatMode};
 use crate::spotify::SpotifyClient;
+use crate::theme::Theme;
 use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, Ui, UiState};
+use rspotify::model::RepeatState;
 
 pub struct App {
     spotify: SpotifyClient,
@@ -169,7 +181,11 @@ impl App {
         theme_rx: std::sync::mpsc::Receiver<Theme>,
     ) -> Result<Self> {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
-        let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
+        let lastfm = match (
+            &cfg.lastfm.api_key,
+            &cfg.lastfm.api_secret,
+            &cfg.lastfm.session_key,
+        ) {
             (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(
                 k.clone(),
                 s.clone(),
@@ -219,12 +235,10 @@ impl App {
             None
         };
 
-        let db_path = crate::config::get_local_db_path(); 
+        let db_path = crate::config::get_local_db_path();
 
         let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume, &db_path) {
-            Ok(p) => {
-                Some(Box::new(p) as Box<dyn AudioPlayer>)
-            }
+            Ok(p) => Some(Box::new(p) as Box<dyn AudioPlayer>),
             Err(e) => {
                 warn!("Local player: {e:#}");
                 None
@@ -698,8 +712,7 @@ impl App {
                                 };
                             }
                             Err(e) => {
-                                self.state.status_msg =
-                                    Some(format!("Search error: {e:#}"));
+                                self.state.status_msg = Some(format!("Search error: {e:#}"));
                                 self.state.search_active = false;
                                 tracing::error!("Search failed for \"{query}\": {e:#}");
                             }
@@ -823,7 +836,14 @@ impl App {
                         .track_list
                         .selected()
                         .and_then(|i| self.state.tracks.get(i))
-                        .map(|t| (t.uri.clone(), t.name.clone(), t.artist.clone(), t.duration_ms))
+                        .map(|t| {
+                            (
+                                t.uri.clone(),
+                                t.name.clone(),
+                                t.artist.clone(),
+                                t.duration_ms,
+                            )
+                        })
                 };
                 if let Some((uri, name, artist, duration_ms)) = track {
                     let is_local = uri.starts_with("file://");
@@ -943,10 +963,7 @@ impl App {
                 } else {
                     match self.spotify.save_current_track().await {
                         Ok(_) => self.state.status_msg = Some("♥ Liked!".to_string()),
-                        Err(e) => {
-                            self.state.status_msg =
-                                Some(format!("Error liking track: {e}"))
-                        }
+                        Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
                     }
                 }
             }
@@ -976,9 +993,8 @@ impl App {
                     None => return,
                 };
                 if idx != 4 && !self.spotify.authenticated {
-                    self.state.status_msg = Some(
-                        "Spotify not connected — only Local Files available".to_string(),
-                    );
+                    self.state.status_msg =
+                        Some("Spotify not connected — only Local Files available".to_string());
                     return;
                 }
                 match idx {
@@ -989,23 +1005,21 @@ impl App {
                                 self.state.tracks = tracks;
                                 self.state.tracks_total = total;
                                 self.state.tracks_offset = self.state.tracks.len() as u32;
-                                self.state.active_playlist_uri =
-                                    Some("liked_songs".to_string());
-                                self.state.active_playlist_id =
-                                    Some("liked_songs".to_string());
-                                self.state.track_list.select(if self.state.tracks.is_empty() {
-                                    None
-                                } else {
-                                    Some(0)
-                                });
+                                self.state.active_playlist_uri = Some("liked_songs".to_string());
+                                self.state.active_playlist_id = Some("liked_songs".to_string());
+                                self.state
+                                    .track_list
+                                    .select(if self.state.tracks.is_empty() {
+                                        None
+                                    } else {
+                                        Some(0)
+                                    });
                                 self.state.active_content = ActiveContent::Tracks;
                                 self.state.search_results = None;
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
-                            Err(e) => {
-                                self.state.status_msg = Some(format!("Error: {e}"))
-                            }
+                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
                     1 => {
@@ -1014,50 +1028,44 @@ impl App {
                             Ok((albums, total)) => {
                                 self.state.albums = albums;
                                 self.state.albums_total = total;
-                                self.state.albums_offset =
-                                    self.state.albums.len() as u32;
-                                self.state.album_list.select(if self.state.albums.is_empty()
-                                {
-                                    None
-                                } else {
-                                    Some(0)
-                                });
+                                self.state.albums_offset = self.state.albums.len() as u32;
+                                self.state
+                                    .album_list
+                                    .select(if self.state.albums.is_empty() {
+                                        None
+                                    } else {
+                                        Some(0)
+                                    });
                                 self.state.active_content = ActiveContent::Albums;
                                 self.state.search_results = None;
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
-                            Err(e) => {
-                                self.state.status_msg = Some(format!("Error: {e}"))
-                            }
+                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
                     2 => {
-                        self.state.status_msg =
-                            Some("Loading followed artists…".to_string());
+                        self.state.status_msg = Some("Loading followed artists…".to_string());
                         match self.spotify.fetch_followed_artists().await {
                             Ok(artists) => {
                                 self.state.artists = artists;
-                                self.state.artist_list.select(
-                                    if self.state.artists.is_empty() {
+                                self.state
+                                    .artist_list
+                                    .select(if self.state.artists.is_empty() {
                                         None
                                     } else {
                                         Some(0)
-                                    },
-                                );
+                                    });
                                 self.state.active_content = ActiveContent::Artists;
                                 self.state.search_results = None;
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
-                            Err(e) => {
-                                self.state.status_msg = Some(format!("Error: {e}"))
-                            }
+                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                         }
                     }
                     3 => {
-                        self.state.status_msg =
-                            Some("Podcasts — coming soon".to_string());
+                        self.state.status_msg = Some("Podcasts — coming soon".to_string());
                     }
                     4 => {
                         self.load_local_files().await;
@@ -1079,11 +1087,13 @@ impl App {
                             self.state.tracks_offset = self.state.tracks.len() as u32;
                             self.state.active_playlist_uri = Some(uri.clone());
                             self.state.active_playlist_id = Some(id.clone());
-                            self.state.track_list.select(if self.state.tracks.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            });
+                            self.state
+                                .track_list
+                                .select(if self.state.tracks.is_empty() {
+                                    None
+                                } else {
+                                    Some(0)
+                                });
                             self.state.active_content = ActiveContent::Tracks;
                             self.state.search_results = None;
                             self.state.status_msg = None;
@@ -1094,237 +1104,196 @@ impl App {
                 }
             }
 
-            Focus::Tracks => {
-                match &self.state.active_content {
-                    ActiveContent::Albums => {
-                        if let Some(idx) = self.state.selected_album_index() {
-                            if let Some(album) = self.state.albums.get(idx) {
-                                let id = album.id.clone();
-                                let name = album.name.clone();
-                                self.state.status_msg =
-                                    Some(format!("Loading {name}…"));
-                                match self.spotify.fetch_album_tracks(&id, 0).await {
-                                    Ok((tracks, total)) => {
-                                        self.state.tracks = tracks;
-                                        self.state.tracks_total = total;
-                                        self.state.tracks_offset =
-                                            self.state.tracks.len() as u32;
-                                        self.state.active_playlist_uri =
-                                            Some(format!("album:{id}"));
-                                        self.state.active_playlist_id =
-                                            Some(format!("album:{id}"));
-                                        self.state.track_list.select(
-                                            if self.state.tracks.is_empty() {
-                                                None
-                                            } else {
-                                                Some(0)
-                                            },
-                                        );
-                                        self.state.active_content = ActiveContent::Tracks;
-                                        self.state.status_msg = None;
-                                    }
-                                    Err(e) => {
-                                        self.state.status_msg =
-                                            Some(format!("Error: {e}"))
-                                    }
+            Focus::Tracks => match &self.state.active_content {
+                ActiveContent::Albums => {
+                    if let Some(idx) = self.state.selected_album_index() {
+                        if let Some(album) = self.state.albums.get(idx) {
+                            let id = album.id.clone();
+                            let name = album.name.clone();
+                            self.state.status_msg = Some(format!("Loading {name}…"));
+                            match self.spotify.fetch_album_tracks(&id, 0).await {
+                                Ok((tracks, total)) => {
+                                    self.state.tracks = tracks;
+                                    self.state.tracks_total = total;
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.active_playlist_uri = Some(format!("album:{id}"));
+                                    self.state.active_playlist_id = Some(format!("album:{id}"));
+                                    self.state
+                                        .track_list
+                                        .select(if self.state.tracks.is_empty() {
+                                            None
+                                        } else {
+                                            Some(0)
+                                        });
+                                    self.state.active_content = ActiveContent::Tracks;
+                                    self.state.status_msg = None;
                                 }
-                            }
-                        }
-                    }
-                    ActiveContent::Artists => {
-                        if let Some(idx) = self.state.selected_artist_index() {
-                            if let Some(artist) = self.state.artists.get(idx) {
-                                let id = artist
-                                    .uri
-                                    .trim_start_matches("spotify:artist:")
-                                    .to_string();
-                                let name = artist.name.clone();
-                                self.state.status_msg = Some(format!(
-                                    "Loading top tracks for {name}…"
-                                ));
-                                match self.spotify.fetch_artist_tracks(&name, 0).await {
-                                    Ok((tracks, total)) => {
-                                        self.state.tracks = tracks;
-                                        self.state.tracks_total = total;
-                                        self.state.tracks_offset =
-                                            self.state.tracks.len() as u32;
-                                        self.state.active_artist_name =
-                                            Some(name.clone());
-                                        self.state.active_playlist_uri =
-                                            Some(format!("artist:{id}"));
-                                        self.state.active_playlist_id =
-                                            Some(format!("artist:{id}"));
-                                        self.state.track_list.select(
-                                            if self.state.tracks.is_empty() {
-                                                None
-                                            } else {
-                                                Some(0)
-                                            },
-                                        );
-                                        self.state.active_content = ActiveContent::Tracks;
-                                        self.state.status_msg = None;
-                                    }
-                                    Err(e) => {
-                                        self.state.status_msg =
-                                            Some(format!("Error: {e}"))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ActiveContent::Shows => {
-                        if let Some(idx) = self.state.selected_show_index() {
-                            if let Some(show) = self.state.shows.get(idx) {
-                                let id = show.id.clone();
-                                let name = show.name.clone();
-                                self.state.status_msg =
-                                    Some(format!("Loading {name}…"));
-                                match self.spotify.fetch_show_episodes(&id, 0).await {
-                                    Ok((tracks, total)) => {
-                                        self.state.tracks = tracks;
-                                        self.state.tracks_total = total;
-                                        self.state.tracks_offset =
-                                            self.state.tracks.len() as u32;
-                                        self.state.active_playlist_uri =
-                                            Some(format!("show:{id}"));
-                                        self.state.active_playlist_id =
-                                            Some(format!("show:{id}"));
-                                        self.state.track_list.select(
-                                            if self.state.tracks.is_empty() {
-                                                None
-                                            } else {
-                                                Some(0)
-                                            },
-                                        );
-                                        self.state.active_content = ActiveContent::Tracks;
-                                        self.state.status_msg = None;
-                                    }
-                                    Err(e) => {
-                                        self.state.status_msg =
-                                            Some(format!("Error: {e}"))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ActiveContent::LocalFiles => {
-                        let vi = match self.state.local_tree_list.selected() {
-                            Some(i) => i,
-                            None => return,
-                        };
-                        let node = match self.state.local_tree.get_visible(vi) {
-                            Some(n) => n.clone(),
-                            None => return,
-                        };
-                        match node {
-                            crate::ui::LocalNode::Folder { .. } => {
-                                self.state.local_tree.toggle_folder(vi);
-                                let new_len = self.state.local_tree.visible_len();
-                                let cur =
-                                    self.state.local_tree_list.selected().unwrap_or(0);
-                                self.state.local_tree_list.select(Some(
-                                    cur.min(new_len.saturating_sub(1)),
-                                ));
-                            }
-                            crate::ui::LocalNode::Track { track, .. } => {
-                                self.activate_local_player();
-                                let all_tracks = self.state.local_tree.all_tracks_flat();
-                                let start_idx = all_tracks
-                                    .iter()
-                                    .position(|t| t.uri == track.uri)
-                                    .unwrap_or(0);
-                                if let Some(player) = &mut self.player {
-                                    player.set_queue_tracks(all_tracks.clone(), start_idx);
-                                    self.playing_tracks = all_tracks;
-                                    self.state.playback.title = track.name.clone();
-                                    self.state.playback.artist = track.artist.clone();
-                                    self.state.playback.album = track.album.clone();
-                                    self.state.playback.duration_ms = track.duration_ms;
-                                    self.state.playback.progress_ms = 0;
-                                    self.state.playback.is_playing = true;
-                                    self.state.playback.is_local = true;
-                                    self.current_track_uri = track.uri.clone();
-                                    self.on_track_started();
-                                }
-                            }
-                        }
-                    }
-                    ActiveContent::Tracks | ActiveContent::None => {
-                        if let Some(idx) = self.state.selected_track_index() {
-                            if self.spotify_streaming_disabled {
-                                self.state.status_msg = Some(
-                                    "⚠ Spotify Premium required for streaming".to_string(),
-                                );
-                                return;
-                            }
-                            self.activate_spotify_player();
-                            if self
-                                .state
-                                .tracks
-                                .get(idx)
-                                .map(|t| t.uri.starts_with("spotify:episode:"))
-                                .unwrap_or(false)
-                            {
-                                self.state.status_msg =
-                                    Some("Podcast playback not supported".to_string());
-                            } else if let Some(player) = &mut self.player {
-                                let uris: Vec<String> = self
-                                    .state
-                                    .tracks
-                                    .iter()
-                                    .filter(|t| !t.uri.starts_with("spotify:episode:"))
-                                    .map(|t| t.uri.clone())
-                                    .collect();
-                                let adjusted_idx = self.state.tracks[..idx]
-                                    .iter()
-                                    .filter(|t| !t.uri.starts_with("spotify:episode:"))
-                                    .count();
-                                player.set_queue(uris, adjusted_idx);
-                                self.playing_tracks = self.state.tracks.clone();
-                                if let Some(track) = self.state.tracks.get(idx) {
-                                    self.state.playback.title = track.name.clone();
-                                    self.state.playback.artist = track.artist.clone();
-                                    self.state.playback.album = track.album.clone();
-                                    self.state.playback.duration_ms = track.duration_ms;
-                                    self.state.playback.progress_ms = 0;
-                                    self.state.playback.is_playing = true;
-                                    self.state.playback.is_local = false;
-                                    self.current_track_uri = track.uri.clone();
-                                    self.on_track_started();
-                                }
-                            } else if self.spotify.authenticated {
-                                let track_uri =
-                                    self.state.tracks[idx].uri.clone();
-                                let is_playlist = self
-                                    .state
-                                    .active_playlist_uri
-                                    .as_deref()
-                                    .map(|u| {
-                                        u != "liked_songs"
-                                            && !u.starts_with("search:")
-                                    })
-                                    .unwrap_or(false);
-                                let result = if is_playlist {
-                                    let uri = self
-                                        .state
-                                        .active_playlist_uri
-                                        .clone()
-                                        .unwrap();
-                                    self.spotify
-                                        .play_in_context(&uri, &track_uri)
-                                        .await
-                                } else {
-                                    self.spotify.play_track_uri(&track_uri).await
-                                };
-                                if let Err(e) = result {
-                                    self.state.status_msg =
-                                        Some(format!("Error: {e}"));
-                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                             }
                         }
                     }
                 }
-            }
+                ActiveContent::Artists => {
+                    if let Some(idx) = self.state.selected_artist_index() {
+                        if let Some(artist) = self.state.artists.get(idx) {
+                            let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
+                            let name = artist.name.clone();
+                            self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
+                            match self.spotify.fetch_artist_tracks(&name, 0).await {
+                                Ok((tracks, total)) => {
+                                    self.state.tracks = tracks;
+                                    self.state.tracks_total = total;
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.active_artist_name = Some(name.clone());
+                                    self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                                    self.state.active_playlist_id = Some(format!("artist:{id}"));
+                                    self.state
+                                        .track_list
+                                        .select(if self.state.tracks.is_empty() {
+                                            None
+                                        } else {
+                                            Some(0)
+                                        });
+                                    self.state.active_content = ActiveContent::Tracks;
+                                    self.state.status_msg = None;
+                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                            }
+                        }
+                    }
+                }
+                ActiveContent::Shows => {
+                    if let Some(idx) = self.state.selected_show_index() {
+                        if let Some(show) = self.state.shows.get(idx) {
+                            let id = show.id.clone();
+                            let name = show.name.clone();
+                            self.state.status_msg = Some(format!("Loading {name}…"));
+                            match self.spotify.fetch_show_episodes(&id, 0).await {
+                                Ok((tracks, total)) => {
+                                    self.state.tracks = tracks;
+                                    self.state.tracks_total = total;
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.active_playlist_uri = Some(format!("show:{id}"));
+                                    self.state.active_playlist_id = Some(format!("show:{id}"));
+                                    self.state
+                                        .track_list
+                                        .select(if self.state.tracks.is_empty() {
+                                            None
+                                        } else {
+                                            Some(0)
+                                        });
+                                    self.state.active_content = ActiveContent::Tracks;
+                                    self.state.status_msg = None;
+                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                            }
+                        }
+                    }
+                }
+                ActiveContent::LocalFiles => {
+                    let vi = match self.state.local_tree_list.selected() {
+                        Some(i) => i,
+                        None => return,
+                    };
+                    let node = match self.state.local_tree.get_visible(vi) {
+                        Some(n) => n.clone(),
+                        None => return,
+                    };
+                    match node {
+                        crate::ui::LocalNode::Folder { .. } => {
+                            self.state.local_tree.toggle_folder(vi);
+                            let new_len = self.state.local_tree.visible_len();
+                            let cur = self.state.local_tree_list.selected().unwrap_or(0);
+                            self.state
+                                .local_tree_list
+                                .select(Some(cur.min(new_len.saturating_sub(1))));
+                        }
+                        crate::ui::LocalNode::Track { track, .. } => {
+                            self.activate_local_player();
+                            let all_tracks = self.state.local_tree.all_tracks_flat();
+                            let start_idx = all_tracks
+                                .iter()
+                                .position(|t| t.uri == track.uri)
+                                .unwrap_or(0);
+                            if let Some(player) = &mut self.player {
+                                player.set_queue_tracks(all_tracks.clone(), start_idx);
+                                self.playing_tracks = all_tracks;
+                                self.state.playback.title = track.name.clone();
+                                self.state.playback.artist = track.artist.clone();
+                                self.state.playback.album = track.album.clone();
+                                self.state.playback.duration_ms = track.duration_ms;
+                                self.state.playback.progress_ms = 0;
+                                self.state.playback.is_playing = true;
+                                self.state.playback.is_local = true;
+                                self.current_track_uri = track.uri.clone();
+                                self.on_track_started();
+                            }
+                        }
+                    }
+                }
+                ActiveContent::Tracks | ActiveContent::None => {
+                    if let Some(idx) = self.state.selected_track_index() {
+                        if self.spotify_streaming_disabled {
+                            self.state.status_msg =
+                                Some("⚠ Spotify Premium required for streaming".to_string());
+                            return;
+                        }
+                        self.activate_spotify_player();
+                        if self
+                            .state
+                            .tracks
+                            .get(idx)
+                            .map(|t| t.uri.starts_with("spotify:episode:"))
+                            .unwrap_or(false)
+                        {
+                            self.state.status_msg =
+                                Some("Podcast playback not supported".to_string());
+                        } else if let Some(player) = &mut self.player {
+                            let uris: Vec<String> = self
+                                .state
+                                .tracks
+                                .iter()
+                                .filter(|t| !t.uri.starts_with("spotify:episode:"))
+                                .map(|t| t.uri.clone())
+                                .collect();
+                            let adjusted_idx = self.state.tracks[..idx]
+                                .iter()
+                                .filter(|t| !t.uri.starts_with("spotify:episode:"))
+                                .count();
+                            player.set_queue(uris, adjusted_idx);
+                            self.playing_tracks = self.state.tracks.clone();
+                            if let Some(track) = self.state.tracks.get(idx) {
+                                self.state.playback.title = track.name.clone();
+                                self.state.playback.artist = track.artist.clone();
+                                self.state.playback.album = track.album.clone();
+                                self.state.playback.duration_ms = track.duration_ms;
+                                self.state.playback.progress_ms = 0;
+                                self.state.playback.is_playing = true;
+                                self.state.playback.is_local = false;
+                                self.current_track_uri = track.uri.clone();
+                                self.on_track_started();
+                            }
+                        } else if self.spotify.authenticated {
+                            let track_uri = self.state.tracks[idx].uri.clone();
+                            let is_playlist = self
+                                .state
+                                .active_playlist_uri
+                                .as_deref()
+                                .map(|u| u != "liked_songs" && !u.starts_with("search:"))
+                                .unwrap_or(false);
+                            let result = if is_playlist {
+                                let uri = self.state.active_playlist_uri.clone().unwrap();
+                                self.spotify.play_in_context(&uri, &track_uri).await
+                            } else {
+                                self.spotify.play_track_uri(&track_uri).await
+                            };
+                            if let Err(e) = result {
+                                self.state.status_msg = Some(format!("Error: {e}"));
+                            }
+                        }
+                    }
+                }
+            },
 
             Focus::Search => {
                 let panel = self.state.search_results.as_ref().map(|sr| sr.panel);
@@ -1338,9 +1307,8 @@ impl App {
                             .map(|s| s.to_string());
                         if let Some(track_uri) = uri {
                             if self.spotify_streaming_disabled {
-                                self.state.status_msg = Some(
-                                    "⚠ Spotify Premium required for streaming".to_string(),
-                                );
+                                self.state.status_msg =
+                                    Some("⚠ Spotify Premium required for streaming".to_string());
                                 return;
                             }
                             self.activate_spotify_player();
@@ -1350,33 +1318,27 @@ impl App {
                                 if let Some(sr) = &self.state.search_results {
                                     if let Some(idx) = sr.track_list.selected() {
                                         if let Some(t) = sr.tracks.get(idx) {
-                                            self.state.playback.title =
-                                                t.name.clone();
-                                            self.state.playback.artist =
-                                                t.artist.clone();
-                                            self.state.playback.album =
-                                                t.album.clone();
-                                            self.state.playback.duration_ms =
-                                                t.duration_ms;
+                                            self.state.playback.title = t.name.clone();
+                                            self.state.playback.artist = t.artist.clone();
+                                            self.state.playback.album = t.album.clone();
+                                            self.state.playback.duration_ms = t.duration_ms;
                                             self.state.playback.progress_ms = 0;
                                             self.state.playback.is_playing = true;
                                             self.state.playback.is_local = false;
-                                            self.playing_tracks = vec![
-                                                crate::spotify::TrackSummary {
+                                            self.playing_tracks =
+                                                vec![crate::spotify::TrackSummary {
                                                     uri: t.uri.clone(),
                                                     name: t.name.clone(),
                                                     artist: t.artist.clone(),
                                                     album: t.album.clone(),
                                                     duration_ms: t.duration_ms,
-                                                },
-                                            ];
+                                                }];
                                             self.on_track_started();
                                         }
                                     }
                                 }
                             } else if self.spotify.authenticated {
-                                let _ =
-                                    self.spotify.play_track_uri(&track_uri).await;
+                                let _ = self.spotify.play_track_uri(&track_uri).await;
                             }
                         }
                     }
@@ -1388,35 +1350,27 @@ impl App {
                             .and_then(|sr| sr.selected_album())
                             .map(|a| (a.id.clone(), a.name.clone(), a.uri.clone()));
                         if let Some((id, name, uri)) = album {
-                            self.state.status_msg =
-                                Some(format!("Loading {name}…"));
+                            self.state.status_msg = Some(format!("Loading {name}…"));
                             match self.spotify.fetch_album_tracks(&id, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
                                     self.state.tracks_total = total;
-                                    self.state.tracks_offset =
-                                        self.state.tracks.len() as u32;
-                                    self.state.active_playlist_uri =
-                                        Some(format!("album:{uri}"));
-                                    self.state.active_playlist_id =
-                                        Some(format!("album:{id}"));
-                                    self.state.track_list.select(
-                                        if self.state.tracks.is_empty() {
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.active_playlist_uri = Some(format!("album:{uri}"));
+                                    self.state.active_playlist_id = Some(format!("album:{id}"));
+                                    self.state
+                                        .track_list
+                                        .select(if self.state.tracks.is_empty() {
                                             None
                                         } else {
                                             Some(0)
-                                        },
-                                    );
+                                        });
                                     self.state.active_content = ActiveContent::Tracks;
-                                    self.state.previous_search =
-                                        self.state.search_results.take();
+                                    self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
-                                Err(e) => {
-                                    self.state.status_msg =
-                                        Some(format!("Error: {e}"))
-                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                             }
                         }
                     }
@@ -1428,33 +1382,27 @@ impl App {
                             .and_then(|sr| sr.selected_playlist())
                             .map(|p| (p.id.clone(), p.name.clone(), p.uri.clone()));
                         if let Some((id, name, uri)) = playlist {
-                            self.state.status_msg =
-                                Some(format!("Loading {name}…"));
+                            self.state.status_msg = Some(format!("Loading {name}…"));
                             match self.spotify.fetch_playlist_tracks(&id, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
                                     self.state.tracks_total = total;
-                                    self.state.tracks_offset =
-                                        self.state.tracks.len() as u32;
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
                                     self.state.active_playlist_uri = Some(uri);
                                     self.state.active_playlist_id = Some(id);
-                                    self.state.track_list.select(
-                                        if self.state.tracks.is_empty() {
+                                    self.state
+                                        .track_list
+                                        .select(if self.state.tracks.is_empty() {
                                             None
                                         } else {
                                             Some(0)
-                                        },
-                                    );
+                                        });
                                     self.state.active_content = ActiveContent::Tracks;
-                                    self.state.previous_search =
-                                        self.state.search_results.take();
+                                    self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
-                                Err(e) => {
-                                    self.state.status_msg =
-                                        Some(format!("Error: {e}"))
-                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                             }
                         }
                     }
@@ -1466,37 +1414,28 @@ impl App {
                             .and_then(|sr| sr.selected_artist())
                             .map(|a| (a.id.clone(), a.name.clone()));
                         if let Some((id, name)) = artist {
-                            self.state.status_msg = Some(format!(
-                                "Loading top tracks for {name}…"
-                            ));
+                            self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
                             match self.spotify.fetch_artist_tracks(&name, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
                                     self.state.tracks_total = total;
-                                    self.state.tracks_offset =
-                                        self.state.tracks.len() as u32;
+                                    self.state.tracks_offset = self.state.tracks.len() as u32;
                                     self.state.active_artist_name = Some(name.clone());
-                                    self.state.active_playlist_uri =
-                                        Some(format!("artist:{id}"));
-                                    self.state.active_playlist_id =
-                                        Some(format!("artist:{id}"));
-                                    self.state.track_list.select(
-                                        if self.state.tracks.is_empty() {
+                                    self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                                    self.state.active_playlist_id = Some(format!("artist:{id}"));
+                                    self.state
+                                        .track_list
+                                        .select(if self.state.tracks.is_empty() {
                                             None
                                         } else {
                                             Some(0)
-                                        },
-                                    );
+                                        });
                                     self.state.active_content = ActiveContent::Tracks;
-                                    self.state.previous_search =
-                                        self.state.search_results.take();
+                                    self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
-                                Err(e) => {
-                                    self.state.status_msg =
-                                        Some(format!("Error: {e}"))
-                                }
+                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
                             }
                         }
                     }
@@ -1536,10 +1475,7 @@ impl App {
             let track = self.state.playback.title.clone();
             let duration = self.state.playback.duration_ms;
 
-            if !artist.trim().is_empty()
-                && !track.trim().is_empty()
-                && duration > 30_000
-            {
+            if !artist.trim().is_empty() && !track.trim().is_empty() && duration > 30_000 {
                 tokio::spawn(async move {
                     lfm.update_now_playing(&artist, &track, duration).await;
                 });
@@ -1583,10 +1519,7 @@ impl App {
                             "playlist",
                         ),
                     };
-                    if len == 0
-                        || selected < len.saturating_sub(3)
-                        || len >= total as usize
-                    {
+                    if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
                         return None;
                     }
                     Some((sr.query.clone(), len as u32, stype))
@@ -1623,8 +1556,7 @@ impl App {
                         if let Some(sr) = self.state.search_results.as_mut() {
                             sr.loading = false;
                         }
-                        self.state.status_msg =
-                            Some(format!("Load more error: {e}"));
+                        self.state.status_msg = Some(format!("Load more error: {e}"));
                     }
                 }
             }
@@ -1645,10 +1577,7 @@ impl App {
                         self.state.albums_offset += new_albums.len() as u32;
                         self.state.albums.append(&mut new_albums);
                     }
-                    Err(e) => {
-                        self.state.status_msg =
-                            Some(format!("Load more error: {e}"))
-                    }
+                    Err(e) => self.state.status_msg = Some(format!("Load more error: {e}")),
                 }
             }
             return;
@@ -1657,9 +1586,7 @@ impl App {
         if self.state.active_content == ActiveContent::Shows {
             let selected = self.state.show_list.selected().unwrap_or(0);
             let len = self.state.shows.len();
-            if len > 0
-                && selected >= len.saturating_sub(3)
-                && len < self.state.shows_total as usize
+            if len > 0 && selected >= len.saturating_sub(3) && len < self.state.shows_total as usize
             {
                 let offset = self.state.shows_offset;
                 match self.spotify.fetch_saved_shows(offset).await {
@@ -1668,10 +1595,7 @@ impl App {
                         self.state.shows_offset += new_shows.len() as u32;
                         self.state.shows.append(&mut new_shows);
                     }
-                    Err(e) => {
-                        self.state.status_msg =
-                            Some(format!("Load more error: {e}"))
-                    }
+                    Err(e) => self.state.status_msg = Some(format!("Load more error: {e}")),
                 }
             }
             return;
@@ -1685,9 +1609,7 @@ impl App {
         if len == 0 || selected < len.saturating_sub(3) {
             return;
         }
-        if (self.state.tracks_offset as usize) >= len
-            && len < self.state.tracks_total as usize
-        {
+        if (self.state.tracks_offset as usize) >= len && len < self.state.tracks_total as usize {
             self.state.tracks_loading = true;
             let offset = self.state.tracks_offset;
             let id = self.state.active_playlist_id.clone();
@@ -1699,11 +1621,7 @@ impl App {
                     self.spotify.fetch_album_tracks(album_id, offset).await
                 }
                 Some(id) if id.starts_with("artist:") => {
-                    let name = self
-                        .state
-                        .active_artist_name
-                        .clone()
-                        .unwrap_or_default();
+                    let name = self.state.active_artist_name.clone().unwrap_or_default();
                     self.spotify.fetch_artist_tracks(&name, offset).await
                 }
                 Some(id) => self.spotify.fetch_playlist_tracks(id, offset).await,
@@ -1815,10 +1733,7 @@ impl App {
     }
 
     fn sync_track_selection(&mut self) {
-        let queued = self
-            .player
-            .as_mut()
-            .and_then(|p| p.take_playing_queued());
+        let queued = self.player.as_mut().and_then(|p| p.take_playing_queued());
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
             self.state.playback.artist = qt.artist;
@@ -1843,10 +1758,7 @@ impl App {
                     self.on_track_started();
                 }
                 if self.playing_tracks.len() == self.state.tracks.len()
-                    && self
-                        .playing_tracks
-                        .get(idx)
-                        .map(|t| &t.uri)
+                    && self.playing_tracks.get(idx).map(|t| &t.uri)
                         == self.state.tracks.get(idx).map(|t| &t.uri)
                 {
                     self.state.track_list.select(Some(idx));
@@ -1883,14 +1795,18 @@ impl App {
         self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
     }
 
+
+    // This function... Jesus. So complicated to make this shit work. 
+    // And
+    // TODO: Fix the art cover, because it don't show yourself into player, just hollow and name of artist too, stay "unknown artist"(fallback)
+    // SO, I NEED FIX THIS _-(°0-0°)-_
     async fn load_local_files(&mut self) {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let raw_dir = match cfg.local.music_dir {
             Some(d) => d,
             None => {
-                self.state.status_msg = Some(
-                    "Set [local] music_dir in ~/.config/isi-music/config.toml".to_string(),
-                );
+                self.state.status_msg =
+                    Some("Set [local] music_dir in ~/.config/isi-music/config.toml".to_string());
                 return;
             }
         };
@@ -1906,45 +1822,66 @@ impl App {
         };
 
         if !dir.exists() {
-            self.state.status_msg =
-                Some(format!("Directory not found: {}", dir.display()));
+            self.state.status_msg = Some(format!("Directory not found: {}", dir.display()));
             return;
         }
 
-        self.state.status_msg = Some("Scanning local files… (loading in background)".to_string());
+        self.state.status_msg = Some("Loading local files...".to_string());
         self.state.active_content = ActiveContent::LocalFiles;
         self.state.focus = Focus::Tracks;
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.local_scan_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
             let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "m4a", "opus"];
             let mut nodes: Vec<crate::ui::LocalNode> = Vec::new();
 
+            let db_path = crate::config::get_local_db_path();
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => {
+                    let _ = c.execute_batch("PRAGMA journal_mode=WAL;");
+                    Some(c)
+                }
+                Err(_) => None,
+            };
+
+            if let Some(ref c) = conn {
+                let _ = c.execute(
+                    "CREATE TABLE IF NOT EXISTS tracks (
+                        id INTEGER PRIMARY KEY,
+                        path TEXT NOT NULL UNIQUE,
+                        title TEXT,
+                        artist TEXT,
+                        album TEXT,
+                        duration_ms INTEGER,
+                        cover_path TEXT
+                    )",
+                    [],
+                );
+            }
+
             fn scan_dir(
                 dir: &std::path::Path,
                 depth: usize,
                 nodes: &mut Vec<crate::ui::LocalNode>,
                 extensions: &[&str],
+                conn: &Option<rusqlite::Connection>,
             ) {
                 let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
                 let mut files: Vec<std::path::PathBuf> = Vec::new();
 
                 if let Ok(entries) = std::fs::read_dir(dir) {
-                    let mut entries: Vec<_> =
-                        entries.flatten().map(|e| e.path()).collect();
-                    entries.sort();
-                    for path in entries {
+                    let mut entries_vec: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+                    entries_vec.sort();
+                    for path in entries_vec {
                         if path.is_dir() {
                             subdirs.push(path);
                         } else if path.is_file() {
                             let ext_ok = path
                                 .extension()
                                 .and_then(|e| e.to_str())
-                                .map(|e| {
-                                    extensions.contains(&e.to_lowercase().as_str())
-                                })
+                                .map(|e| extensions.contains(&e.to_lowercase().as_str()))
                                 .unwrap_or(false);
                             if ext_ok {
                                 files.push(path);
@@ -1968,7 +1905,7 @@ impl App {
                         children_count: 0,
                     });
                     let before = nodes.len();
-                    scan_dir(&subdir, depth + 1, nodes, extensions);
+                    scan_dir(&subdir, depth + 1, nodes, extensions, conn);
                     let added = nodes.len() - before;
                     if let crate::ui::LocalNode::Folder { children_count, .. } =
                         &mut nodes[folder_idx]
@@ -1981,51 +1918,91 @@ impl App {
                 }
 
                 for path in files {
-                    let (name, artist, album, duration_ms) =
-                        read_audio_metadata(&path);
                     let uri = format!("file://{}", path.display());
-                    nodes.push(crate::ui::LocalNode::Track {
-                        track: crate::spotify::TrackSummary {
+                    let path_str = path.to_str().unwrap_or_default();
+
+                    let mut track_data: Option<crate::spotify::TrackSummary> = None;
+                    if let Some(c) = conn {
+                        let stmt = c
+                            .prepare("SELECT title, artist, album, duration_ms FROM tracks WHERE path = ?1")
+                            .ok();
+                        if let Some(mut s) = stmt {
+                            track_data = s
+                                .query_row([path_str], |row| {
+                                    Ok(crate::spotify::TrackSummary {
+                                        name: row.get(0)?,
+                                        artist: row.get(1)?,
+                                        album: row.get(2)?,
+                                        duration_ms: row.get(3)?,
+                                        uri: uri.clone(),
+                                    })
+                                })
+                                .ok();
+                        }
+                    }
+
+                    let track = if let Some(t) = track_data {
+                        t
+                    } else {
+                        let (name, artist, album, duration_ms) = read_audio_metadata(&path);
+
+                        let cover_art: Option<Vec<u8>> = None;
+
+                        let cover_path = if let Some(art_bytes) = cover_art {
+                            let hash = format!("{:x}", md5::compute(&art_bytes));
+
+                            let cache_dir = dirs::cache_dir()
+                                .map(|d| d.join("isi-music/covers"))
+                                .unwrap_or_else(|| {
+                                    std::path::PathBuf::from("/tmp/isi-music/covers")
+                                });
+
+                            if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+                                warn!("Cannot create cover cache dir: {e}");
+                                None
+                            } else {
+                                let cover_file = cache_dir.join(format!("{}.jpg", hash));
+                                match std::fs::write(&cover_file, &art_bytes) {
+                                    Ok(_) => cover_file.to_str().map(|s| s.to_string()),
+                                    Err(e) => {
+                                        warn!("Cannot write cover art: {e}");
+                                        None
+                                    }
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
+                        if let Some(c) = conn {
+                            let _ = c.execute(
+                                "INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, cover_path)
+                                VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                rusqlite::params![
+                                    path_str,
+                                    name,
+                                    artist,
+                                    album,
+                                    duration_ms as i64,
+                                    cover_path
+                                ],
+                            );
+                        }
+
+                        crate::spotify::TrackSummary {
                             name,
                             artist,
                             album,
                             duration_ms,
                             uri,
-                        },
-                        depth,
-                    });
+                        }
+                    };
+
+                    nodes.push(crate::ui::LocalNode::Track { track, depth });
                 }
             }
 
-            scan_dir(&dir, 0, &mut nodes, &extensions);
-
-            let has_root_tracks = nodes
-                .iter()
-                .any(|n| matches!(n, crate::ui::LocalNode::Track { depth: 0, .. }));
-            let has_subdirs = nodes.iter().any(|n| n.is_folder());
-
-            if has_root_tracks && has_subdirs {
-                let root_name = dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Music")
-                    .to_string();
-                let wrapper = crate::ui::LocalNode::Folder {
-                    name: root_name,
-                    depth: 0,
-                    expanded: true,
-                    children_start: 1,
-                    children_count: nodes.len(),
-                };
-                nodes.insert(0, wrapper);
-                for node in nodes.iter_mut().skip(1) {
-                    match node {
-                        crate::ui::LocalNode::Folder { depth, .. } => *depth += 1,
-                        crate::ui::LocalNode::Track { depth, .. } => *depth += 1,
-                    }
-                }
-            }
-
+            scan_dir(&dir, 0, &mut nodes, &extensions, &conn);
             let _ = tx.send(nodes);
         });
     }
@@ -2047,7 +2024,8 @@ impl App {
             self.state.tracks_total = track_count as u32;
             self.state.tracks_offset = track_count as u32;
             self.state.local_tree = tree;
-            self.state.local_tree_list
+            self.state
+                .local_tree_list
                 .select(if vis_len == 0 { None } else { Some(0) });
             self.state.active_playlist_uri = Some("local_files".to_string());
             self.state.active_playlist_id = Some("local_files".to_string());
@@ -2057,8 +2035,7 @@ impl App {
             if track_count == 0 {
                 self.state.status_msg = Some("No audio files found".to_string());
             } else {
-                self.state.status_msg =
-                    Some(format!("{track_count} local tracks loaded"));
+                self.state.status_msg = Some(format!("{track_count} local tracks loaded"));
             }
         }
     }
@@ -2066,9 +2043,8 @@ impl App {
     async fn radio_refill(&mut self) {
         let seeds: Vec<String> = self.recent_track_uris.iter().cloned().collect();
         if seeds.is_empty() {
-            self.state.status_msg = Some(
-                "Radio: no seed tracks yet — play a Spotify track first".to_string(),
-            );
+            self.state.status_msg =
+                Some("Radio: no seed tracks yet — play a Spotify track first".to_string());
             return;
         }
 
@@ -2079,16 +2055,14 @@ impl App {
                     for t in tracks {
                         player.add_to_queue(t.uri, t.name, t.artist, t.duration_ms);
                     }
-                    self.state.status_msg =
-                        Some(format!("󰐇 Radio: queued {count} tracks"));
+                    self.state.status_msg = Some(format!("󰐇 Radio: queued {count} tracks"));
                     self.sync_queue_display();
                 }
             }
             Ok(_) | Err(_) => {
                 self.radio_mode = false;
                 self.state.playback.radio_mode = false;
-                self.state.status_msg =
-                    Some("Radio: could not find tracks, radio off".to_string());
+                self.state.status_msg = Some("Radio: could not find tracks, radio off".to_string());
             }
         }
     }
@@ -2101,30 +2075,28 @@ impl App {
                 .selected()
                 .and_then(|i| self.state.tracks.get(i))
                 .map(|t| t.uri.clone()),
-            Focus::Search => {
-                self.state.search_results.as_ref().and_then(|sr| match sr.panel {
-                    SearchPanel::Tracks => {
-                        sr.selected_track_uri().map(|s| s.to_string())
-                    }
+            Focus::Search => self
+                .state
+                .search_results
+                .as_ref()
+                .and_then(|sr| match sr.panel {
+                    SearchPanel::Tracks => sr.selected_track_uri().map(|s| s.to_string()),
                     SearchPanel::Artists => sr
                         .selected_artist()
                         .map(|a| format!("spotify:artist:{}", a.id)),
                     _ => None,
-                })
-            }
+                }),
             _ => None,
         };
 
         let Some(uri) = seed_uri else {
-            self.state.status_msg =
-                Some("Select a track or artist first".to_string());
+            self.state.status_msg = Some("Select a track or artist first".to_string());
             return;
         };
 
         if uri.starts_with("file://") {
-            self.state.status_msg = Some(
-                "Recommendations require a Spotify track or artist".to_string(),
-            );
+            self.state.status_msg =
+                Some("Recommendations require a Spotify track or artist".to_string());
             return;
         }
 
@@ -2136,11 +2108,11 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = count as u32;
                 self.state.tracks_offset = count as u32;
-                self.state.active_playlist_uri =
-                    Some("radio:recommendations".to_string());
-                self.state.active_playlist_id =
-                    Some("radio:recommendations".to_string());
-                self.state.track_list.select(if count == 0 { None } else { Some(0) });
+                self.state.active_playlist_uri = Some("radio:recommendations".to_string());
+                self.state.active_playlist_id = Some("radio:recommendations".to_string());
+                self.state
+                    .track_list
+                    .select(if count == 0 { None } else { Some(0) });
                 self.state.active_content = ActiveContent::Tracks;
                 self.state.search_results = None;
                 self.state.focus = Focus::Tracks;
@@ -2151,8 +2123,7 @@ impl App {
                 };
             }
             Err(e) => {
-                self.state.status_msg =
-                    Some(format!("Recommendations failed: {e}"));
+                self.state.status_msg = Some(format!("Recommendations failed: {e}"));
             }
         }
     }
@@ -2169,9 +2140,11 @@ impl App {
         }
         if let Some(p) = &self.parked_player {
             let prefix = if self.local_active { " " } else { "󰈣 " };
-            items.extend(p.user_queue().iter().map(|t| {
-                (format!("{}{}", prefix, t.name), t.artist.clone())
-            }));
+            items.extend(
+                p.user_queue()
+                    .iter()
+                    .map(|t| (format!("{}{}", prefix, t.name), t.artist.clone())),
+            );
         }
 
         self.state.queue_items = items;
@@ -2225,8 +2198,7 @@ impl App {
                     if self.parked_player.is_some() {
                         std::mem::swap(&mut self.player, &mut self.parked_player);
                         self.local_active = true;
-                        self.band_energies =
-                            self.player.as_ref().and_then(|p| p.band_energies());
+                        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
                     }
                 } else {
                     warn!("Reconnect failed: {e:#}");

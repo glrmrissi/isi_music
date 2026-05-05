@@ -89,6 +89,7 @@ discord-rich-presence = { version = "0.2", optional = true }
 
 # Hot reload
 notify = "4.0"
+urlencoding = "2.1.3"
 
 [features]
 mpris = ["mpris-server"]

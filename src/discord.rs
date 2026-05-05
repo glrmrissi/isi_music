@@ -43,7 +43,7 @@ impl DiscordRpc {
                     for update in rx {
                         let result = match update {
                             RpcUpdate::Playing { title, artist, art_url } => {
-                                let mut act = activity::Activity::new()
+                                let act = activity::Activity::new()
                                     .activity_type(activity::ActivityType::Playing)
                                     .details(&title)
                                     .state(&artist)

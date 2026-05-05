@@ -21,6 +21,7 @@ pub struct PlaybackState {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub path: Option<String>,
     pub is_playing: bool,
     pub shuffle: bool,
     pub repeat: RepeatState,
@@ -38,6 +39,7 @@ impl Default for PlaybackState {
             title: String::new(),
             artist: String::new(),
             album: String::new(),
+            path: None,
             is_playing: false,
             shuffle: false,
             repeat: RepeatState::Off,
@@ -1055,7 +1057,10 @@ impl Ui {
         };
         let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
         let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
-        let ext_hint = if pb.album.is_empty() { String::new() } else { format!("  {}", pb.album) };
+        let ext_hint = pb.path
+            .as_ref()
+            .map(|p| format!("  {}", p))
+            .unwrap_or_default();
 
         let lines = vec![
             Line::from(""),
