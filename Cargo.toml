@@ -1,6 +1,6 @@
 [package]
 name = "isi-music"
-version = "0.1.0"
+version = "0.2.7"
 edition = "2024"
 
 [[bin]]
