@@ -7,7 +7,6 @@ use ratatui::{
 };
 use rspotify::model::RepeatState;
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
-use tracing::warn;
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 use crate::theme::Theme;
 use crate::theme::{LayoutNode, UiWidget};
@@ -102,6 +101,7 @@ pub enum LocalNode {
         name: String,
         depth: usize,
         expanded: bool,
+        #[allow(dead_code)]
         children_start: usize,
         children_count: usize,
     },
@@ -121,20 +121,6 @@ impl LocalNode {
 
     pub fn is_folder(&self) -> bool {
         matches!(self, LocalNode::Folder { .. })
-    }
-
-    pub fn is_expanded(&self) -> bool {
-        match self {
-            LocalNode::Folder { expanded, .. } => *expanded,
-            LocalNode::Track { .. } => false,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            LocalNode::Folder { name, .. } => name,
-            LocalNode::Track { track, .. } => &track.name,
-        }
     }
 
     pub fn track(&self) -> Option<&TrackSummary> {
@@ -206,16 +192,6 @@ impl LocalFileTree {
             .take_while(|n| n.depth() > folder_depth)
             .filter_map(|n| n.track().cloned())
             .collect()
-    }
-
-    pub fn flat_track_index(&self, visible_idx: usize) -> Option<usize> {
-        let Some(&node_idx) = self.visible.get(visible_idx) else { return None };
-        let node = self.all_nodes.get(node_idx)?;
-        if node.is_folder() { return None; }
-        let target_uri = node.track()?.uri.as_str();
-        self.all_nodes.iter()
-            .filter_map(|n| n.track())
-            .position(|t| t.uri == target_uri)
     }
 }
 
@@ -577,10 +553,6 @@ pub struct Ui {
 impl Ui {
     pub fn new(theme: Theme) -> Self {
         Self { theme }
-    }
-
-    pub fn with_default_theme() -> Self {
-        Self { theme: Theme::default() }
     }
 
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
