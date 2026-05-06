@@ -7,6 +7,7 @@ use ratatui::{
 };
 use rspotify::model::RepeatState;
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
+use tracing::warn;
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 use crate::theme::Theme;
 use crate::theme::{LayoutNode, UiWidget};
@@ -29,6 +30,7 @@ pub struct PlaybackState {
     pub duration_ms: u64,
     pub volume: u8,
     pub art_url: Option<String>,
+    pub cover_path: Option<String>, 
     pub is_local: bool,
     pub radio_mode: bool,
 }
@@ -47,6 +49,7 @@ impl Default for PlaybackState {
             duration_ms: 0,
             volume: 100,
             art_url: None,
+            cover_path: None, 
             is_local: false,
             radio_mode: false,
         }
@@ -157,21 +160,20 @@ impl LocalFileTree {
 
     pub fn rebuild_visible(&mut self) {
         self.visible.clear();
-        let mut skip_until_depth: Option<usize> = None;
+        let mut skip_depth: Option<usize> = None;
 
         for (i, node) in self.all_nodes.iter().enumerate() {
-            if let Some(min_depth) = skip_until_depth {
-                if node.depth() > min_depth {
+            if let Some(depth) = skip_depth {
+                if node.depth() > depth {
                     continue;
-                } else {
-                    skip_until_depth = None;
                 }
+                skip_depth = None;
             }
+
             self.visible.push(i);
-            if let LocalNode::Folder { expanded, depth, .. } = node {
-                if !expanded {
-                    skip_until_depth = Some(*depth);
-                }
+            
+            if let LocalNode::Folder { expanded: false, depth, .. } = node {
+                skip_depth = Some(*depth);
             }
         }
     }
@@ -1398,7 +1400,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.1.0".to_string()
+            "isi-music v0.2.7".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };

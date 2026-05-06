@@ -17,6 +17,8 @@ use librespot_playback::{
 use crate::audio_sink::{AnalyzerSink, N_BANDS};
 use crate::spotify::TrackSummary;
 use crate::config;
+
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use rand::seq::SliceRandom;
 #[cfg(target_os = "linux")]
@@ -36,19 +38,20 @@ pub enum PlayerNotification {
     FreeAccountDetected,
 }
 
-// TODO: FIX WARNS
 #[derive(Clone, Debug)]
 pub struct TrackInfo {
+    pub uri: String,
     pub name: String,
     pub artist: String,
     pub album: String,
     pub duration_ms: u64,
-    pub uri: String,
+    pub path: Option<PathBuf>,
+    pub cover_path: Option<PathBuf>,
 }
 
 pub trait AudioPlayer: Send {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
-    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64);
+    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>);
     fn user_queue(&self) -> &[QueuedTrack];
     fn remove_from_user_queue(&mut self, index: usize);
     fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
@@ -69,14 +72,7 @@ pub trait AudioPlayer: Send {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn play_at(&mut self, index: usize);
-
-    // Seek for Spotify (takes &self because librespot seek is non-mutating, IDIOT)
-    // For local files, the app should call seek_mut() instead
     fn seek(&self, position_ms: u32);
-
-    // Seek with mutable access - required for local files (reload + skip)
-    // Default implementation delegates to seek() for backwards compatibility
-    // (9-9)
     fn seek_mut(&mut self, position_ms: u32) {
         self.seek(position_ms);
     }
@@ -98,7 +94,6 @@ pub trait AudioPlayer: Send {
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
     fn current_uri(&self) -> Option<String>;
-
     fn current_track_info(&self) -> Option<TrackInfo> { None }
 }
 
@@ -107,6 +102,7 @@ pub struct QueuedTrack {
     pub name: String,
     pub artist: String,
     pub duration_ms: u64,
+    pub cover_path: Option<PathBuf>,
 }
 
 pub struct NativePlayer {
@@ -230,8 +226,8 @@ impl NativePlayer {
         self.play_at(start_index);
     }
 
-    pub fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) {
-        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms });
+    pub fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>) {
+        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms, cover_path });
     }
 
     pub fn user_queue(&self) -> &[QueuedTrack] {
@@ -373,7 +369,7 @@ impl NativePlayer {
 
 impl AudioPlayer for NativePlayer {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize) { self.set_queue(uris, start_index); }
-    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) { self.add_to_queue(uri, name, artist, duration_ms); }
+    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>) { self.add_to_queue(uri, name, artist, duration_ms, cover_path); }
     fn user_queue(&self) -> &[QueuedTrack] { self.user_queue() }
     fn remove_from_user_queue(&mut self, index: usize) { self.user_queue.remove(index); }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
@@ -386,7 +382,6 @@ impl AudioPlayer for NativePlayer {
     fn prev(&mut self) -> bool { self.prev() }
     fn play_at(&mut self, index: usize) { self.play_at(index); }
     fn seek(&self, position_ms: u32) { self.seek(position_ms); }
-    // seek_mut for NativePlayer just calls seek() - librespot handles it fine with &self
     fn seek_mut(&mut self, position_ms: u32) { self.seek(position_ms); }
 
     fn is_playing(&self) -> bool { self.is_playing }
