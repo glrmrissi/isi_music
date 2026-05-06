@@ -37,7 +37,7 @@ A terminal music player written in Rust. Stream from Spotify via librespot or pl
 **1. Download the binary**
 
 ```bash
-curl -L https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-linux -o isi-music
+curl -L https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-linux-x86_64 -o isi-music
 chmod +x isi-music
 sudo mv isi-music /usr/local/bin/
 ```
@@ -46,7 +46,7 @@ sudo mv isi-music /usr/local/bin/
 
 | Distro | Command |
 |--------|---------|
-| Debian / Ubuntu | `sudo apt install libasound2 libpulse0` |
+| Debian / Ubuntu | `sudo apt install libasound2t64 libpulse0` |
 | Arch Linux | `sudo pacman -S alsa-lib libpulse` |
 | Fedora | `sudo dnf install alsa-lib pulseaudio-libs` |
 
