@@ -49,6 +49,44 @@ pub struct TrackInfo {
     pub cover_path: Option<PathBuf>,
 }
 
+pub struct PlaybackState {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub path: Option<String>,
+    pub is_playing: bool,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+    pub progress_ms: u64,
+    pub duration_ms: u64,
+    pub volume: u8,
+    pub art_url: Option<String>,
+    pub cover_path: Option<String>,
+    pub is_local: bool,
+    pub radio_mode: bool,
+}
+
+impl Default for PlaybackState {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            path: None,
+            is_playing: false,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+            progress_ms: 0,
+            duration_ms: 0,
+            volume: 100,
+            art_url: None,
+            cover_path: None,
+            is_local: false,
+            radio_mode: false,
+        }
+    }
+}
+
 pub trait AudioPlayer: Send {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
     fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>);

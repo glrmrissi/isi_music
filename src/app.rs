@@ -94,7 +94,6 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
         if cover_art.is_none() {
             if let Some(visual) = rev.visuals().first() {
                 cover_art = Some(visual.data.to_vec());
-
             }
         }
     }
@@ -366,7 +365,6 @@ impl App {
             } else {
                 spotify.fetch_playback().await.unwrap_or_default()
             };
-        warn!("{:?}", initial_playback);
 
         let initial_art = initial_playback.art_url.clone();
 
@@ -578,7 +576,6 @@ impl App {
                 }
             }
 
-
             if needs_sync {
                 self.sync_track_selection();
                 self.sync_queue_display();
@@ -674,33 +671,19 @@ impl App {
                 if let Ok((art_url, bytes)) = rx.try_recv() {
                     self.album_art_pending = None;
                     if let Some(url) = art_url {
-                    self.state.playback.art_url = Some(url);
-                    } else if self.local_active {
-                        if let Some(path_str) = &self.state.playback.cover_path {
-                            if self.state.album_art.is_none() {
-                                if let Ok(img) = image::open(std::path::Path::new(path_str)) {
-                                    let image_state = self.picker.new_resize_protocol(img);
-                                    self.state.album_art = Some(AlbumArtData { image_state: Some(image_state) });
-                                }
-                            }
-                        }
+                        self.state.playback.art_url = Some(url);
                     }
                     if let Some(bytes) = bytes {
-                        let image_state = image::load_from_memory(&bytes)
-                            .ok()
-                            .map(|img| self.picker.new_resize_protocol(img));
-
-                        self.state.album_art = Some(AlbumArtData { image_state });
-
-                    } else if self.local_active {
-                        if let Some(path) = &self.state.playback.cover_path {
-                            // This ensures the local mp3 cover is loaded into the TUI
-                            if let Ok(img) = image::open(path) {
+                        match image::load_from_memory(&bytes) {
+                            Ok(img) => {
                                 let image_state = self.picker.new_resize_protocol(img);
                                 self.state.album_art = Some(AlbumArtData { image_state: Some(image_state) });
                             }
+                            Err(e) => {
+                                warn!("DEBUG: Failed to decode extracted image bytes: {}", e);
+                            }
                         }
-                    }           
+                    }
                 }
             }
 
@@ -726,8 +709,7 @@ impl App {
                 }
 
                 if let Some(since) = self.discord_pending_since {
-                    let art_ready = pb.art_url.is_some();
-                    // For local files art_url is never set; use a shorter timeout
+                    let art_ready = pb.art_url.is_some() || pb.is_local;
                     let timeout_secs = if pb.is_local { 1 } else { 5 };
                     let timed_out = since.elapsed() >= Duration::from_secs(timeout_secs);
                     if art_ready || timed_out {
@@ -816,6 +798,8 @@ impl App {
             };
             
             if let Some(track_info) = player.current_track_info() {
+                let title_changed = self.state.playback.title != track_info.name;
+                
                 if self.state.playback.title.is_empty() {
                     if let Some(path_str) = &track_info.path {
                         self.state.playback.title = std::path::Path::new(path_str)
@@ -824,7 +808,10 @@ impl App {
                             .unwrap_or("Unknown Track")
                             .to_string();
                     }
+                } else {
+                    self.state.playback.title = track_info.name.clone();
                 }
+                
                 self.state.playback.artist = track_info.artist.clone();
                 self.state.playback.album = if track_info.album.is_empty() {
                     "Local Archive".to_string()
@@ -835,6 +822,40 @@ impl App {
                 self.state.playback.duration_ms = track_info.duration_ms;
                 self.state.playback.cover_path = track_info.cover_path.map(|p| p.to_string_lossy().to_string());
                 self.state.playback.art_url = None;
+                
+                if title_changed {
+                    warn!("DEBUG: Title changed to: {}", track_info.name);
+                    self.state.album_art = None;
+                    let mut cover_loaded = false;
+                    
+                    if let Some(path_str) = &self.state.playback.cover_path {
+                        if let Ok(bytes) = std::fs::read(path_str) {
+                            match image::load_from_memory(&bytes) {
+                                Ok(img) => {
+                                    
+                                    let img = img.thumbnail(500, 500);
+                                    let image_state = self.picker.new_resize_protocol(img);
+                                    
+                                    self.state.album_art = Some(AlbumArtData { 
+                                        image_state: Some(image_state) 
+                                    });
+                                    cover_loaded = true;
+                                }
+                                Err(e) => {
+                                    warn!("DEBUG: Failed to open cached image ({}): {}", path_str, e);
+                                }
+                            }
+                        } else {
+                            warn!("DEBUG: Failed to read cached file: {}", path_str);
+                        }
+                    } else {
+                        warn!("DEBUG: No cover_path in SQLite");
+                    }
+
+                    if !cover_loaded {
+                        self.fetch_local_album_art();
+                    }
+                }
                 self.state.playback.is_local = true;
             }
         }
@@ -915,8 +936,12 @@ impl App {
                     _ => self.state.playback.progress_ms.saturating_sub(step_ms),
                 };
                 self.state.playback.progress_ms = new_pos;
-                if let Some(player) = &self.player {
-                    player.seek(new_pos as u32);
+                if let Some(player) = &mut self.player {
+                    if self.local_active {
+                        player.seek_mut(new_pos as u32);
+                    } else {
+                        player.seek(new_pos as u32);
+                    }
                 }
                 return Ok(());
             }
@@ -1057,9 +1082,6 @@ impl App {
             (KeyCode::Char('n'), _) => {
                 if let Some(player) = &mut self.player {
                     player.next();
-                    if self.local_active {
-                        self.update_playback_from_local_player();
-                    }
                     self.state.playback.progress_ms = 0;
                     self.scrobble_sent = false;
                     self.track_start_unix = unix_now();
@@ -1072,9 +1094,6 @@ impl App {
             (KeyCode::Char('p'), _) => {
                 if let Some(player) = &mut self.player {
                     player.prev();
-                    if self.local_active {
-                        self.update_playback_from_local_player();
-                    }
                     self.state.playback.progress_ms = 0;
                     self.scrobble_sent = false;
                     self.sync_track_selection();
@@ -1402,9 +1421,6 @@ impl App {
                                 self.current_track_uri = track.uri.clone();
                                 self.on_track_started();
                                 
-                                if self.local_active {
-                                    self.update_playback_from_local_player();
-                                }
                                 self.state.playback.progress_ms = 0;
                                 self.scrobble_sent = false;
                                 self.track_start_unix = unix_now();
@@ -1990,10 +2006,6 @@ impl App {
         self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
     }
 
-    // This function... Jesus. So complicated to make this shit work.
-    // And
-    // TODO: Fix the art cover, because it don't show yourself into player, just hollow and name of artist too, stay "unknown artist"(fallback)
-    // SO, I NEED FIX THIS _-(°0-0°)-_
     async fn load_local_files(&mut self) {
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let raw_dir = match cfg.local.music_dir {

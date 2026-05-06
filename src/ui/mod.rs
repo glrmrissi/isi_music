@@ -10,6 +10,8 @@ use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 use crate::theme::Theme;
 use crate::theme::{LayoutNode, UiWidget};
+use tracing::warn;
+
 
 
 pub struct AlbumArtData {
@@ -958,6 +960,7 @@ impl Ui {
             .split(art_area);
 
         if let Some(art) = &mut state.album_art {
+            warn!("UI: Rendering image state, exists: {}", art.image_state.is_some());
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
                     StatefulImage::<StatefulProtocol>::default(),
@@ -1400,25 +1403,12 @@ impl Ui {
         frame.render_widget(block, area);
         if inner.width == 0 || inner.height == 0 { return; }
 
-        let img_h = inner.height.min(inner.width / 2);
-        let img_w = img_h * 2;
-        let padding = inner.width.saturating_sub(img_w) / 2;
-
-        let img_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(padding),
-                Constraint::Length(img_w),
-                Constraint::Min(0),
-            ])
-            .split(inner);
-
-        if let Some(art) = &mut state.album_art {
-            if let Some(img_state) = &mut art.image_state {
+        if let Some(art_data) = &mut state.album_art {
+            if let Some(protocol_state) = &mut art_data.image_state {
                 frame.render_stateful_widget(
-                    StatefulImage::<StatefulProtocol>::default(),
-                    img_cols[1],
-                    img_state,
+                    ratatui_image::StatefulImage::<StatefulProtocol>::default(),
+                    inner,
+                    protocol_state,
                 );
             }
         }

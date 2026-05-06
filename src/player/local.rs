@@ -8,7 +8,7 @@ use std::{
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode, TrackInfo};
 use crate::audio_sink::{AnalyzingSource, N_BANDS};
@@ -110,7 +110,7 @@ impl LocalPlayer {
         };
 
         if let Err(e) = instance.reload_library_from_db() {
-            error!("Failed to load songs from SQLite: {}", e);
+            warn!("Failed to load songs from SQLite: {}", e);
         } else {
             info!("Songs loaded: {} tracks", instance.queue.len());
         }
@@ -155,31 +155,26 @@ impl LocalPlayer {
         Ok(())
     }
 
-    fn load_and_play(&mut self, idx: usize) {
+    fn try_load_track(&mut self, idx: usize) -> bool {
         let Some(track) = self.queue.get(idx) else {
-            warn!("LocalPlayer: index {idx} out of bounds");
-            return;
+            return false;
         };
         let path = track.path.clone();
+
+        if !path.exists() {
+            return false;
+        }
 
         self.sink.stop();
 
         let file = match File::open(&path) {
             Ok(f) => f,
-            Err(e) => {
-                error!("LocalPlayer: cannot open {:?}: {e}", path);
-                let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
-                return;
-            }
+            Err(_) => return false,
         };
 
         let decoder = match Decoder::new(BufReader::new(file)) {
             Ok(d) => d,
-            Err(e) => {
-                error!("LocalPlayer: cannot decode {:?}: {e}", path);
-                let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
-                return;
-            }
+            Err(_) => return false,
         };
 
         let analyzing = AnalyzingSource::new(decoder, Arc::clone(&self.band_energies));
@@ -190,6 +185,21 @@ impl LocalPlayer {
         self.is_playing = true;
         self.load_guard = Some(Instant::now());
         let _ = self.event_tx.send(PlayerNotification::Playing);
+        true
+    }
+
+    fn load_and_play(&mut self, start_idx: usize) {
+        let len = self.queue.len();
+        
+        for attempt in 0..len {
+            let idx = (start_idx + attempt) % len;
+            if self.try_load_track(idx) {
+                return;
+            }
+        }
+        
+        warn!("LocalPlayer: no playable tracks found");
+        let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
     }
 
     fn seek_by_reload(&mut self, position_ms: u32) {
@@ -197,12 +207,17 @@ impl LocalPlayer {
         let Some(track) = self.queue.get(idx) else { return };
         let path = track.path.clone();
 
+        if !path.exists() {
+            warn!("LocalPlayer: file missing for seek: {:?}", path);
+            return;
+        }
+
         self.sink.stop();
 
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) => {
-                error!("LocalPlayer: seek_by_reload cannot open {:?}: {e}", path);
+                warn!("LocalPlayer: seek_by_reload cannot open {:?}: {e}", path);
                 return;
             }
         };
@@ -210,7 +225,7 @@ impl LocalPlayer {
         let decoder = match Decoder::new(BufReader::new(file)) {
             Ok(d) => d,
             Err(e) => {
-                error!("LocalPlayer: seek_by_reload cannot decode {:?}: {e}", path);
+                warn!("LocalPlayer: seek_by_reload cannot decode {:?}: {e}", path);
                 return;
             }
         };
@@ -247,8 +262,7 @@ impl LocalPlayer {
 
         if self.repeat == RepeatMode::Track {
             if let Some(idx) = self.current_idx {
-                self.load_and_play(idx);
-                return true;
+                return self.try_load_track(idx);
             }
         }
 
@@ -268,8 +282,7 @@ impl LocalPlayer {
             let idx = self.queue.len();
             self.queue.push(lt);
             self.playing_queued = Some(track);
-            self.load_and_play(idx);
-            return true;
+            return self.try_load_track(idx);
         }
 
         if let Some(idx) = self.current_idx {
@@ -298,8 +311,7 @@ impl LocalPlayer {
     pub fn prev_inner(&mut self) -> bool {
         if let Some(idx) = self.current_idx {
             let target = if idx > 0 { idx - 1 } else { 0 };
-            self.load_and_play(target);
-            return true;
+            return self.try_load_track(target);
         }
         false
     }
