@@ -32,6 +32,8 @@ fn prompt(label: &str) -> String {
     buf.trim().to_string()
 }
 
+
+// Deprecated
 fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("isi-music — First-time setup");
     println!("────────────────────────────────────────");
