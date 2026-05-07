@@ -33,10 +33,16 @@ impl RingBuffer {
     fn read_latest(&self, out: &mut [f32]) -> bool {
         let n = out.len();
         if self.total_written < n { return false; }
+        
         let cap = self.buf.len();
         let start = (self.write_pos + cap - n) % cap;
-        for (i, o) in out.iter_mut().enumerate() {
-            *o = self.buf[(start + i) % cap];
+
+        if start + n <= cap {
+            out.copy_from_slice(&self.buf[start..start + n]);
+        } else {
+            let first_part = cap - start;
+            out[..first_part].copy_from_slice(&self.buf[start..]);
+            out[first_part..].copy_from_slice(&self.buf[..n - first_part]);
         }
         true
     }
@@ -111,8 +117,7 @@ impl AnalyzerThread {
                 }
             }
 
-            // Sleep ~8ms between polls (~120 Hz) — smooth but cheap
-            std::thread::sleep(Duration::from_millis(8));
+            std::thread::sleep(Duration::from_millis(18));
         }
     }
 
@@ -205,7 +210,7 @@ impl AnalyzerSink {
     }
 
     fn push_stereo_f64(&self, samples: &[f64]) {
-        if let Ok(mut ring) = self.ring.lock() {
+        if let Ok(mut ring) = self.ring.try_lock() {
             for ch in samples.chunks_exact(2) {
                 ring.push(((ch[0] + ch[1]) * 0.5) as f32);
             }

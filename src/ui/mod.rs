@@ -10,6 +10,8 @@ use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 use crate::theme::Theme;
 use crate::theme::{LayoutNode, UiWidget};
+use tracing::warn;
+
 
 
 pub struct AlbumArtData {
@@ -29,6 +31,7 @@ pub struct PlaybackState {
     pub duration_ms: u64,
     pub volume: u8,
     pub art_url: Option<String>,
+    pub cover_path: Option<String>, 
     pub is_local: bool,
     pub radio_mode: bool,
 }
@@ -47,6 +50,7 @@ impl Default for PlaybackState {
             duration_ms: 0,
             volume: 100,
             art_url: None,
+            cover_path: None, 
             is_local: false,
             radio_mode: false,
         }
@@ -99,6 +103,7 @@ pub enum LocalNode {
         name: String,
         depth: usize,
         expanded: bool,
+        #[allow(dead_code)]
         children_start: usize,
         children_count: usize,
     },
@@ -118,20 +123,6 @@ impl LocalNode {
 
     pub fn is_folder(&self) -> bool {
         matches!(self, LocalNode::Folder { .. })
-    }
-
-    pub fn is_expanded(&self) -> bool {
-        match self {
-            LocalNode::Folder { expanded, .. } => *expanded,
-            LocalNode::Track { .. } => false,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            LocalNode::Folder { name, .. } => name,
-            LocalNode::Track { track, .. } => &track.name,
-        }
     }
 
     pub fn track(&self) -> Option<&TrackSummary> {
@@ -157,21 +148,20 @@ impl LocalFileTree {
 
     pub fn rebuild_visible(&mut self) {
         self.visible.clear();
-        let mut skip_until_depth: Option<usize> = None;
+        let mut skip_depth: Option<usize> = None;
 
         for (i, node) in self.all_nodes.iter().enumerate() {
-            if let Some(min_depth) = skip_until_depth {
-                if node.depth() > min_depth {
+            if let Some(depth) = skip_depth {
+                if node.depth() > depth {
                     continue;
-                } else {
-                    skip_until_depth = None;
                 }
+                skip_depth = None;
             }
+
             self.visible.push(i);
-            if let LocalNode::Folder { expanded, depth, .. } = node {
-                if !expanded {
-                    skip_until_depth = Some(*depth);
-                }
+            
+            if let LocalNode::Folder { expanded: false, depth, .. } = node {
+                skip_depth = Some(*depth);
             }
         }
     }
@@ -204,16 +194,6 @@ impl LocalFileTree {
             .take_while(|n| n.depth() > folder_depth)
             .filter_map(|n| n.track().cloned())
             .collect()
-    }
-
-    pub fn flat_track_index(&self, visible_idx: usize) -> Option<usize> {
-        let Some(&node_idx) = self.visible.get(visible_idx) else { return None };
-        let node = self.all_nodes.get(node_idx)?;
-        if node.is_folder() { return None; }
-        let target_uri = node.track()?.uri.as_str();
-        self.all_nodes.iter()
-            .filter_map(|n| n.track())
-            .position(|t| t.uri == target_uri)
     }
 }
 
@@ -575,10 +555,6 @@ pub struct Ui {
 impl Ui {
     pub fn new(theme: Theme) -> Self {
         Self { theme }
-    }
-
-    pub fn with_default_theme() -> Self {
-        Self { theme: Theme::default() }
     }
 
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
@@ -984,6 +960,7 @@ impl Ui {
             .split(art_area);
 
         if let Some(art) = &mut state.album_art {
+            warn!("UI: Rendering image state, exists: {}", art.image_state.is_some());
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
                     StatefulImage::<StatefulProtocol>::default(),
@@ -1398,7 +1375,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.1.0".to_string()
+            "isi-music v0.2.7".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };
@@ -1426,25 +1403,12 @@ impl Ui {
         frame.render_widget(block, area);
         if inner.width == 0 || inner.height == 0 { return; }
 
-        let img_h = inner.height.min(inner.width / 2);
-        let img_w = img_h * 2;
-        let padding = inner.width.saturating_sub(img_w) / 2;
-
-        let img_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(padding),
-                Constraint::Length(img_w),
-                Constraint::Min(0),
-            ])
-            .split(inner);
-
-        if let Some(art) = &mut state.album_art {
-            if let Some(img_state) = &mut art.image_state {
+        if let Some(art_data) = &mut state.album_art {
+            if let Some(protocol_state) = &mut art_data.image_state {
                 frame.render_stateful_widget(
-                    StatefulImage::<StatefulProtocol>::default(),
-                    img_cols[1],
-                    img_state,
+                    ratatui_image::StatefulImage::<StatefulProtocol>::default(),
+                    inner,
+                    protocol_state,
                 );
             }
         }

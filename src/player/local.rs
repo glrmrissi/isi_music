@@ -8,24 +8,22 @@ use std::{
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode, TrackInfo};
 use crate::audio_sink::{AnalyzingSource, N_BANDS};
 use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]
-
-// IDK WHY THIS IS WARNING BUT HE IS USED TOO
 pub struct LocalTrack {
-    pub _id: i64,
+    pub id: i64,
     pub path: PathBuf,
     pub uri: String,
-    pub _name: String,
-    pub _artist: String,
-    pub _album: String,
-    pub _duration_ms: u64,
-    pub _cover_path: Option<PathBuf>,
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_ms: u64,
+    pub cover_path: Option<PathBuf>,
 }
 
 pub struct LocalPlayer {
@@ -112,7 +110,7 @@ impl LocalPlayer {
         };
 
         if let Err(e) = instance.reload_library_from_db() {
-            error!("Failed to load songs from SQLite: {}", e);
+            warn!("Failed to load songs from SQLite: {}", e);
         } else {
             info!("Songs loaded: {} tracks", instance.queue.len());
         }
@@ -132,22 +130,22 @@ impl LocalPlayer {
                 let path_str: String = row.get(1)?;
                 let cover_path_str: Option<String> = row.get(6)?;
                 Ok(LocalTrack {
-                    _id: row.get(0)?,
+                    id: row.get(0)?,
                     path: PathBuf::from(&path_str),
                     uri: format!("file://{}", path_str),
-                    _name: row
+                    name: row
                         .get::<_, Option<String>>(2)?
                         .unwrap_or_else(|| "Unknown".to_string()),
-                    _artist: row
+                    artist: row
                         .get::<_, Option<String>>(3)?
                         .unwrap_or_default(),
-                    _album: row
+                    album: row
                         .get::<_, Option<String>>(4)?
                         .unwrap_or_default(),
-                    _duration_ms: row
+                    duration_ms: row
                         .get::<_, Option<i64>>(5)?
                         .unwrap_or(0) as u64,
-                    _cover_path: cover_path_str.map(PathBuf::from),
+                    cover_path: cover_path_str.map(PathBuf::from),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -157,31 +155,26 @@ impl LocalPlayer {
         Ok(())
     }
 
-    fn load_and_play(&mut self, idx: usize) {
+    fn try_load_track(&mut self, idx: usize) -> bool {
         let Some(track) = self.queue.get(idx) else {
-            warn!("LocalPlayer: index {idx} out of bounds");
-            return;
+            return false;
         };
         let path = track.path.clone();
+
+        if !path.exists() {
+            return false;
+        }
 
         self.sink.stop();
 
         let file = match File::open(&path) {
             Ok(f) => f,
-            Err(e) => {
-                error!("LocalPlayer: cannot open {:?}: {e}", path);
-                let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
-                return;
-            }
+            Err(_) => return false,
         };
 
         let decoder = match Decoder::new(BufReader::new(file)) {
             Ok(d) => d,
-            Err(e) => {
-                error!("LocalPlayer: cannot decode {:?}: {e}", path);
-                let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
-                return;
-            }
+            Err(_) => return false,
         };
 
         let analyzing = AnalyzingSource::new(decoder, Arc::clone(&self.band_energies));
@@ -192,20 +185,39 @@ impl LocalPlayer {
         self.is_playing = true;
         self.load_guard = Some(Instant::now());
         let _ = self.event_tx.send(PlayerNotification::Playing);
+        true
     }
 
-    // Same shit, he is used
-    fn _seek_by_reload(&mut self, position_ms: u32) {
+    fn load_and_play(&mut self, start_idx: usize) {
+        let len = self.queue.len();
+        
+        for attempt in 0..len {
+            let idx = (start_idx + attempt) % len;
+            if self.try_load_track(idx) {
+                return;
+            }
+        }
+        
+        warn!("LocalPlayer: no playable tracks found");
+        let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
+    }
+
+    fn seek_by_reload(&mut self, position_ms: u32) {
         let Some(idx) = self.current_idx else { return };
         let Some(track) = self.queue.get(idx) else { return };
         let path = track.path.clone();
+
+        if !path.exists() {
+            warn!("LocalPlayer: file missing for seek: {:?}", path);
+            return;
+        }
 
         self.sink.stop();
 
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) => {
-                error!("LocalPlayer: _seek_by_reload cannot open {:?}: {e}", path);
+                warn!("LocalPlayer: seek_by_reload cannot open {:?}: {e}", path);
                 return;
             }
         };
@@ -213,7 +225,7 @@ impl LocalPlayer {
         let decoder = match Decoder::new(BufReader::new(file)) {
             Ok(d) => d,
             Err(e) => {
-                error!("LocalPlayer: _seek_by_reload cannot decode {:?}: {e}", path);
+                warn!("LocalPlayer: seek_by_reload cannot decode {:?}: {e}", path);
                 return;
             }
         };
@@ -241,8 +253,7 @@ impl LocalPlayer {
         }
     }
 
-    // Underline to stop making this fucking warn, he is used below use CTRL + F to search about this son of bitch!
-    pub fn _current_track_meta(&self) -> Option<&LocalTrack> {
+    pub fn current_track_meta(&self) -> Option<&LocalTrack> {
         self.current_idx.and_then(|i| self.queue.get(i))
     }
 
@@ -251,8 +262,7 @@ impl LocalPlayer {
 
         if self.repeat == RepeatMode::Track {
             if let Some(idx) = self.current_idx {
-                self.load_and_play(idx);
-                return true;
+                return self.try_load_track(idx);
             }
         }
 
@@ -260,20 +270,19 @@ impl LocalPlayer {
             let track = self.user_queue.remove(0);
             let path = LocalTrack::uri_to_path(&track.uri);
             let lt = LocalTrack {
-                _id: -1,
+                id: -1,
                 path,
                 uri: track.uri.clone(),
-                _name: track.name.clone(),
-                _artist: track.artist.clone(),
-                _album: String::new(),
-                _duration_ms: track.duration_ms,
-                _cover_path: None,
+                name: track.name.clone(),
+                artist: track.artist.clone(),
+                album: String::new(),
+                duration_ms: track.duration_ms,
+                cover_path: track.cover_path.clone(),
             };
             let idx = self.queue.len();
             self.queue.push(lt);
             self.playing_queued = Some(track);
-            self.load_and_play(idx);
-            return true;
+            return self.try_load_track(idx);
         }
 
         if let Some(idx) = self.current_idx {
@@ -302,8 +311,7 @@ impl LocalPlayer {
     pub fn prev_inner(&mut self) -> bool {
         if let Some(idx) = self.current_idx {
             let target = if idx > 0 { idx - 1 } else { 0 };
-            self.load_and_play(target);
-            return true;
+            return self.try_load_track(target);
         }
         false
     }
@@ -344,8 +352,8 @@ impl AudioPlayer for LocalPlayer {
         }
     }
 
-    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64) {
-        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms });
+    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>) {
+        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms, cover_path });
     }
 
     fn user_queue(&self) -> &[QueuedTrack] { &self.user_queue }
@@ -372,7 +380,7 @@ impl AudioPlayer for LocalPlayer {
 
     fn seek(&self, _position_ms: u32) {}
 
-    fn seek_mut(&mut self, position_ms: u32) { self._seek_by_reload(position_ms); }
+    fn seek_mut(&mut self, position_ms: u32) { self.seek_by_reload(position_ms); }
 
     fn is_playing(&self) -> bool { self.is_playing }
 
@@ -389,13 +397,15 @@ impl AudioPlayer for LocalPlayer {
     }
 
     fn current_track_info(&self) -> Option<TrackInfo> {
-        let t = self._current_track_meta()?;
+        let t = self.current_track_meta()?;
         Some(TrackInfo {
             uri: t.uri.clone(),
-            name: t._name.clone(),
-            artist: t._artist.clone(),
-            album: t._album.clone(),
-            duration_ms: t._duration_ms,
+            name: t.name.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            duration_ms: t.duration_ms,
+            path: Some(t.path.clone()),
+            cover_path: t.cover_path.clone(),
         })
     }
 
@@ -439,8 +449,6 @@ impl AudioPlayer for LocalPlayer {
     }
 }
 
-
-// I Hate my self to place dead_code, but i am tired (-_-°)
 #[allow(dead_code)]
 struct SkipDecoder<D>
 where
@@ -458,13 +466,10 @@ where
     fn new(inner: D, duration: std::time::Duration) -> Self {
         let sample_rate = inner.sample_rate().max(1) as u32;
         let channels = inner.channels() as u32;
-        let remaining =
-            (duration.as_secs_f32() * sample_rate as f32 * channels as f32) as u32;
-
+        let remaining = (duration.as_secs_f32() * sample_rate as f32 * channels as f32) as u32;
         Self { inner, remaining }
     }
 }
-
 
 impl<D> Iterator for SkipDecoder<D>
 where

@@ -43,8 +43,9 @@ impl DiscordRpc {
                     for update in rx {
                         let result = match update {
                             RpcUpdate::Playing { title, artist, art_url } => {
+                                // ActivityType::Listening but discord only recognize verified apps so... F
                                 let act = activity::Activity::new()
-                                    .activity_type(activity::ActivityType::Playing)
+                                    .activity_type(activity::ActivityType::Listening)
                                     .details(&title)
                                     .state(&artist)
                                     .timestamps(activity::Timestamps::new().start(
