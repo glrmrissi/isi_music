@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
@@ -27,7 +28,7 @@ pub struct LocalTrack {
 }
 
 pub struct LocalPlayer {
-    sink: Sink,
+    sink: Arc<Sink>,
     db_conn: Connection,
     queue: Vec<LocalTrack>,
     user_queue: Vec<QueuedTrack>,
@@ -41,6 +42,7 @@ pub struct LocalPlayer {
     event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     load_guard: Option<Instant>,
+    pub is_seeking: Arc<AtomicBool>,
 }
 
 impl LocalPlayer {
@@ -93,7 +95,7 @@ impl LocalPlayer {
         let (tx, rx) = mpsc::unbounded_channel();
 
         let mut instance = Self {
-            sink,
+            sink: Arc::new(sink),
             db_conn: conn,
             queue: Vec::new(),
             user_queue: Vec::new(),
@@ -107,6 +109,7 @@ impl LocalPlayer {
             event_rx: rx,
             band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
             load_guard: None,
+            is_seeking: Arc::new(AtomicBool::new(false)),
         };
 
         if let Err(e) = instance.reload_library_from_db() {
@@ -203,40 +206,34 @@ impl LocalPlayer {
     }
 
     fn seek_by_reload(&mut self, position_ms: u32) {
-        let Some(idx) = self.current_idx else { return };
-        let Some(track) = self.queue.get(idx) else { return };
-        let path = track.path.clone();
+        if let Some(idx) = self.current_idx {
+            let path = self.queue[idx].path.clone();
+            let sink = Arc::clone(&self.sink);
+            let energies = Arc::clone(&self.band_energies);
+            let event_tx = self.event_tx.clone();
+            let is_seeking = Arc::clone(&self.is_seeking);
 
-        if !path.exists() {
-            warn!("LocalPlayer: file missing for seek: {:?}", path);
-            return;
+            is_seeking.store(true, Ordering::SeqCst);
+            sink.stop(); 
+
+            std::thread::spawn(move || {
+                let file = File::open(&path).ok();
+                let decoder = file.and_then(|f| Decoder::new(BufReader::new(f)).ok());
+
+                if let Some(d) = decoder {
+                    let skipped = d.skip_duration(std::time::Duration::from_millis(position_ms as u64));
+                    let analyzing = AnalyzingSource::new(skipped, energies);
+                    
+                    sink.append(analyzing);
+                    sink.play();
+                    
+                    is_seeking.store(false, Ordering::SeqCst);
+                    let _ = event_tx.send(PlayerNotification::Playing);
+                } else {
+                    is_seeking.store(false, Ordering::SeqCst);
+                }
+            });
         }
-
-        self.sink.stop();
-
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(e) => {
-                warn!("LocalPlayer: seek_by_reload cannot open {:?}: {e}", path);
-                return;
-            }
-        };
-
-        let decoder = match Decoder::new(BufReader::new(file)) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("LocalPlayer: seek_by_reload cannot decode {:?}: {e}", path);
-                return;
-            }
-        };
-
-        let skip_duration = std::time::Duration::from_millis(position_ms as u64);
-        let skipped = SkipDecoder::new(decoder, skip_duration);
-        let analyzing = AnalyzingSource::new(skipped, Arc::clone(&self.band_energies));
-        self.sink.append(analyzing);
-        self.sink.play();
-        self.is_playing = true;
-        self.load_guard = Some(Instant::now());
     }
 
     fn poll_sink(&mut self) {
@@ -247,7 +244,7 @@ impl LocalPlayer {
             self.load_guard = None;
         }
 
-        if self.is_playing && self.sink.empty() {
+        if self.is_playing && self.sink.empty() && !self.is_seeking.load(Ordering::SeqCst) {
             self.is_playing = false;
             let _ = self.event_tx.send(PlayerNotification::TrackEnded);
         }

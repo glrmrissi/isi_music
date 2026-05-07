@@ -7,6 +7,7 @@ use std::path::Path;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
 use symphonia::core::meta::Limit;
 use tokio::sync::oneshot;
 use tracing::warn;
@@ -213,6 +214,8 @@ use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, 
 use rspotify::model::RepeatState;
 
 pub struct App {
+    pub seek_tx: mpsc::Sender<u32>,
+    pub seek_rx: mpsc::Receiver<u32>,
     spotify: SpotifyClient,
     player: Option<Box<dyn AudioPlayer>>,
     parked_player: Option<Box<dyn AudioPlayer>>,
@@ -256,6 +259,7 @@ impl App {
         theme: Theme,
         theme_rx: std::sync::mpsc::Receiver<Theme>,
     ) -> Result<Self> {
+        let (seek_tx, seek_rx) = mpsc::channel::<u32>();
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
         let lastfm = match (
             &cfg.lastfm.api_key,
@@ -395,6 +399,8 @@ impl App {
         };
 
         Ok(Self {
+            seek_tx,
+            seek_rx,
             spotify,
             player,
             parked_player,
@@ -467,6 +473,23 @@ impl App {
                 .map(|p| !p.user_queue().is_empty())
                 .unwrap_or(false);
 
+            let mut latest_seek = None;
+
+            while let Ok(pos) = self.seek_rx.try_recv() {
+                latest_seek = Some(pos);
+            }
+
+            if let Some(target_pos) = latest_seek {
+                self.state.viz_bands.fill(0.0);
+
+                if let Some(player) = &mut self.player {
+                    if self.local_active {
+                        player.seek_mut(target_pos);
+                    } else {
+                        player.seek(target_pos);
+                    }
+                }
+            }
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
@@ -913,40 +936,35 @@ impl App {
         }
 
         match code {
-            KeyCode::Left | KeyCode::Right => {
-                let is_held = self
-                    .last_seek_time
-                    .map(|t| t.elapsed() < Duration::from_millis(300))
-                    .unwrap_or(false);
-                if is_held {
-                    self.seek_hold_count += 1;
-                } else {
-                    self.seek_hold_count = 0;
-                }
-                self.last_seek_time = Some(Instant::now());
-                let step_ms = if self.seek_hold_count > 4 {
-                    10_000u64
-                } else {
-                    5_000u64
-                };
+        KeyCode::Left | KeyCode::Right => {
+            let now = Instant::now();
+            let is_held = self.last_seek_time
+                .map(|t| t.elapsed() < Duration::from_millis(300))
+                .unwrap_or(false);
 
-                let new_pos = match code {
-                    KeyCode::Right => (self.state.playback.progress_ms + step_ms)
-                        .min(self.state.playback.duration_ms),
-                    _ => self.state.playback.progress_ms.saturating_sub(step_ms),
-                };
-                self.state.playback.progress_ms = new_pos;
-                if let Some(player) = &mut self.player {
-                    if self.local_active {
-                        player.seek_mut(new_pos as u32);
-                    } else {
-                        player.seek(new_pos as u32);
-                    }
-                }
-                return Ok(());
+            if is_held {
+                self.seek_hold_count += 1;
+            } else {
+                self.seek_hold_count = 0;
             }
-            _ => {}
-        }
+            self.last_seek_time = Some(now);
+
+            let step_ms = if self.seek_hold_count > 4 { 10_000 } else { 5_000 };
+
+            let new_pos = match code {
+                KeyCode::Right => (self.state.playback.progress_ms + step_ms)
+                    .min(self.state.playback.duration_ms),
+                _ => self.state.playback.progress_ms.saturating_sub(step_ms),
+            };
+
+            self.state.playback.progress_ms = new_pos;
+
+            let _ = self.seek_tx.send(new_pos as u32);
+
+            return Ok(());
+                }
+        _ => {}
+    }
 
         match (code, modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
