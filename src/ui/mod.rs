@@ -1295,7 +1295,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.2.8".to_string()
+            "isi-music v0.2.9".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };
