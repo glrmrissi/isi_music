@@ -78,7 +78,7 @@ impl AnalyzerThread {
     }
 
     fn tick(&mut self) {
-        const STEP: usize = 2048;
+        const STEP: usize = 512;
 
         if self.sample_counter - self.last_fft_counter < STEP {
             return;
@@ -125,8 +125,8 @@ impl AnalyzerThread {
 
         let freq_per_bin = SAMPLE_RATE / FFT_SIZE as f32;
 
-        let log_min = 20.0f32.log2();
-
+        let log_min = 30.0f32.log2(); 
+        
         let log_max = (SAMPLE_RATE / 2.0).log2();
 
         for v in self.new_bands_buf.iter_mut() {
@@ -134,29 +134,24 @@ impl AnalyzerThread {
         }
 
         for band in 0..N_BANDS {
-            let f_target =
-                2.0f32.powf(log_min + (band as f32 / N_BANDS as f32) * (log_max - log_min));
-
+            let f_target = 2.0f32.powf(log_min + (band as f32 / N_BANDS as f32) * (log_max - log_min));
             let bin_idx = f_target / freq_per_bin;
-
             let i = bin_idx.floor() as usize;
-
             let fract = bin_idx.fract();
 
             if i + 1 < self.magnitudes_buf.len() {
-                self.new_bands_buf[band] =
-                    self.magnitudes_buf[i] * (1.0 - fract) + self.magnitudes_buf[i + 1] * fract;
-            } else if i < self.magnitudes_buf.len() {
-                self.new_bands_buf[band] = self.magnitudes_buf[i];
+                let val = self.magnitudes_buf[i] * (1.0 - fract) + self.magnitudes_buf[i + 1] * fract;
+                self.new_bands_buf[band] = val.sqrt(); 
             }
         }
 
         for i in 0..N_BANDS {
+            let peak_decay = 0.99 - (i as f32 / N_BANDS as f32) * 0.02; 
+
             if self.new_bands_buf[i] > self.band_peaks[i] {
                 self.band_peaks[i] = self.new_bands_buf[i];
             } else {
-                self.band_peaks[i] *= 0.985;
-
+                self.band_peaks[i] *= peak_decay;
                 self.band_peaks[i] = self.band_peaks[i].max(1e-6);
             }
 
@@ -165,8 +160,8 @@ impl AnalyzerThread {
 
         if let Ok(mut bands) = self.bands.lock() {
             for (cur, &next) in bands.iter_mut().zip(self.new_bands_buf.iter()) {
-                let attack = 0.30;
-                let decay = 0.94;
+                let attack = 0.15;
+                let decay = 0.88;
 
                 if next > *cur {
                     *cur = *cur * (1.0 - attack) + next * attack;
