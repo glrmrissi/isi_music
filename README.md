@@ -244,26 +244,11 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 Themes are fully customizable. Create `~/.config/isi-music/theme.toml` to override the default theme.
 
 ```toml
-border_active = "#88c0d0"     # Frost Blue
-border_inactive = "#4c566a"   # Polar Night Gray
-highlight_bg = "#3b4252"      # Darker Slate
-text_primary = "#eceff4"      # Snow Storm White
-accent_color = "#a3be8c"      # Sage Green
-
-[widget_styles.header]
-fg = "#88c0d0"
-bold = true
-
-[widget_styles.visualizer]
-fg = "#81a1c1"
-
-[widget_styles.progress]
-fg = "#ebcb8b"
-bold = true
-
-[widget_styles.marquee]
-fg = "#d8dee9"
-italic = true
+border_active = "#00d4ff"    
+border_inactive = "#002b4d"  
+highlight_bg = "#004b7a"      
+text_primary = "#ffffff"
+accent_color = "#ffeb3b"    
 
 [layout_tree]
 direction = "vertical"
@@ -303,6 +288,7 @@ constraints = [
     ]
         [[layout_tree.children.children.children]]
         widget = "library"
+
         [[layout_tree.children.children.children]]
         widget = "playlists"
 
