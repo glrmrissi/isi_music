@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
-use ratatui::style::Color;
-use ratatui::layout::{Direction};
+use ratatui::style::{Color, Style, Modifier};
+use ratatui::layout::{Constraint, Direction};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
-use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use std::time::Duration;
+use std::sync::mpsc::{channel, Receiver};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "snake_case")]
@@ -23,7 +24,7 @@ impl From<SerializableDirection> for Direction {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum UiWidget {
     Header,
@@ -39,106 +40,110 @@ pub enum UiWidget {
     Spacer,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum SerializableConstraint {
+    Length(u16),
+    Percentage(u16),
+    Ratio(u32, u32),
+    Min(u16),
+    Max(u16),
+    Fill(u16),
+}
+
+impl From<SerializableConstraint> for Constraint {
+    fn from(c: SerializableConstraint) -> Self {
+        match c {
+            SerializableConstraint::Length(v)     => Constraint::Length(v),
+            SerializableConstraint::Percentage(v) => Constraint::Percentage(v),
+            SerializableConstraint::Ratio(n, d)   => Constraint::Ratio(n, d),
+            SerializableConstraint::Min(v)        => Constraint::Min(v),
+            SerializableConstraint::Max(v)        => Constraint::Max(v),
+            SerializableConstraint::Fill(v)       => Constraint::Fill(v),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct WidgetStyle {
+    #[serde(default, deserialize_with = "color_serde::deserialize_opt", serialize_with = "color_serde::serialize_opt")]
+    pub fg: Option<Color>,
+    #[serde(default, deserialize_with = "color_serde::deserialize_opt", serialize_with = "color_serde::serialize_opt")]
+    pub bg: Option<Color>,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+}
+
+impl From<WidgetStyle> for Style {
+    fn from(w: WidgetStyle) -> Self {
+        let mut s = Style::default();
+        if let Some(c) = w.fg { s = s.fg(c); }
+        if let Some(c) = w.bg { s = s.bg(c); }
+        if w.bold { s = s.add_modifier(Modifier::BOLD); }
+        if w.italic { s = s.add_modifier(Modifier::ITALIC); }
+        s
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LayoutNode {
     pub direction:   Option<SerializableDirection>,
-    pub constraints: Option<Vec<String>>,
+    pub constraints: Option<Vec<SerializableConstraint>>,
     pub children:    Option<Vec<LayoutNode>>,
     pub widget:      Option<UiWidget>,
 }
 
 impl Default for LayoutNode {
     fn default() -> Self {
-        //
-        //  ┌─────────────────────────────────┐  ← Header
-        //  ├──────────┬──────────────────────┤
-        //  │ Library  │                      │
-        //  │──────────│   MainContent        │  ← Main (min 0)
-        //  │Playlists │──────────────────────│
-        //  │          │   Queue (8 linhas)   │
-        //  ├────────────────┬────────────────┤
-        //  │ Marquee (30%)  │  Progress      │  ← Footer 
-        //  ├─────────────────────────────────┤
-        //  │ Help                            │  ← Help
-        //  └─────────────────────────────────┘
+        use SerializableConstraint::*;
         Self {
             direction: Some(SerializableDirection::Vertical),
             constraints: Some(vec![
-                "4".into(),      // Header
-                "min(0)".into(), // Main body
-                "1".into(),      // Progress/Marquee row
-                "1".into(),      // Help/Status row
+                Length(4),   // Header
+                Fill(1),     // Main body
+                Length(1),   // Progress/Marquee row
+                Length(1),   // Help/Status row
             ]),
             widget: None,
             children: Some(vec![
-                LayoutNode {
-                    widget: Some(UiWidget::Header),
-                    direction: None, constraints: None, children: None,
-                },
-
-                // ── Main body (horizontal: sidebar | right) ──────────────
+                LayoutNode { widget: Some(UiWidget::Header), direction: None, constraints: None, children: None },
                 LayoutNode {
                     direction: Some(SerializableDirection::Horizontal),
-                    constraints: Some(vec!["25%".into(), "min(0)".into()]),
+                    constraints: Some(vec![Percentage(25), Fill(1)]),
                     widget: None,
                     children: Some(vec![
-                        // Sidebar (vertical: Library | Playlists)
                         LayoutNode {
                             direction: Some(SerializableDirection::Vertical),
-                            constraints: Some(vec!["7".into(), "min(0)".into()]),
+                            constraints: Some(vec![Length(7), Fill(1)]),
                             widget: None,
                             children: Some(vec![
-                                LayoutNode {
-                                    widget: Some(UiWidget::Library),
-                                    direction: None, constraints: None, children: None,
-                                },
-                                LayoutNode {
-                                    widget: Some(UiWidget::Playlists),
-                                    direction: None, constraints: None, children: None,
-                                },
+                                LayoutNode { widget: Some(UiWidget::Library), direction: None, constraints: None, children: None },
+                                LayoutNode { widget: Some(UiWidget::Playlists), direction: None, constraints: None, children: None },
                             ]),
                         },
-                        // Right column (vertical: MainContent | Queue)
                         LayoutNode {
                             direction: Some(SerializableDirection::Vertical),
-                            constraints: Some(vec!["min(0)".into(), "8".into()]),
+                            constraints: Some(vec![Fill(1), Length(8)]),
                             widget: None,
                             children: Some(vec![
-                                LayoutNode {
-                                    widget: Some(UiWidget::MainContent),
-                                    direction: None, constraints: None, children: None,
-                                },
-                                LayoutNode {
-                                    widget: Some(UiWidget::Queue),
-                                    direction: None, constraints: None, children: None,
-                                },
+                                LayoutNode { widget: Some(UiWidget::MainContent), direction: None, constraints: None, children: None },
+                                LayoutNode { widget: Some(UiWidget::Queue), direction: None, constraints: None, children: None },
                             ]),
                         },
                     ]),
                 },
-
-                // ── Progress row (horizontal: Marquee | Progress) ────────
                 LayoutNode {
                     direction: Some(SerializableDirection::Horizontal),
-                    constraints: Some(vec!["30%".into(), "min(0)".into()]),
+                    constraints: Some(vec![Percentage(30), Fill(1)]),
                     widget: None,
                     children: Some(vec![
-                        LayoutNode {
-                            widget: Some(UiWidget::Marquee),
-                            direction: None, constraints: None, children: None,
-                        },
-                        LayoutNode {
-                            widget: Some(UiWidget::Progress),
-                            direction: None, constraints: None, children: None,
-                        },
+                        LayoutNode { widget: Some(UiWidget::Marquee), direction: None, constraints: None, children: None },
+                        LayoutNode { widget: Some(UiWidget::Progress), direction: None, constraints: None, children: None },
                     ]),
                 },
-
-                // ── Help/Status ─────────────────────────────────────────
-                LayoutNode {
-                    widget: Some(UiWidget::Help),
-                    direction: None, constraints: None, children: None,
-                },
+                LayoutNode { widget: Some(UiWidget::Help), direction: None, constraints: None, children: None },
             ]),
         }
     }
@@ -146,20 +151,23 @@ impl Default for LayoutNode {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Theme {
-    #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
+    #[serde(with = "color_serde")]
     pub border_active: Color,
-    #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
+    #[serde(with = "color_serde")]
     pub border_inactive: Color,
-    #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
+    #[serde(with = "color_serde")]
     pub highlight_bg: Color,
-    #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
+    #[serde(with = "color_serde")]
     pub text_primary: Color,
-    #[serde(deserialize_with = "deserialize_color", serialize_with = "serialize_color")]
+    #[serde(with = "color_serde")]
     pub accent_color: Color,
+    
+    #[serde(default)]
+    pub widget_styles: HashMap<UiWidget, WidgetStyle>,
+    
     #[serde(default)]
     pub layout_tree: LayoutNode,
 }
-
 
 impl Default for Theme {
     fn default() -> Self {
@@ -169,6 +177,7 @@ impl Default for Theme {
             highlight_bg:    Color::Rgb(40, 40, 40),
             text_primary:    Color::White,
             accent_color:    Color::Green,
+            widget_styles:   HashMap::new(),
             layout_tree:     LayoutNode::default(),
         }
     }
@@ -200,7 +209,7 @@ impl Theme {
             .unwrap_or_default()
     }
 
-    pub fn watch() -> std::io::Result<Receiver<Theme>> {
+     pub fn watch() -> std::io::Result<Receiver<Theme>> {
         let (tx, rx) = channel();
         let path = Self::get_path().unwrap_or_else(|| PathBuf::from("theme.toml"));
 
@@ -228,8 +237,49 @@ impl Theme {
     }
 }
 
+mod color_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Color, D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(d)?;
+        parse_color_from_str(&s).map_err(serde::de::Error::custom)
+    }
+
+    pub fn serialize<S>(c: &Color, s: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        s.serialize_str(&color_to_string(c))
+    }
+
+    pub fn deserialize_opt<'de, D>(d: D) -> Result<Option<Color>, D::Error>
+    where D: Deserializer<'de> {
+        let s = Option::<String>::deserialize(d)?;
+        match s {
+            Some(s) => parse_color_from_str(&s).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+
+    pub fn serialize_opt<S>(c: &Option<Color>, s: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        match c {
+            Some(c) => s.serialize_str(&color_to_string(c)),
+            None => s.serialize_none(),
+        }
+    }
+}
+
 fn parse_color_from_str(s: &str) -> Result<Color, String> {
     let s = s.trim().to_lowercase();
+    
+    if s.starts_with('#') && s.len() == 7 {
+        let r = u8::from_str_radix(&s[1..3], 16).map_err(|_| "Invalid R")?;
+        let g = u8::from_str_radix(&s[3..5], 16).map_err(|_| "Invalid G")?;
+        let b = u8::from_str_radix(&s[5..7], 16).map_err(|_| "Invalid B")?;
+        return Ok(Color::Rgb(r, g, b));
+    }
+
     match s.as_str() {
         "black"         => Ok(Color::Black),
         "red"           => Ok(Color::Red),
@@ -254,11 +304,11 @@ fn parse_color_from_str(s: &str) -> Result<Color, String> {
             let inner     = &s[start_idx..s.len() - 1];
             let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
             if parts.len() < 3 {
-                return Err(format!("Invalid RGB/RGBA format: {}", s));
+                return Err(format!("Invalid RGB format: {}", s));
             }
-            let r: u8 = parts[0].parse().map_err(|_| format!("Invalid R value: {}", parts[0]))?;
-            let g: u8 = parts[1].parse().map_err(|_| format!("Invalid G value: {}", parts[1]))?;
-            let b: u8 = parts[2].parse().map_err(|_| format!("Invalid B value: {}", parts[2]))?;
+            let r: u8 = parts[0].parse().map_err(|_| "Invalid R")?;
+            let g: u8 = parts[1].parse().map_err(|_| "Invalid G")?;
+            let b: u8 = parts[2].parse().map_err(|_| "Invalid B")?;
             Ok(Color::Rgb(r, g, b))
         }
         _ => Err(format!("Unknown color: {}", s)),
@@ -267,39 +317,23 @@ fn parse_color_from_str(s: &str) -> Result<Color, String> {
 
 fn color_to_string(color: &Color) -> String {
     match color {
-        Color::Black        => "black".to_string(),
-        Color::Red          => "red".to_string(),
-        Color::Green        => "green".to_string(),
-        Color::Yellow       => "yellow".to_string(),
-        Color::Blue         => "blue".to_string(),
-        Color::Magenta      => "magenta".to_string(),
-        Color::Cyan         => "cyan".to_string(),
-        Color::White        => "white".to_string(),
-        Color::Gray         => "gray".to_string(),
-        Color::DarkGray     => "dark_gray".to_string(),
-        Color::LightRed     => "light_red".to_string(),
-        Color::LightGreen   => "light_green".to_string(),
-        Color::LightYellow  => "light_yellow".to_string(),
-        Color::LightBlue    => "light_blue".to_string(),
-        Color::LightMagenta => "light_magenta".to_string(),
-        Color::LightCyan    => "light_cyan".to_string(),
-        Color::Rgb(r, g, b) => format!("rgb({},{},{})", r, g, b),
-        Color::Indexed(idx) => format!("indexed({})", idx),
-        _                   => "white".to_string(),
+        Color::Black        => "black".into(),
+        Color::Red          => "red".into(),
+        Color::Green        => "green".into(),
+        Color::Yellow       => "yellow".into(),
+        Color::Blue         => "blue".into(),
+        Color::Magenta      => "magenta".into(),
+        Color::Cyan         => "cyan".into(),
+        Color::White        => "white".into(),
+        Color::Gray         => "gray".into(),
+        Color::DarkGray     => "dark_gray".into(),
+        Color::LightRed     => "light_red".into(),
+        Color::LightGreen   => "light_green".into(),
+        Color::LightYellow  => "light_yellow".into(),
+        Color::LightBlue    => "light_blue".into(),
+        Color::LightMagenta => "light_magenta".into(),
+        Color::LightCyan    => "light_cyan".into(),
+        Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+        _                   => "white".into(),
     }
-}
-
-fn deserialize_color<'de, D>(deserializer: D) -> Result<Color, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    parse_color_from_str(&s).map_err(serde::de::Error::custom)
-}
-
-fn serialize_color<S>(color: &Color, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&color_to_string(color))
 }

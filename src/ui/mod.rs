@@ -608,7 +608,7 @@ impl Ui {
 
             let parsed: Vec<Constraint> = raw_constraints
                 .iter()
-                .map(|s| self.parse_constraint(s))
+                .map(|&c| Constraint::from(c)) // Converte o enum tipado diretamente para o Constraint do Ratatui
                 .collect();
 
             let chunks = Layout::default()
@@ -643,24 +643,6 @@ impl Ui {
                 ActiveContent::Shows     => self.render_shows(frame, state, area),
             }
         }
-    }
-
-    fn parse_constraint(&self, s: &str) -> Constraint {
-        let s = s.trim().to_lowercase().replace(' ', "");
-        if s.ends_with('%') {
-            if let Ok(p) = s.trim_end_matches('%').parse::<u16>() {
-                return Constraint::Percentage(p);
-            }
-        }
-        if s.starts_with("min(") && s.ends_with(')') {
-            if let Ok(v) = s[4..s.len() - 1].parse::<u16>() {
-                return Constraint::Min(v);
-            }
-        }
-        if let Ok(l) = s.parse::<u16>() {
-            return Constraint::Length(l);
-        }
-        Constraint::Min(0)
     }
 
     fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
