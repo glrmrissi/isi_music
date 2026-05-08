@@ -694,7 +694,7 @@ impl App {
                     self.album_art_pending = None;
                     match image::load_from_memory(&bytes) {
                         Ok(img) => {
-                            let resized = img.thumbnail(800, 800); 
+                            let resized = img.thumbnail(256, 256); 
                             let image_state = self.picker.new_resize_protocol(resized);
                             self.state.album_art = Some(AlbumArtData { image_state: Some(image_state) });
                         }
