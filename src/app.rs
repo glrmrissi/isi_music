@@ -1,17 +1,16 @@
+use crate::ui::PlaybackState;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
+use id3::TagLike;
 use ratatui::Terminal;
 use ratatui_image::picker::Picker;
-use crate::ui::PlaybackState;
 use std::path::Path;
 use std::string::String;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::sync::mpsc;
-use symphonia::core::meta::Limit;
 use tokio::sync::oneshot;
 use tracing::warn;
-use id3::TagLike;
 
 pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<Vec<u8>>) {
     use symphonia::core::{
@@ -159,47 +158,6 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
     }
 
     (title, artist, album, duration_ms, cover_art)
-}
-
-pub fn extract_embedded_art(path: &std::path::Path) -> Option<Vec<u8>> {
-    use symphonia::core::{
-        formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
-    };
-
-    let file = std::fs::File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    let mut probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions {
-                limit_metadata_bytes: Limit::Maximum(std::usize::MAX),
-                limit_visual_bytes: Limit::Maximum(std::usize::MAX),
-            },
-        )
-        .ok()?;
-
-    if let Some(rev) = probed.format.metadata().current() {
-        if let Some(v) = rev.visuals().first() {
-            return Some(v.data.to_vec());
-        }
-    }
-
-    if let Some(meta) = probed.metadata.get() {
-        if let Some(rev) = meta.current() {
-            if let Some(v) = rev.visuals().first() {
-                return Some(v.data.to_vec());
-            }
-        }
-    }
-
-    None
 }
 
 use crate::discord::DiscordRpc;
@@ -351,7 +309,8 @@ impl App {
         }
 
         let initial_playback = if local_active {
-            player.as_ref()
+            player
+                .as_ref()
                 .and_then(|p| p.current_track_info())
                 .map(|info| PlaybackState {
                     title: info.name,
@@ -365,9 +324,9 @@ impl App {
                     ..Default::default()
                 })
                 .unwrap_or_default()
-            } else {
-                spotify.fetch_playback().await.unwrap_or_default()
-            };
+        } else {
+            spotify.fetch_playback().await.unwrap_or_default()
+        };
 
         let initial_art = initial_playback.art_url.clone();
 
@@ -694,9 +653,11 @@ impl App {
                     self.album_art_pending = None;
                     match image::load_from_memory(&bytes) {
                         Ok(img) => {
-                            let resized = img.thumbnail(256, 256); 
+                            let resized = img.thumbnail(256, 256);
                             let image_state = self.picker.new_resize_protocol(resized);
-                            self.state.album_art = Some(AlbumArtData { image_state: Some(image_state) });
+                            self.state.album_art = Some(AlbumArtData {
+                                image_state: Some(image_state),
+                            });
                         }
                         Err(e) => {
                             warn!("Failed to decode image: {}", e);
@@ -804,7 +765,7 @@ impl App {
         if !self.local_active {
             return;
         }
-        
+
         if let Some(ref mut player) = self.player {
             self.state.playback.is_playing = player.is_playing();
             self.state.playback.volume = player.volume();
@@ -814,10 +775,10 @@ impl App {
                 RepeatMode::Queue => RepeatState::Context,
                 RepeatMode::Track => RepeatState::Track,
             };
-            
+
             if let Some(track_info) = player.current_track_info() {
                 let title_changed = self.state.playback.title != track_info.name;
-                
+
                 if self.state.playback.title.is_empty() {
                     if let Some(path_str) = &track_info.path {
                         self.state.playback.title = std::path::Path::new(path_str)
@@ -829,7 +790,7 @@ impl App {
                 } else {
                     self.state.playback.title = track_info.name.clone();
                 }
-                
+
                 self.state.playback.artist = track_info.artist.clone();
                 self.state.playback.album = if track_info.album.is_empty() {
                     "Local Archive".to_string()
@@ -838,24 +799,26 @@ impl App {
                 };
                 self.state.playback.path = track_info.path.map(|p| p.to_string_lossy().to_string());
                 self.state.playback.duration_ms = track_info.duration_ms;
-                self.state.playback.cover_path = track_info.cover_path.map(|p| p.to_string_lossy().to_string());
+                self.state.playback.cover_path = track_info
+                    .cover_path
+                    .map(|p| p.to_string_lossy().to_string());
                 self.state.playback.art_url = None;
-                
+
                 if title_changed {
                     self.state.album_art = None;
                     self.album_art_pending = None;
-                    
+
                     if let Some(path_str) = &self.state.playback.cover_path {
                         if std::path::Path::new(path_str).exists() {
                             let path = path_str.clone();
                             let (tx, rx) = tokio::sync::oneshot::channel();
-                            
+
                             tokio::spawn(async move {
                                 if let Ok(bytes) = tokio::fs::read(&path).await {
                                     let _ = tx.send(bytes);
                                 }
                             });
-                            
+
                             self.album_art_pending = Some(rx);
                         }
                     }
@@ -867,6 +830,27 @@ impl App {
 
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
+
+        if self.state.quick_search_active {
+            match code {
+                KeyCode::Esc => {
+                    self.state.cancel_quick_search();
+                }
+                KeyCode::Enter => {
+                    self.state.apply_quick_filter();
+                }
+                KeyCode::Backspace => {
+                    self.state.quick_search_pop();
+                }
+                KeyCode::Char(c) => {
+                    if c.is_alphanumeric() || c == ' ' || c == '-' {
+                        self.state.quick_search_push(c);
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
 
         if self.state.search_active {
             match code {
@@ -917,39 +901,64 @@ impl App {
         }
 
         match code {
-        KeyCode::Left | KeyCode::Right => {
-            let now = Instant::now();
-            let is_held = self.last_seek_time
-                .map(|t| t.elapsed() < Duration::from_millis(300))
-                .unwrap_or(false);
+            KeyCode::Left | KeyCode::Right => {
+                let now = Instant::now();
+                let is_held = self
+                    .last_seek_time
+                    .map(|t| t.elapsed() < Duration::from_millis(300))
+                    .unwrap_or(false);
 
-            if is_held {
-                self.seek_hold_count += 1;
-            } else {
-                self.seek_hold_count = 0;
-            }
-            self.last_seek_time = Some(now);
-
-            let step_ms = if self.seek_hold_count > 4 { 10_000 } else { 5_000 };
-
-            let new_pos = match code {
-                KeyCode::Right => (self.state.playback.progress_ms + step_ms)
-                    .min(self.state.playback.duration_ms),
-                _ => self.state.playback.progress_ms.saturating_sub(step_ms),
-            };
-
-            self.state.playback.progress_ms = new_pos;
-
-            let _ = self.seek_tx.send(new_pos as u32);
-
-            return Ok(());
+                if is_held {
+                    self.seek_hold_count += 1;
+                } else {
+                    self.seek_hold_count = 0;
                 }
-        _ => {}
-    }
+                self.last_seek_time = Some(now);
+
+                let step_ms = if self.seek_hold_count > 4 {
+                    10_000
+                } else {
+                    5_000
+                };
+
+                let new_pos = match code {
+                    KeyCode::Right => (self.state.playback.progress_ms + step_ms)
+                        .min(self.state.playback.duration_ms),
+                    _ => self.state.playback.progress_ms.saturating_sub(step_ms),
+                };
+
+                self.state.playback.progress_ms = new_pos;
+                let _ = self.seek_tx.send(new_pos as u32);
+                return Ok(());
+            }
+            _ => {}
+        }
 
         match (code, modifiers) {
             (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.should_quit = true;
+            }
+
+            (KeyCode::Char('f'), KeyModifiers::CONTROL) => match self.state.active_content {
+                ActiveContent::Tracks | ActiveContent::None | ActiveContent::LocalFiles => {
+                    self.state.start_quick_search();
+                    self.state.apply_quick_filter();
+                }
+                _ => {
+                    self.state.status_msg =
+                        Some("Quick search only works with Tracks or Local Files".to_string());
+                }
+            },
+
+            (KeyCode::Char('o'), _) => {
+                if matches!(
+                    self.state.active_content,
+                    ActiveContent::Tracks | ActiveContent::None
+                ) {
+                    self.state.sort_tracks();
+                    self.state.status_msg =
+                        Some(format!("Sorting by: {}", self.state.track_sort_by.label()));
+                }
             }
 
             (KeyCode::Up, KeyModifiers::CONTROL) => self.state.nav_first(),
@@ -984,7 +993,9 @@ impl App {
             (KeyCode::Char('/'), _) => self.state.start_search(),
 
             (KeyCode::Backspace, _) => {
-                if let Some(prev) = self.state.previous_search.take() {
+                if self.state.quick_search_active {
+                    self.state.cancel_quick_search();
+                } else if let Some(prev) = self.state.previous_search.take() {
                     self.state.search_results = Some(prev);
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Search;
@@ -992,7 +1003,9 @@ impl App {
             }
 
             (KeyCode::Esc, _) => {
-                if self.state.fullscreen_player {
+                if self.state.quick_search_active {
+                    self.state.cancel_quick_search();
+                } else if self.state.fullscreen_player {
                     self.state.fullscreen_player = false;
                 } else if self.state.search_results.is_some() {
                     self.state.search_results = None;
@@ -1009,28 +1022,30 @@ impl App {
                     let _ = self.spotify.toggle_playback().await;
                 }
             }
+
             (KeyCode::Char('a'), _) => {
                 let track = if self.state.active_content == ActiveContent::LocalFiles {
-                    self.state
-                        .local_tree_list
-                        .selected()
-                        .and_then(|vi| self.state.local_tree.get_visible(vi))
-                        .and_then(|n| n.track().cloned())
-                        .map(|t| (t.uri, t.name, t.artist, t.duration_ms, t.cover_path))
+                    self.state.local_tree_list.selected().and_then(|vi| {
+                        let actual_vi = self.state.sorted_track_indices.get(vi)?;
+                        self.state
+                            .local_tree
+                            .get_visible(*actual_vi)
+                            .and_then(|n| n.track().cloned())
+                            .map(|t| (t.uri, t.name, t.artist, t.duration_ms, t.cover_path))
+                    })
                 } else {
-                    self.state
-                        .track_list
-                        .selected()
-                        .and_then(|i| self.state.tracks.get(i))
-                        .map(|t| {
+                    self.state.track_list.selected().and_then(|display_idx| {
+                        let actual_idx = self.state.sorted_track_indices.get(display_idx)?;
+                        self.state.tracks.get(*actual_idx).map(|t| {
                             (
                                 t.uri.clone(),
                                 t.name.clone(),
                                 t.artist.clone(),
                                 t.duration_ms,
-                                t.cover_path.clone()
+                                t.cover_path.clone(),
                             )
                         })
+                    })
                 };
                 if let Some((uri, name, artist, duration_ms, cover_path)) = track {
                     let is_local = uri.starts_with("file://");
@@ -1040,7 +1055,13 @@ impl App {
                         self.parked_player.as_mut()
                     };
                     if let Some(player) = target {
-                        player.add_to_queue(uri, name.clone(), artist, duration_ms, cover_path.map(std::path::PathBuf::from));
+                        player.add_to_queue(
+                            uri,
+                            name.clone(),
+                            artist,
+                            duration_ms,
+                            cover_path.map(std::path::PathBuf::from),
+                        );
                         self.state.status_msg = Some(format!("+ {name} added to queue"));
                         self.sync_queue_display();
                     }
@@ -1090,6 +1111,7 @@ impl App {
                     let _ = self.spotify.next_track().await;
                 }
             }
+
             (KeyCode::Char('p'), _) => {
                 if let Some(player) = &mut self.player {
                     player.prev();
@@ -1100,15 +1122,18 @@ impl App {
                     let _ = self.spotify.prev_track().await;
                 }
             }
+
             (KeyCode::Char('s'), _) => {
                 if let Some(player) = &mut self.player {
                     player.toggle_shuffle();
                     self.state.playback.shuffle = player.shuffle();
                 }
             }
+
             (KeyCode::Char('r'), KeyModifiers::ALT) => {
                 self.get_similar_tracks().await;
             }
+
             (KeyCode::Char('R'), _) => {
                 self.radio_mode = !self.radio_mode;
                 self.state.playback.radio_mode = self.radio_mode;
@@ -1119,6 +1144,7 @@ impl App {
                 };
                 self.state.status_msg = Some(msg.to_string());
             }
+
             (KeyCode::Char('r'), _) => {
                 if let Some(player) = &mut self.player {
                     player.cycle_repeat();
@@ -1129,11 +1155,13 @@ impl App {
                     };
                 }
             }
+
             (KeyCode::Char('z'), _) => {
                 if !self.state.playback.title.is_empty() {
                     self.state.fullscreen_player = !self.state.fullscreen_player;
                 }
             }
+
             (KeyCode::Char('c'), _)
                 if modifiers != KeyModifiers::CONTROL
                     && !self.state.fullscreen_player
@@ -1149,6 +1177,7 @@ impl App {
                     self.album_art_pending = None;
                 }
             }
+
             (KeyCode::Char('l'), _) => {
                 if !self.spotify.authenticated {
                     self.state.status_msg = Some("Spotify not connected".to_string());
@@ -1159,12 +1188,14 @@ impl App {
                     }
                 }
             }
+
             (KeyCode::Char('+'), _) | (KeyCode::Char('='), _) => {
                 if let Some(player) = &mut self.player {
                     player.volume_up();
                     self.state.playback.volume = player.volume();
                 }
             }
+
             (KeyCode::Char('-'), _) => {
                 if let Some(player) = &mut self.player {
                     player.volume_down();
@@ -1208,6 +1239,7 @@ impl App {
                                     });
                                 self.state.active_content = ActiveContent::Tracks;
                                 self.state.search_results = None;
+                                self.state.rebuild_sort_indices();
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
@@ -1288,6 +1320,7 @@ impl App {
                                 });
                             self.state.active_content = ActiveContent::Tracks;
                             self.state.search_results = None;
+                            self.state.rebuild_sort_indices();
                             self.state.status_msg = None;
                             self.state.focus = Focus::Tracks;
                         }
@@ -1318,6 +1351,7 @@ impl App {
                                             Some(0)
                                         });
                                     self.state.active_content = ActiveContent::Tracks;
+                                    self.state.rebuild_sort_indices();
                                     self.state.status_msg = None;
                                 }
                                 Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
@@ -1347,6 +1381,7 @@ impl App {
                                             Some(0)
                                         });
                                     self.state.active_content = ActiveContent::Tracks;
+                                    self.state.rebuild_sort_indices();
                                     self.state.status_msg = None;
                                 }
                                 Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
@@ -1375,6 +1410,7 @@ impl App {
                                             Some(0)
                                         });
                                     self.state.active_content = ActiveContent::Tracks;
+                                    self.state.rebuild_sort_indices();
                                     self.state.status_msg = None;
                                 }
                                 Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
@@ -1387,14 +1423,20 @@ impl App {
                         Some(i) => i,
                         None => return,
                     };
-                    let node = match self.state.local_tree.get_visible(vi) {
+
+                    let actual_vi = match self.state.sorted_track_indices.get(vi) {
+                        Some(&idx) => idx,
+                        None => return,
+                    };
+                    let node = match self.state.local_tree.get_visible(actual_vi) {
                         Some(n) => n.clone(),
                         None => return,
                     };
                     match node {
                         crate::ui::LocalNode::Folder { .. } => {
-                            self.state.local_tree.toggle_folder(vi);
-                            let new_len = self.state.local_tree.visible_len();
+                            self.state.local_tree.toggle_folder(actual_vi);
+                            self.state.apply_quick_filter();
+                            let new_len = self.state.sorted_track_indices.len();
                             let cur = self.state.local_tree_list.selected().unwrap_or(0);
                             self.state
                                 .local_tree_list
@@ -1419,7 +1461,7 @@ impl App {
                                 self.state.playback.is_local = true;
                                 self.current_track_uri = track.uri.clone();
                                 self.on_track_started();
-                                
+
                                 self.state.playback.progress_ms = 0;
                                 self.scrobble_sent = false;
                                 self.track_start_unix = unix_now();
@@ -1428,7 +1470,12 @@ impl App {
                     }
                 }
                 ActiveContent::Tracks | ActiveContent::None => {
-                    if let Some(idx) = self.state.selected_track_index() {
+                    if let Some(display_idx) = self.state.selected_track_index() {
+                        let actual_idx = match self.state.sorted_track_indices.get(display_idx) {
+                            Some(&idx) => idx,
+                            None => return,
+                        };
+
                         if self.spotify_streaming_disabled {
                             self.state.status_msg =
                                 Some("⚠ Spotify Premium required for streaming".to_string());
@@ -1438,7 +1485,7 @@ impl App {
                         if self
                             .state
                             .tracks
-                            .get(idx)
+                            .get(actual_idx)
                             .map(|t| t.uri.starts_with("spotify:episode:"))
                             .unwrap_or(false)
                         {
@@ -1452,13 +1499,13 @@ impl App {
                                 .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                 .map(|t| t.uri.clone())
                                 .collect();
-                            let adjusted_idx = self.state.tracks[..idx]
+                            let adjusted_idx = self.state.tracks[..actual_idx]
                                 .iter()
                                 .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                 .count();
                             player.set_queue(uris, adjusted_idx);
                             self.playing_tracks = self.state.tracks.clone();
-                            if let Some(track) = self.state.tracks.get(idx) {
+                            if let Some(track) = self.state.tracks.get(actual_idx) {
                                 self.state.playback.title = track.name.clone();
                                 self.state.playback.artist = track.artist.clone();
                                 self.state.playback.album = track.album.clone();
@@ -1471,7 +1518,7 @@ impl App {
                                 self.on_track_started();
                             }
                         } else if self.spotify.authenticated {
-                            let track_uri = self.state.tracks[idx].uri.clone();
+                            let track_uri = self.state.tracks[actual_idx].uri.clone();
                             let is_playlist = self
                                 .state
                                 .active_playlist_uri
@@ -1529,7 +1576,7 @@ impl App {
                                                     artist: t.artist.clone(),
                                                     album: t.album.clone(),
                                                     duration_ms: t.duration_ms,
-                                                    cover_path: t.cover_path.clone()
+                                                    cover_path: t.cover_path.clone(),
                                                 }];
                                             self.on_track_started();
                                         }
@@ -1564,6 +1611,7 @@ impl App {
                                             Some(0)
                                         });
                                     self.state.active_content = ActiveContent::Tracks;
+                                    self.state.rebuild_sort_indices();
                                     self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
@@ -1596,6 +1644,7 @@ impl App {
                                             Some(0)
                                         });
                                     self.state.active_content = ActiveContent::Tracks;
+                                    self.state.rebuild_sort_indices();
                                     self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
@@ -1629,6 +1678,7 @@ impl App {
                                             Some(0)
                                         });
                                     self.state.active_content = ActiveContent::Tracks;
+                                    self.state.rebuild_sort_indices();
                                     self.state.previous_search = self.state.search_results.take();
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
@@ -1802,11 +1852,19 @@ impl App {
             return;
         }
         let selected = self.state.track_list.selected().unwrap_or(0);
-        let len = self.state.tracks.len();
-        if len == 0 || selected < len.saturating_sub(3) {
+
+        if self.state.tracks_loading {
             return;
         }
-        if (self.state.tracks_offset as usize) >= len && len < self.state.tracks_total as usize {
+
+        let display_len = self.state.sorted_track_indices.len();
+        
+        if display_len == 0 || selected < display_len.saturating_sub(3) {
+            return;
+        }
+        
+        let track_len = self.state.tracks.len();
+        if (self.state.tracks_offset as usize) >= track_len && track_len < self.state.tracks_total as usize {
             self.state.tracks_loading = true;
             let offset = self.state.tracks_offset;
             let id = self.state.active_playlist_id.clone();
@@ -1830,6 +1888,8 @@ impl App {
                     self.state.tracks_total = total;
                     self.state.tracks_offset += new_tracks.len() as u32;
                     self.state.tracks.append(&mut new_tracks);
+                    
+                    self.state.rebuild_sort_indices();
                 }
                 Err(e) => {
                     self.state.status_msg = Some(format!("Load more error: {e}"));
@@ -1845,7 +1905,6 @@ impl App {
         if (!self.state.show_album_art && !need_art_for_now_playing) && self.discord.is_none() {
             return;
         }
-
 
         if self.current_track_uri.is_empty()
             || self.current_track_uri == self.last_art_uri
@@ -1915,7 +1974,7 @@ impl App {
             if path.exists() {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 self.album_art_pending = Some(rx);
-                
+
                 tokio::spawn(async move {
                     if let Ok(bytes) = tokio::fs::read(&path).await {
                         let _ = tx.send(bytes);
@@ -1947,7 +2006,6 @@ impl App {
         if let Some(player) = &self.player {
             if let Some(idx) = player.current_index() {
                 if let Some(track) = self.playing_tracks.get(idx) {
-
                     self.state.playback.title = track.name.clone();
                     self.state.playback.artist = track.artist.clone();
                     self.state.playback.album = track.album.clone();
@@ -2196,7 +2254,7 @@ impl App {
                             album,
                             duration_ms,
                             uri,
-                            cover_path
+                            cover_path,
                         }
                     };
 
@@ -2231,6 +2289,8 @@ impl App {
                 .select(if vis_len == 0 { None } else { Some(0) });
             self.state.active_playlist_uri = Some("local_files".to_string());
             self.state.active_playlist_id = Some("local_files".to_string());
+
+            self.state.apply_quick_filter();
 
             self.local_scan_total = track_count;
 

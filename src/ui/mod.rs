@@ -6,13 +6,10 @@ use ratatui::{
     Frame,
 };
 use rspotify::model::RepeatState;
-use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
+use ratatui_image::{protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
 use crate::theme::Theme;
 use crate::theme::{LayoutNode, UiWidget};
-use tracing::warn;
-
-
 
 pub struct AlbumArtData {
     pub image_state: Option<StatefulProtocol>,
@@ -94,6 +91,37 @@ pub enum ActiveContent {
     Artists,
     Shows,
     LocalFiles,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TrackSortBy {
+    Default,
+    Title,
+    Artist,
+    Album,
+    Duration,
+}
+
+impl TrackSortBy {
+    pub fn next(self) -> Self {
+        match self {
+            TrackSortBy::Default => TrackSortBy::Title,
+            TrackSortBy::Title => TrackSortBy::Artist,
+            TrackSortBy::Artist => TrackSortBy::Album,
+            TrackSortBy::Album => TrackSortBy::Duration,
+            TrackSortBy::Duration => TrackSortBy::Default,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TrackSortBy::Default => "Default",
+            TrackSortBy::Title => "Title",
+            TrackSortBy::Artist => "Artist",
+            TrackSortBy::Album => "Album",
+            TrackSortBy::Duration => "Duration",
+        }
+    }
 }
 
 /// A node in the local file tree.
@@ -338,12 +366,16 @@ pub struct UiState {
     pub status_msg: Option<String>,
     pub search_query: String,
     pub search_active: bool,
+    pub quick_search_active: bool,
+    pub quick_search_query: String,
     pub spin_angle: f64,
     pub marquee_offset: usize,
     pub marquee_ms: u64,
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
     pub show_visualizer: bool,
+    pub track_sort_by: TrackSortBy,
+    pub sorted_track_indices: Vec<usize>,
 }
 
 impl UiState {
@@ -387,12 +419,16 @@ impl UiState {
             status_msg: None,
             search_query: String::new(),
             search_active: false,
+            quick_search_active: false,
+            quick_search_query: String::new(),
             spin_angle: 0.0,
             marquee_offset: 0,
             marquee_ms: 0,
             viz_bands: Vec::new(),
             art_url: None,
             show_visualizer: true,
+            track_sort_by: TrackSortBy::Default,
+            sorted_track_indices: Vec::new(),
         }
     }
 
@@ -421,17 +457,141 @@ impl UiState {
         self.search_query.clear();
     }
 
+    pub fn start_quick_search(&mut self) {
+        self.quick_search_active = true;
+        self.quick_search_query.clear();
+    }
+
     pub fn cancel_search(&mut self) {
         self.search_active = false;
         self.search_query.clear();
+    }
+
+    pub fn cancel_quick_search(&mut self) {
+        self.quick_search_active = false;
+        self.quick_search_query.clear();
     }
 
     pub fn search_push(&mut self, c: char) {
         self.search_query.push(c);
     }
 
+    pub fn quick_search_push(&mut self, c: char) {
+        self.quick_search_query.push(c);
+        self.apply_quick_filter();
+    }
+
     pub fn search_pop(&mut self) {
         self.search_query.pop();
+    }
+
+    pub fn quick_search_pop(&mut self) {
+        self.quick_search_query.pop();
+        self.apply_quick_filter();
+    }
+
+    pub fn apply_quick_filter(&mut self) {
+        let query = self.quick_search_query.to_lowercase();
+        
+        match self.active_content {
+            ActiveContent::Tracks | ActiveContent::None => {
+                if query.is_empty() {
+                    self.sorted_track_indices = (0..self.tracks.len()).collect();
+                } else {
+                    self.sorted_track_indices = (0..self.tracks.len())
+                        .filter(|&i| {
+                            if let Some(t) = self.tracks.get(i) {
+                                t.name.to_lowercase().contains(&query)
+                                    || t.artist.to_lowercase().contains(&query)
+                                    || t.album.to_lowercase().contains(&query)
+                            } else {
+                                false
+                            }
+                        })
+                        .collect();
+                }
+                if !self.sorted_track_indices.is_empty() {
+                    self.track_list.select(Some(0));
+                } else {
+                    self.track_list.select(None);
+                }
+            }
+            ActiveContent::LocalFiles => {
+                if query.is_empty() {
+                    self.sorted_track_indices = (0..self.local_tree.visible_len()).collect();
+                } else {
+                    let query_lower = query.to_lowercase(); 
+                    
+                    self.sorted_track_indices = (0..self.local_tree.visible_len())
+                        .filter(|&vi| {
+                            self.local_tree.get_visible(vi).map_or(false, |node| {
+                                match node {
+                                    LocalNode::Folder { name, .. } => {
+                                        name.to_lowercase().contains(&query_lower) 
+                                    }
+                                    LocalNode::Track { track, .. } => {
+                                        track.name.to_lowercase().contains(&query_lower)
+                                            || track.artist.to_lowercase().contains(&query_lower)
+                                    }
+                                }
+                            })
+                        })
+                        .collect();
+                }
+                if !self.sorted_track_indices.is_empty() {
+                    self.local_tree_list.select(Some(0));
+                } else {
+                    self.local_tree_list.select(None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn sort_tracks(&mut self) {
+        self.track_sort_by = self.track_sort_by.next();
+        self.rebuild_sort_indices();
+    }
+
+    pub fn rebuild_sort_indices(&mut self) {
+        match self.active_content {
+            ActiveContent::Tracks | ActiveContent::None => {
+                let selected_real_idx = self.track_list.selected()
+                    .and_then(|i| self.sorted_track_indices.get(i).copied());
+
+                self.sorted_track_indices = (0..self.tracks.len()).collect();
+                
+                if self.track_sort_by != TrackSortBy::Default {
+                    self.sorted_track_indices.sort_by(|&a, &b| {
+                        let track_a = &self.tracks[a];
+                        let track_b = &self.tracks[b];
+                        
+                        match self.track_sort_by {
+                            TrackSortBy::Title => track_a.name.cmp(&track_b.name),
+                            TrackSortBy::Artist => track_a.artist.cmp(&track_b.artist),
+                            TrackSortBy::Album => track_a.album.cmp(&track_b.album),
+                            TrackSortBy::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
+                            TrackSortBy::Default => std::cmp::Ordering::Equal,
+                        }
+                    });
+                }
+                
+                if !self.sorted_track_indices.is_empty() {
+                    if let Some(real_idx) = selected_real_idx {
+                        if let Some(new_pos) = self.sorted_track_indices.iter().position(|&x| x == real_idx) {
+                            self.track_list.select(Some(new_pos));
+                        } else {
+                            self.track_list.select(Some(0));
+                        }
+                    } else {
+                        self.track_list.select(Some(0));
+                    }
+                } else {
+                    self.track_list.select(None);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn nav_up(&mut self) {
@@ -447,8 +607,8 @@ impl UiState {
                 ActiveContent::Albums    => scroll_up(&mut self.album_list, self.albums.len()),
                 ActiveContent::Artists   => scroll_up(&mut self.artist_list, self.artists.len()),
                 ActiveContent::Shows     => scroll_up(&mut self.show_list, self.shows.len()),
-                ActiveContent::LocalFiles => scroll_up(&mut self.local_tree_list, self.local_tree.visible_len()),
-                _ => scroll_up(&mut self.track_list, self.tracks.len()),
+                ActiveContent::LocalFiles => scroll_up(&mut self.local_tree_list, self.sorted_track_indices.len()),
+                _ => scroll_up(&mut self.track_list, self.sorted_track_indices.len()),
             },
             Focus::Search    => { if let Some(sr) = &mut self.search_results { sr.nav_up(); } }
             Focus::Queue     => scroll_up(&mut self.queue_list, self.queue_items.len()),
@@ -468,8 +628,8 @@ impl UiState {
                 ActiveContent::Albums    => scroll_down(&mut self.album_list, self.albums.len()),
                 ActiveContent::Artists   => scroll_down(&mut self.artist_list, self.artists.len()),
                 ActiveContent::Shows     => scroll_down(&mut self.show_list, self.shows.len()),
-                ActiveContent::LocalFiles => scroll_down(&mut self.local_tree_list, self.local_tree.visible_len()),
-                _ => scroll_down(&mut self.track_list, self.tracks.len()),
+                ActiveContent::LocalFiles => scroll_down(&mut self.local_tree_list, self.sorted_track_indices.len()),
+                _ => scroll_down(&mut self.track_list, self.sorted_track_indices.len()),
             },
             Focus::Search    => { if let Some(sr) = &mut self.search_results { sr.nav_down(); } }
             Focus::Queue     => scroll_down(&mut self.queue_list, self.queue_items.len()),
@@ -484,8 +644,8 @@ impl UiState {
                 ActiveContent::Albums    => { if !self.albums.is_empty()  { self.album_list.select(Some(0));  } }
                 ActiveContent::Artists   => { if !self.artists.is_empty() { self.artist_list.select(Some(0)); } }
                 ActiveContent::Shows     => { if !self.shows.is_empty()   { self.show_list.select(Some(0));   } }
-                ActiveContent::LocalFiles => { if self.local_tree.visible_len() > 0 { self.local_tree_list.select(Some(0)); } }
-                _ => { if !self.tracks.is_empty() { self.track_list.select(Some(0)); } }
+                ActiveContent::LocalFiles => { if self.sorted_track_indices.len() > 0 { self.local_tree_list.select(Some(0)); } }
+                _ => { if !self.sorted_track_indices.is_empty() { self.track_list.select(Some(0)); } }
             },
             Focus::Search => { if let Some(sr) = &mut self.search_results { if sr.current_len() > 0 { sr.current_list_mut().select(Some(0)); } } }
             Focus::Queue  => { if !self.queue_items.is_empty() { self.queue_list.select(Some(0)); } }
@@ -500,8 +660,8 @@ impl UiState {
                 ActiveContent::Albums    => { let n = self.albums.len();  if n > 0 { self.album_list.select(Some(n - 1));  } }
                 ActiveContent::Artists   => { let n = self.artists.len(); if n > 0 { self.artist_list.select(Some(n - 1)); } }
                 ActiveContent::Shows     => { let n = self.shows.len();   if n > 0 { self.show_list.select(Some(n - 1));   } }
-                ActiveContent::LocalFiles => { let n = self.local_tree.visible_len(); if n > 0 { self.local_tree_list.select(Some(n - 1)); } }
-                _ => { let n = self.tracks.len(); if n > 0 { self.track_list.select(Some(n - 1)); } }
+                ActiveContent::LocalFiles => { let n = self.sorted_track_indices.len(); if n > 0 { self.local_tree_list.select(Some(n - 1)); } }
+                _ => { let n = self.sorted_track_indices.len(); if n > 0 { self.track_list.select(Some(n - 1)); } }
             },
             Focus::Search => { if let Some(sr) = &mut self.search_results { let n = sr.current_len(); if n > 0 { sr.current_list_mut().select(Some(n - 1)); } } }
             Focus::Queue  => { let n = self.queue_items.len(); if n > 0 { self.queue_list.select(Some(n - 1)); } }
@@ -608,7 +768,7 @@ impl Ui {
 
             let parsed: Vec<Constraint> = raw_constraints
                 .iter()
-                .map(|&c| Constraint::from(c)) // Converte o enum tipado diretamente para o Constraint do Ratatui
+                .map(|&c| Constraint::from(c))
                 .collect();
 
             let chunks = Layout::default()
@@ -630,11 +790,7 @@ impl Ui {
         } else {
             match &state.active_content {
                 ActiveContent::None => {
-                    if state.playback.title.is_empty() {
-                        self.render_welcome(frame, area);
-                    } else {
-                        self.render_now_playing(frame, state, area);
-                    }
+                    self.render_welcome(frame, area);
                 }
                 ActiveContent::Tracks    => self.render_tracks(frame, state, area),
                 ActiveContent::LocalFiles => self.render_local_tree(frame, state, area),
@@ -658,7 +814,7 @@ impl Ui {
             .title(" 󰈣 Local Files ")
             .title_bottom(Line::from(vec![
                 Span::styled(
-                    format!(" {} tracks  [ENTER] play/expand  [A] queue ", total_tracks),
+                    format!(" {} tracks  [ENTER] play/expand  [A] queue  [Ctrl+F] search ", total_tracks),
                     Style::default().fg(self.theme.border_inactive),
                 ),
             ]))
@@ -668,8 +824,8 @@ impl Ui {
                 Style::default().fg(self.theme.border_inactive)
             });
 
-        let items: Vec<ListItem> = (0..state.local_tree.visible_len())
-            .filter_map(|vi| {
+        let items: Vec<ListItem> = state.sorted_track_indices.iter()
+            .filter_map(|&vi| {
                 let node = state.local_tree.get_visible(vi)?;
                 let indent = "  ".repeat(node.depth());
                 let item = match node {
@@ -800,13 +956,23 @@ impl Ui {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(
-                if state.search_active { self.theme.border_active } else { self.theme.border_inactive }
+                if state.search_active || state.quick_search_active { 
+                    self.theme.border_active 
+                } else { 
+                    self.theme.border_inactive 
+                }
             ));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let content = if state.search_active {
+        let content = if state.quick_search_active {
+            Line::from(vec![
+                Span::styled("   Quick Search: ", Style::default().fg(self.theme.border_active)),
+                Span::styled(&state.quick_search_query, Style::default().fg(self.theme.text_primary)),
+                Span::styled("█", Style::default().fg(self.theme.border_active).add_modifier(Modifier::SLOW_BLINK)),
+            ])
+        } else if state.search_active {
             Line::from(vec![
                 Span::styled("   Search: ", Style::default().fg(self.theme.border_active)),
                 Span::styled(&state.search_query, Style::default().fg(self.theme.text_primary)),
@@ -955,11 +1121,11 @@ impl Ui {
         let info_grid = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2), // title
-                Constraint::Length(1), // artist
-                Constraint::Length(1), // album
-                Constraint::Length(1), // spacer
-                Constraint::Length(1), // progress
+                Constraint::Length(2),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
                 Constraint::Min(0),
             ])
             .split(info_area);
@@ -972,9 +1138,7 @@ impl Ui {
         if let Some(art) = &mut state.album_art {
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
-                    ratatui_image::StatefulImage::<
-                        ratatui_image::protocol::StatefulProtocol
-                    >::default(),
+                    ratatui_image::StatefulImage::<StatefulProtocol>::default(),
                     art_area,
                     img_state,
                 );
@@ -1031,20 +1195,10 @@ impl Ui {
             album_area,
         );
 
-        self.render_progress(
-            frame,
-            &state.playback,
-            progress_area,
-        );
-
-        self.render_visualizer(
-            frame,
-            &state.playback,
-            &state.viz_bands,
-            viz_area,
-            state,
-        );
+        self.render_progress(frame, &state.playback, progress_area);
+        self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area, state);
     }
+
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1061,7 +1215,7 @@ impl Ui {
             Line::from(Span::styled("Select a playlist from the Library or Playlists panel,", Style::default().fg(self.theme.border_inactive))),
             Line::from(Span::styled("or press / to search Spotify.", Style::default().fg(self.theme.border_inactive))),
             Line::from(""),
-            Line::from(Span::styled("[TAB] navigate panels   [ENTER] select   [/] search", Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM))),
+            Line::from(Span::styled("[TAB] navigate panels   [ENTER] select   [/] search   [Ctrl+F] quick search", Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM))),
         ];
 
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
@@ -1076,10 +1230,11 @@ impl Ui {
             " Tracks ".to_string()
         };
 
+        let sort_label = format!("[Sort: {}]", state.track_sort_by.label());
         let count = if state.tracks_total > 0 {
-            format!("{}/{}", state.tracks.len(), state.tracks_total)
+            format!("{}/{}", state.sorted_track_indices.len(), state.tracks_total)
         } else {
-            state.tracks.len().to_string()
+            state.sorted_track_indices.len().to_string()
         };
         let loading = if state.tracks_loading { " …" } else { "" };
 
@@ -1088,7 +1243,9 @@ impl Ui {
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_bottom(Line::from(vec![
-                Span::styled(format!(" {count}{loading} "), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(format!(" {count}{loading} ", ), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(sort_label, Style::default().fg(self.theme.accent_color)),
+                Span::styled(" [Ctrl+F] search  [O] sort ", Style::default().fg(self.theme.border_inactive)),
             ]))
             .border_style(if focused {
                 Style::default().fg(self.theme.border_active)
@@ -1096,7 +1253,8 @@ impl Ui {
                 Style::default().fg(self.theme.border_inactive)
             });
 
-        let items: Vec<ListItem> = state.tracks.iter().enumerate().map(|(idx, t)| {
+        let items: Vec<ListItem> = state.sorted_track_indices.iter().enumerate().map(|(display_idx, &real_idx)| {
+            let t = &state.tracks[real_idx];
             let is_playing = state.playback.title == t.name;
             let style = if is_playing {
                 Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)
@@ -1104,7 +1262,7 @@ impl Ui {
                 Style::default().fg(self.theme.text_primary)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
+                Span::styled(format!("{:>3}. ", display_idx + 1), Style::default().fg(self.theme.border_inactive)),
                 Span::styled(t.name.clone(), style),
                 Span::styled(format!("  󰠃 {}", t.artist), Style::default().fg(self.theme.border_inactive)),
             ]))
@@ -1446,6 +1604,11 @@ impl Ui {
     fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let content = if let Some(msg) = &state.status_msg {
             Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
+        } else if state.quick_search_active {
+            Line::from(Span::styled(
+                " [ESC] Cancel  [Type] Search  [↑↓] Navigate ",
+                Style::default().fg(self.theme.border_inactive),
+            ))
         } else if state.focus == Focus::Search {
             Line::from(Span::styled(
                 " [TAB] Switch panel  [↑↓] Navigate  [ENTER] Select  [ESC] Close search ",
@@ -1463,7 +1626,7 @@ impl Ui {
             ))
         } else if state.active_content == ActiveContent::LocalFiles {
             Line::from(Span::styled(
-                " [↑↓] Navigate  [ENTER] play/expand folder  [A] Add to queue  [N/P] Skip  [SPACE] Pause ",
+                " [↑↓] Navigate  [ENTER] play/expand folder  [A] Add to queue  [N/P] Skip  [SPACE] Pause  [Ctrl+F] Search ",
                 Style::default().fg(self.theme.border_inactive),
             ))
         } else if state.previous_search.is_some() {
@@ -1473,7 +1636,7 @@ impl Ui {
             ))
         } else {
             Line::from(Span::styled(
-                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Q] Quit ",
+                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Ctrl+F] Quick Search  [O] Sort  [Q] Quit ",
                 Style::default().fg(self.theme.border_inactive),
             ))
         };
