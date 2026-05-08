@@ -910,10 +910,6 @@ impl Ui {
     }
 
     fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        if state.playback.is_local {
-            return self.render_local_now_playing(frame, state, area);
-        }
-
         let focused = state.focus == Focus::Tracks;
         let accent = if focused { self.theme.border_active } else { self.theme.border_inactive };
         let block = Block::default()
@@ -960,7 +956,6 @@ impl Ui {
             .split(art_area);
 
         if let Some(art) = &mut state.album_art {
-            warn!("UI: Rendering image state, exists: {}", art.image_state.is_some());
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
                     StatefulImage::<StatefulProtocol>::default(),
@@ -1000,63 +995,6 @@ impl Ui {
         let viz_bands = state.viz_bands.clone();
         let pb = state.playback.clone();
         self.render_visualizer(frame, &pb, &viz_bands, viz_area, state);
-    }
-
-    fn render_local_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        let focused = state.focus == Focus::Tracks;
-        let accent = if focused { self.theme.border_active } else { self.theme.border_inactive };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(Line::from(vec![
-                Span::styled("  Local Files ", Style::default().fg(accent).add_modifier(Modifier::BOLD)),
-            ]))
-            .border_style(Style::default().fg(accent));
-
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if inner.height == 0 { return; }
-
-        let pb = &state.playback;
-        let viz_h  = (inner.height / 3).max(4);
-        let info_h = inner.height.saturating_sub(viz_h);
-
-        let sections = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(info_h), Constraint::Length(viz_h)])
-            .split(inner);
-
-        let repeat_icon = match pb.repeat {
-            RepeatState::Off     => "󰑗",
-            RepeatState::Context => "󰑖",
-            RepeatState::Track   => "󰑘",
-        };
-        let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
-        let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
-        let ext_hint = pb.path
-            .as_ref()
-            .map(|p| format!("  {}", p))
-            .unwrap_or_default();
-
-        let lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(pb.title.clone(), Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-            Line::from(Span::styled(
-                if pb.artist.is_empty() { "Unknown Artist".to_string() } else { pb.artist.clone() },
-                Style::default().fg(accent),
-            )),
-            Line::from(Span::styled(ext_hint, Style::default().fg(self.theme.border_inactive))),
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("{}  {}  {}  vol {}%", play_icon, shuffle_icon, repeat_icon, pb.volume),
-                Style::default().fg(self.theme.border_inactive),
-            )),
-        ];
-
-        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), sections[0]);
-        self.render_visualizer(frame, &state.playback, &state.viz_bands, sections[1], state);
     }
 
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
@@ -1375,7 +1313,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.2.7".to_string()
+            "isi-music v0.2.8".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };

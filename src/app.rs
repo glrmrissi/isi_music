@@ -231,7 +231,7 @@ pub struct App {
     track_start_unix: u64,
     current_track_uri: String,
     last_art_uri: String,
-    album_art_pending: Option<tokio::sync::oneshot::Receiver<(Option<String>, Option<Vec<u8>>)>>,
+    album_art_pending: Option<tokio::sync::oneshot::Receiver<Vec<u8>>>,
     picker: Picker,
     #[cfg(feature = "mpris")]
     mpris: Option<MprisHandle>,
@@ -273,7 +273,6 @@ impl App {
             ))),
             _ => None,
         };
-
         let mut spotify = match SpotifyClient::new().await {
             Ok(s) => s,
             Err(e) => {
@@ -691,20 +690,16 @@ impl App {
             }
 
             if let Some(rx) = &mut self.album_art_pending {
-                if let Ok((art_url, bytes)) = rx.try_recv() {
+                if let Ok(bytes) = rx.try_recv() {
                     self.album_art_pending = None;
-                    if let Some(url) = art_url {
-                        self.state.playback.art_url = Some(url);
-                    }
-                    if let Some(bytes) = bytes {
-                        match image::load_from_memory(&bytes) {
-                            Ok(img) => {
-                                let image_state = self.picker.new_resize_protocol(img);
-                                self.state.album_art = Some(AlbumArtData { image_state: Some(image_state) });
-                            }
-                            Err(e) => {
-                                warn!("DEBUG: Failed to decode extracted image bytes: {}", e);
-                            }
+                    match image::load_from_memory(&bytes) {
+                        Ok(img) => {
+                            let resized = img.thumbnail(800, 800); 
+                            let image_state = self.picker.new_resize_protocol(resized);
+                            self.state.album_art = Some(AlbumArtData { image_state: Some(image_state) });
+                        }
+                        Err(e) => {
+                            warn!("Failed to decode image: {}", e);
                         }
                     }
                 }
@@ -847,36 +842,22 @@ impl App {
                 self.state.playback.art_url = None;
                 
                 if title_changed {
-                    warn!("DEBUG: Title changed to: {}", track_info.name);
                     self.state.album_art = None;
-                    let mut cover_loaded = false;
+                    self.album_art_pending = None;
                     
                     if let Some(path_str) = &self.state.playback.cover_path {
-                        if let Ok(bytes) = std::fs::read(path_str) {
-                            match image::load_from_memory(&bytes) {
-                                Ok(img) => {
-                                    
-                                    let img = img.thumbnail(500, 500);
-                                    let image_state = self.picker.new_resize_protocol(img);
-                                    
-                                    self.state.album_art = Some(AlbumArtData { 
-                                        image_state: Some(image_state) 
-                                    });
-                                    cover_loaded = true;
+                        if std::path::Path::new(path_str).exists() {
+                            let path = path_str.clone();
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            
+                            tokio::spawn(async move {
+                                if let Ok(bytes) = tokio::fs::read(&path).await {
+                                    let _ = tx.send(bytes);
                                 }
-                                Err(e) => {
-                                    warn!("DEBUG: Failed to open cached image ({}): {}", path_str, e);
-                                }
-                            }
-                        } else {
-                            warn!("DEBUG: Failed to read cached file: {}", path_str);
+                            });
+                            
+                            self.album_art_pending = Some(rx);
                         }
-                    } else {
-                        warn!("DEBUG: No cover_path in SQLite");
-                    }
-
-                    if !cover_loaded {
-                        self.fetch_local_album_art();
                     }
                 }
                 self.state.playback.is_local = true;
@@ -1894,7 +1875,6 @@ impl App {
 
         tokio::spawn(async move {
             let Some(track_id) = uri.strip_prefix("spotify:track:").map(|s| s.to_string()) else {
-                let _ = tx.send((None, None));
                 return;
             };
             let Ok(resp) = http
@@ -1903,11 +1883,9 @@ impl App {
                 .send()
                 .await
             else {
-                let _ = tx.send((None, None));
                 return;
             };
             let Ok(json) = resp.json::<serde_json::Value>().await else {
-                let _ = tx.send((None, None));
                 return;
             };
             let Some(url) = json["album"]["images"]
@@ -1916,14 +1894,13 @@ impl App {
                 .and_then(|img| img["url"].as_str())
                 .map(|s| s.to_string())
             else {
-                let _ = tx.send((None, None));
                 return;
             };
-            let bytes = match http.get(&url).send().await {
-                Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
-                Err(_) => None,
-            };
-            let _ = tx.send((Some(url), bytes));
+            if let Ok(resp) = http.get(&url).send().await {
+                if let Ok(bytes) = resp.bytes().await {
+                    let _ = tx.send(bytes.to_vec());
+                }
+            }
         });
     }
 
@@ -1933,20 +1910,20 @@ impl App {
         }
         self.last_art_uri = self.current_track_uri.clone();
 
-        let path = self
-            .current_track_uri
-            .strip_prefix("file://")
-            .map(std::path::PathBuf::from);
-
-        let Some(path) = path else { return };
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.album_art_pending = Some(rx);
-
-        tokio::spawn(async move {
-            let bytes = extract_embedded_art(&path);
-            let _ = tx.send((None, bytes));
-        });
+        if let Some(cover_str) = &self.state.playback.cover_path {
+            let path = std::path::PathBuf::from(cover_str);
+            if path.exists() {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                self.album_art_pending = Some(rx);
+                
+                tokio::spawn(async move {
+                    if let Ok(bytes) = tokio::fs::read(&path).await {
+                        let _ = tx.send(bytes);
+                    }
+                });
+                return;
+            }
+        }
     }
 
     fn sync_track_selection(&mut self) {

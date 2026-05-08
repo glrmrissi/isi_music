@@ -32,6 +32,8 @@ fn prompt(label: &str) -> String {
     buf.trim().to_string()
 }
 
+
+// Deprecated
 fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("isi-music — First-time setup");
     println!("────────────────────────────────────────");
@@ -55,13 +57,33 @@ fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
-    println!();
-    println!("Last.fm setup");
-    println!("────────────────────────────────────────");
-    println!("Create an API account at: https://www.last.fm/api/account/create");
-    println!();
+const RED: &str = "\x1b[1;31m";
+const YELLOW: &str = "\x1b[1;33m";
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const GREEN: &str = "\x1b[32m";
+const GRAY: &str = "\x1b[90m";
 
+async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
+    println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
+    println!("{RED}│{RESET}  {BOLD}Last.fm Integration Setup{RESET}                                    {RED}│{RESET}");
+    println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
+    println!("{RED}│{RESET}  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}             {RED}│{RESET}");
+    println!("{RED}│{RESET}  2. Create an API application                                 {RED}│{RESET}");
+    println!("{RED}│{RESET}  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}                       {RED}│{RESET}");
+    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
+    println!("{RED}│{RESET}  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}              {RED}│{RESET}");
+    println!("{RED}│{RESET}  5. Add the following content:                                {RED}│{RESET}");
+    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
+    println!("{RED}│{RESET}     {GRAY}[lastfm]{RESET}                                                  {RED}│{RESET}");
+    println!("{RED}│{RESET}     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}                                  {RED}│{RESET}");
+    println!("{RED}│{RESET}     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}                            {RED}│{RESET}");
+    println!("{RED}│{RESET}     session_key = \"\"                                          {RED}│{RESET}");
+    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
+    println!("{RED}│{RESET}  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}                 {RED}│{RESET}");
+    println!("{RED}│{RESET}  {YELLOW}Never commit your API Secret to Git.{RESET}                         {RED}│{RESET}");
+    println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
+    
     let api_key = loop {
         let v = prompt("API Key: ");
         if !v.is_empty() { break v; }
