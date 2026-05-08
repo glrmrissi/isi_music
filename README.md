@@ -239,49 +239,86 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 
 ---
 
-## Theme Configuration
+## Theme Configuration and Layout Customization
 
 Themes are fully customizable. Create `~/.config/isi-music/theme.toml` to override the default theme.
 
 ```toml
-# Cool Blue Theme
-border_active = "light_blue"
-border_inactive = "dark_gray"
-highlight_bg = "rgb(20, 40, 60)"
-text_primary = "white"
-accent_color = "light_cyan"
-```
+border_active = "#00d4ff"    
+border_inactive = "#002b4d"  
+highlight_bg = "#004b7a"      
+text_primary = "#ffffff"
+accent_color = "#ffeb3b"    
 
-### Theme Examples
+[layout_tree]
+direction = "vertical"
+constraints = [
+    { length = 3 },    # Header
+    { fill = 1 },      # Main body
+    { length = 1 },    # Progress/Marquee row
+    { length = 1 }     # Help/Status row
+]
 
-```toml
-# Minimal Dark
-border_active = "cyan"
-border_inactive = "dark_gray"
-highlight_bg = "rgb(30, 30, 30)"
-text_primary = "white"
-accent_color = "cyan"
+[[layout_tree.children]]
+direction = "horizontal"
+constraints = [
+    { fill = 1 },      
+    { length = 40 }   
+]
 
-# Vibrant
-border_active = "magenta"
-border_inactive = "dark_gray"
-highlight_bg = "rgb(203, 23, 203)"
-text_primary = "white"
-accent_color = "light_magenta"
+    [[layout_tree.children.children]]
+    widget = "header"
 
-# Blood Moon
-border_active = "red"
-border_inactive = "rgb(146, 7, 7)"
-highlight_bg = "rgb(50, 10, 10)"
-text_primary = "white"
-accent_color = "light_red"
+    [[layout_tree.children.children]]
+    widget = "visualizer"
 
-# macOS Blue
-border_active = "rgb(0,122,255)"
-border_inactive = "rgb(60,60,60)"
-highlight_bg = "rgb(45,45,45)"
-text_primary = "white"
-accent_color = "rgb(0,122,255)"
+# --- Main body ---
+[[layout_tree.children]]
+direction = "horizontal"
+constraints = [
+    { percentage = 25 },
+    { fill = 1 }
+]
+    # Sidebar (vertical: Library | Playlists)
+    [[layout_tree.children.children]]
+    direction = "vertical"
+    constraints = [
+        { length = 7 },
+        { fill = 1 }
+    ]
+        [[layout_tree.children.children.children]]
+        widget = "library"
+
+        [[layout_tree.children.children.children]]
+        widget = "playlists"
+
+    # Right column
+    [[layout_tree.children.children]]
+    direction = "vertical"
+    constraints = [
+        { fill = 1 },
+        { length = 8 }
+    ]
+        [[layout_tree.children.children.children]]
+        widget = "main_content"
+        [[layout_tree.children.children.children]]
+        widget = "queue"
+
+# --- Progress row ---
+[[layout_tree.children]]
+direction = "horizontal"
+constraints = [
+    { percentage = 30 },
+    { fill = 1 }
+]
+    [[layout_tree.children.children]]
+    widget = "marquee"
+    [[layout_tree.children.children]]
+    widget = "progress"
+
+# --- Help/Status ---
+[[layout_tree.children]]
+widget = "help"
 ```
 
 ### Available Colors
@@ -297,10 +334,6 @@ Custom RGB: `rgb(r, g, b)` where r, g, b are 0-255
 - `highlight_bg`: Selected list items background
 - `text_primary`: Titles, artists, primary text
 - `accent_color`: Progress bars, icons, seek bar
-
-### Layout Customization
-
-See `theme.toml` documentation for advanced layout tree configuration.
 
 ---
 

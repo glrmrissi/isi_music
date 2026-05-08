@@ -608,7 +608,7 @@ impl Ui {
 
             let parsed: Vec<Constraint> = raw_constraints
                 .iter()
-                .map(|s| self.parse_constraint(s))
+                .map(|&c| Constraint::from(c)) // Converte o enum tipado diretamente para o Constraint do Ratatui
                 .collect();
 
             let chunks = Layout::default()
@@ -643,24 +643,6 @@ impl Ui {
                 ActiveContent::Shows     => self.render_shows(frame, state, area),
             }
         }
-    }
-
-    fn parse_constraint(&self, s: &str) -> Constraint {
-        let s = s.trim().to_lowercase().replace(' ', "");
-        if s.ends_with('%') {
-            if let Ok(p) = s.trim_end_matches('%').parse::<u16>() {
-                return Constraint::Percentage(p);
-            }
-        }
-        if s.starts_with("min(") && s.ends_with(')') {
-            if let Ok(v) = s[4..s.len() - 1].parse::<u16>() {
-                return Constraint::Min(v);
-            }
-        }
-        if let Ok(l) = s.parse::<u16>() {
-            return Constraint::Length(l);
-        }
-        Constraint::Min(0)
     }
 
     fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -911,92 +893,158 @@ impl Ui {
 
     fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
-        let accent = if focused { self.theme.border_active } else { self.theme.border_inactive };
+
+        let accent = if focused {
+            self.theme.border_active
+        } else {
+            self.theme.border_inactive
+        };
+
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" 󰎈 Now Playing ")
-            .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
             .border_style(Style::default().fg(accent));
 
         let inner = block.inner(area);
+
         frame.render_widget(block, area);
-        if inner.height == 0 { return; }
 
-        let viz_h: u16 = inner.height.min(8).max(4);
-        let info_min: u16 = 8;
-        let art_h = inner.height
-            .saturating_sub(info_min)
-            .saturating_sub(viz_h)
-            .min(inner.width / 2);
-        let art_w = art_h * 2;
-        let info_h = inner.height.saturating_sub(art_h).saturating_sub(viz_h);
+        if inner.width < 10 || inner.height < 5 {
+            return;
+        }
 
-        let sections = Layout::default()
+        let root = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(art_h),
-                Constraint::Length(info_h),
-                Constraint::Length(viz_h),
+                Constraint::Length(18), 
+                Constraint::Min(0),     
             ])
             .split(inner);
 
-        let art_area  = sections[0];
-        let info_area = sections[1];
-        let viz_area  = sections[2];
+        let top_area = Rect {
+            x: root[0].x + 2,
+            y: root[0].y + 1,
+            width: root[0].width.saturating_sub(4),
+            height: root[0].height.saturating_sub(1),
+        };
 
-        let padding = art_area.width.saturating_sub(art_w) / 2;
-        let art_cols = Layout::default()
+        let viz_area = Rect {
+            x: root[1].x + 1,
+            y: root[1].y,
+            width: root[1].width.saturating_sub(2),
+            height: root[1].height,
+        };
+
+        let art_size = top_area
+            .height
+            .min(18)
+            .min(top_area.width / 4)
+            .max(12);
+
+        let top_cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(padding),
-                Constraint::Length(art_w),
+                Constraint::Length(art_size),
+                Constraint::Length(3),
                 Constraint::Min(0),
             ])
-            .split(art_area);
+            .split(top_area);
+
+        let art_area  = top_cols[0];
+        let info_area = top_cols[2];
+
+        let info_grid = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2), // title
+                Constraint::Length(1), // artist
+                Constraint::Length(1), // album
+                Constraint::Length(1), // spacer
+                Constraint::Length(1), // progress
+                Constraint::Min(0),
+            ])
+            .split(info_area);
+
+        let title_area    = info_grid[0];
+        let artist_area   = info_grid[1];
+        let album_area    = info_grid[2];
+        let progress_area = info_grid[4];
 
         if let Some(art) = &mut state.album_art {
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
-                    StatefulImage::<StatefulProtocol>::default(),
-                    art_cols[1],
+                    ratatui_image::StatefulImage::<
+                        ratatui_image::protocol::StatefulProtocol
+                    >::default(),
+                    art_area,
                     img_state,
                 );
             }
         }
 
-        if info_h > 0 {
-            let pb = &state.playback;
-            let repeat_icon = match pb.repeat {
-                RepeatState::Off     => "󰑗",
-                RepeatState::Context => "󰑖",
-                RepeatState::Track   => "󰑘",
-            };
-            let shuffle_icon = if pb.shuffle { "󰒝" } else { "󰒞" };
-            let play_icon    = if pb.is_playing { "󰏦" } else { "󰐍" };
-            let radio_icon   = if pb.radio_mode { "  󰐇" } else { "" };
+        let pb = &state.playback;
 
-            let lines = vec![
-                Line::from(""),
-                Line::from(Span::styled(pb.title.clone(), Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from(Span::styled(pb.artist.clone(), Style::default().fg(self.theme.border_inactive))),
-                Line::from(Span::styled(pb.album.clone(),  Style::default().fg(self.theme.border_inactive))),
-                Line::from(""),
+        frame.render_widget(
+            Paragraph::new(vec![
                 Line::from(Span::styled(
-                    format!("{}  {}  {}  vol {}%{}", play_icon, shuffle_icon, repeat_icon, pb.volume, radio_icon),
-                    Style::default().fg(self.theme.border_inactive),
+                    pb.title.clone(),
+                    Style::default()
+                        .fg(self.theme.text_primary)
+                        .add_modifier(Modifier::BOLD),
                 )),
-            ];
+            ]),
+            title_area,
+        );
 
-            frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), info_area);
-        }
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Artist  ",
+                        Style::default()
+                            .fg(self.theme.border_inactive)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(
+                        pb.artist.clone(),
+                        Style::default().fg(self.theme.text_primary),
+                    ),
+                ]),
+            ]),
+            artist_area,
+        );
 
-        let viz_bands = state.viz_bands.clone();
-        let pb = state.playback.clone();
-        self.render_visualizer(frame, &pb, &viz_bands, viz_area, state);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Album   ",
+                        Style::default()
+                            .fg(self.theme.border_inactive)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(
+                        pb.album.clone(),
+                        Style::default().fg(self.theme.text_primary),
+                    ),
+                ]),
+            ]),
+            album_area,
+        );
+
+        self.render_progress(
+            frame,
+            &state.playback,
+            progress_area,
+        );
+
+        self.render_visualizer(
+            frame,
+            &state.playback,
+            &state.viz_bands,
+            viz_area,
+            state,
+        );
     }
-
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1313,7 +1361,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.2.8".to_string()
+            "isi-music v0.2.9".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };
