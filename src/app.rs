@@ -416,8 +416,42 @@ impl App {
 
             self.poll_local_scan();
 
-            if self.local_active {
-                self.update_playback_from_local_player();
+            if let Some(player) = &self.player {
+                if let Some(pb) = player.current_playback_state() {
+                    let prev_title = self.state.playback.title.clone();
+                    let progress = self.state.playback.progress_ms;
+                    let radio_mode = self.state.playback.radio_mode;
+
+                    if pb.is_local {
+                        self.state.playback = pb;
+                        self.state.playback.progress_ms = progress;
+                        self.state.playback.radio_mode = radio_mode;
+
+                        if self.state.playback.title != prev_title {
+                            self.state.album_art = None;
+                            self.album_art_pending = None;
+                            self.last_art_uri.clear();
+
+                            if let Some(cover_str) = &self.state.playback.cover_path.clone() {
+                                let path = std::path::PathBuf::from(cover_str);
+                                if path.exists() {
+                                    let (tx, rx) = tokio::sync::oneshot::channel();
+                                    tokio::spawn(async move {
+                                        if let Ok(bytes) = tokio::fs::read(&path).await {
+                                            let _ = tx.send(bytes);
+                                        }
+                                    });
+                                    self.album_art_pending = Some(rx);
+                                }
+                            }
+                        }
+                    } else {
+                        self.state.playback.is_playing = pb.is_playing;
+                        self.state.playback.volume = pb.volume;
+                        self.state.playback.shuffle = pb.shuffle;
+                        self.state.playback.repeat = pb.repeat;
+                    }
+                }
             }
 
             let mut needs_sync = false;
@@ -512,17 +546,6 @@ impl App {
                         }
                     }
                 }
-            }
-
-            if let Some(player) = &mut self.player {
-                self.state.playback.is_playing = player.is_playing();
-                self.state.playback.volume = player.volume();
-                self.state.playback.shuffle = player.shuffle();
-                self.state.playback.repeat = match player.repeat() {
-                    RepeatMode::Off => RepeatState::Off,
-                    RepeatMode::Queue => RepeatState::Context,
-                    RepeatMode::Track => RepeatState::Track,
-                };
             }
 
             if needs_crossover {
@@ -759,73 +782,6 @@ impl App {
         }
 
         Ok(())
-    }
-
-    fn update_playback_from_local_player(&mut self) {
-        if !self.local_active {
-            return;
-        }
-
-        if let Some(ref mut player) = self.player {
-            self.state.playback.is_playing = player.is_playing();
-            self.state.playback.volume = player.volume();
-            self.state.playback.shuffle = player.shuffle();
-            self.state.playback.repeat = match player.repeat() {
-                RepeatMode::Off => RepeatState::Off,
-                RepeatMode::Queue => RepeatState::Context,
-                RepeatMode::Track => RepeatState::Track,
-            };
-
-            if let Some(track_info) = player.current_track_info() {
-                let title_changed = self.state.playback.title != track_info.name;
-
-                if self.state.playback.title.is_empty() {
-                    if let Some(path_str) = &track_info.path {
-                        self.state.playback.title = std::path::Path::new(path_str)
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("Unknown Track")
-                            .to_string();
-                    }
-                } else {
-                    self.state.playback.title = track_info.name.clone();
-                }
-
-                self.state.playback.artist = track_info.artist.clone();
-                self.state.playback.album = if track_info.album.is_empty() {
-                    "Local Archive".to_string()
-                } else {
-                    track_info.album.clone()
-                };
-                self.state.playback.path = track_info.path.map(|p| p.to_string_lossy().to_string());
-                self.state.playback.duration_ms = track_info.duration_ms;
-                self.state.playback.cover_path = track_info
-                    .cover_path
-                    .map(|p| p.to_string_lossy().to_string());
-                self.state.playback.art_url = None;
-
-                if title_changed {
-                    self.state.album_art = None;
-                    self.album_art_pending = None;
-
-                    if let Some(path_str) = &self.state.playback.cover_path {
-                        if std::path::Path::new(path_str).exists() {
-                            let path = path_str.clone();
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-
-                            tokio::spawn(async move {
-                                if let Ok(bytes) = tokio::fs::read(&path).await {
-                                    let _ = tx.send(bytes);
-                                }
-                            });
-
-                            self.album_art_pending = Some(rx);
-                        }
-                    }
-                }
-                self.state.playback.is_local = true;
-            }
-        }
     }
 
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {

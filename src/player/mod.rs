@@ -17,6 +17,7 @@ use librespot_playback::{
 use crate::audio_sink::{AnalyzerSink, N_BANDS};
 use crate::spotify::TrackSummary;
 use crate::config;
+use crate::ui::PlaybackState;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -49,43 +50,7 @@ pub struct TrackInfo {
     pub cover_path: Option<PathBuf>,
 }
 
-pub struct PlaybackState {
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub path: Option<String>,
-    pub is_playing: bool,
-    pub shuffle: bool,
-    pub repeat: RepeatMode,
-    pub progress_ms: u64,
-    pub duration_ms: u64,
-    pub volume: u8,
-    pub art_url: Option<String>,
-    pub cover_path: Option<String>,
-    pub is_local: bool,
-    pub radio_mode: bool,
-}
 
-impl Default for PlaybackState {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            artist: String::new(),
-            album: String::new(),
-            path: None,
-            is_playing: false,
-            shuffle: false,
-            repeat: RepeatMode::Off,
-            progress_ms: 0,
-            duration_ms: 0,
-            volume: 100,
-            art_url: None,
-            cover_path: None,
-            is_local: false,
-            radio_mode: false,
-        }
-    }
-}
 
 pub trait AudioPlayer: Send {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
@@ -133,6 +98,8 @@ pub trait AudioPlayer: Send {
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
     fn current_uri(&self) -> Option<String>;
     fn current_track_info(&self) -> Option<TrackInfo> { None }
+
+    fn current_playback_state(&self) -> Option<PlaybackState> { None }
 }
 
 pub struct QueuedTrack {
@@ -447,4 +414,19 @@ impl AudioPlayer for NativePlayer {
     }
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { self.snapshot_queue() }
+
+    fn current_playback_state(&self) -> Option<PlaybackState> {
+        Some(PlaybackState {
+            is_playing: self.is_playing,
+            volume: self.volume,
+            shuffle: self.shuffle,
+            repeat: match self.repeat {
+                RepeatMode::Off   => rspotify::model::RepeatState::Off,
+                RepeatMode::Queue => rspotify::model::RepeatState::Context,
+                RepeatMode::Track => rspotify::model::RepeatState::Track,
+            },
+            is_local: false,
+            ..PlaybackState::default()
+        })
+    }
 }

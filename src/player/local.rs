@@ -444,6 +444,41 @@ impl AudioPlayer for LocalPlayer {
         let uris = self.queue.iter().map(|t| t.uri.clone()).collect();
         (uris, self.current_idx)
     }
+
+    fn current_playback_state(&self) -> Option<crate::ui::PlaybackState> {
+        let t = self.current_track_meta()?;
+        Some(crate::ui::PlaybackState {
+            title: if t.name.is_empty() {
+                t.path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Unknown Track")
+                    .to_string()
+            } else {
+                t.name.clone()
+            },
+            artist: t.artist.clone(),
+            album: if t.album.is_empty() {
+                "Local Archive".to_string()
+            } else {
+                t.album.clone()
+            },
+            path: t.path.to_str().map(|s| s.to_string()),
+            cover_path: t.cover_path.as_ref().and_then(|p| p.to_str()).map(|s| s.to_string()),
+            duration_ms: t.duration_ms,
+            is_playing: self.is_playing,
+            volume: self.volume,
+            shuffle: self.shuffle,
+            repeat: match self.repeat {
+                super::RepeatMode::Off   => rspotify::model::RepeatState::Off,
+                super::RepeatMode::Queue => rspotify::model::RepeatState::Context,
+                super::RepeatMode::Track => rspotify::model::RepeatState::Track,
+            },
+            is_local: true,
+            art_url: None,
+            ..crate::ui::PlaybackState::default()
+        })
+    }
 }
 
 #[allow(dead_code)]
