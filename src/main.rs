@@ -6,6 +6,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
+mod wizard;
 
 mod app;
 mod audio_sink;
@@ -32,30 +33,6 @@ fn prompt(label: &str) -> String {
     buf.trim().to_string()
 }
 
-
-// Deprecated
-fn run_setup(cfg: &mut config::AppConfig) -> Result<()> {
-    println!("isi-music — First-time setup");
-    println!("────────────────────────────────────────");
-    println!("Create a Spotify app at: https://developer.spotify.com/dashboard");
-    println!("Set the redirect URI to: http://127.0.0.1:8888/callback");
-    println!("No client secret needed — isi-music uses PKCE authentication.");
-    println!();
-
-    let client_id = loop {
-        let v = prompt("Client ID: ");
-        if !v.is_empty() { break v; }
-        println!("Cannot be empty.");
-    };
-
-    cfg.spotify.client_id = Some(client_id);
-    cfg.save()?;
-
-    println!();
-    println!("Saved to ~/.config/isi-music/config.toml");
-    println!();
-    Ok(())
-}
 
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
@@ -136,32 +113,6 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-fn run_discord_setup(cfg: &mut config::AppConfig) -> Result<()> {
-    println!();
-    println!("Discord Rich Presence (optional)");
-    println!("────────────────────────────────────────");
-    println!("Show the current track in your Discord activity status.");
-    println!();
-
-    let answer = prompt("Enable Discord Rich Presence? (y/n): ");
-    if !matches!(answer.to_lowercase().as_str(), "y" | "yes") {
-        cfg.discord.enabled = Some(false);
-        cfg.save()?;
-        println!("Discord Rich Presence disabled. You can enable it later by editing");
-        println!("~/.config/isi-music/config.toml  (set discord.enabled = true)");
-        println!();
-        return Ok(());
-    }
-
-    cfg.discord.enabled = Some(true);
-    cfg.save()?;
-
-    println!();
-    println!("Discord Rich Presence enabled!");
-    println!();
     Ok(())
 }
 
@@ -286,6 +237,13 @@ fn main() -> Result<()> {
     }
 
     let ipc_cmd: Option<String> = match arg1 {
+         Some("setup") => {
+            return tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(wizard::run());
+        }
+
         Some(cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-"
                     | "--status" | "--ls" | "--liked" | "--quit-daemon")) => {
             let c = cmd.trim_start_matches('-');
@@ -322,8 +280,17 @@ fn main() -> Result<()> {
             .block_on(run_lastfm_setup(&mut cfg));
     }
 
-    if cfg.needs_setup() { run_setup(&mut cfg)?; }
-    if cfg.discord.enabled.is_none() { run_discord_setup(&mut cfg)?; }
+    let config_missing = crate::config::config_path()
+        .map(|p| !p.exists())
+        .unwrap_or(true);
+
+
+    if config_missing {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(wizard::run())?;
+     }
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)

@@ -73,10 +73,6 @@ impl AppConfig {
         std::fs::write(&path, content)?;
         Ok(())
     }
-
-    pub fn needs_setup(&self) -> bool {
-        false
-    }
 }
 
 pub fn config_path() -> Result<PathBuf> {
