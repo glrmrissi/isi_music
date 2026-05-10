@@ -6,10 +6,10 @@ use tokio::net::UnixListener;
 use tracing::{info, warn};
 
 use crate::config::AppConfig;
-use crate::ipc::socket_path;
-use crate::lastfm::LastfmClient;
+use crate::utils::ipc::socket_path;
+use crate::utils::lastfm::LastfmClient;
 #[cfg(feature = "mpris")]
-use crate::mpris::{MprisCmd, MprisState};
+use crate::utils::mpris::{MprisCmd, MprisState};
 use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
 
@@ -42,7 +42,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         _ => None,
     };
 
-    let mut spotify = SpotifyClient::new().await?;
+    let mut spotify = crate::spotify::SpotifyClient::new().await?;
     let token = spotify
         .get_access_token()
         .await
@@ -51,7 +51,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
 
     // MPRIS D-Bus (optional — gracefully degrades if D-Bus unavailable)
     #[cfg(feature = "mpris")]
-    let mut mpris = match crate::mpris::spawn().await {
+    let mut mpris = match crate::utils::mpris::spawn().await {
         Ok(h) => { info!("MPRIS D-Bus server started"); Some(h) }
         Err(e) => { warn!("MPRIS unavailable: {e}"); None }
     };

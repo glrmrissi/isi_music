@@ -6,24 +6,17 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
-mod wizard;
 
 mod app;
-mod audio_sink;
 mod config;
-mod daemon;
-mod discord;
-mod ipc;
-mod lastfm;
-#[cfg(feature = "mpris")]
-mod mpris;
-mod player;
 mod spotify;
+mod daemon;
+mod player;
 mod ui;
-mod theme;
+mod utils;
+mod audio;
 
 use app::App;
-use theme::Theme;
 
 fn prompt(label: &str) -> String {
     print!("{}", label);
@@ -73,7 +66,7 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     };
 
     println!("Requesting authorization token...");
-    let token = lastfm::LastfmClient::get_auth_token(&api_key).await?;
+    let token = utils::lastfm::LastfmClient::get_auth_token(&api_key).await?;
 
     let auth_url = format!(
         "https://www.last.fm/api/auth/?api_key={}&token={}",
@@ -95,7 +88,7 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     print!("Finalizing Last.fm authentication...");
     std::io::stdout().flush().ok();
 
-    match lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
+    match utils::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
         Ok(session_key) => {
             cfg.lastfm.api_key = Some(api_key);
             cfg.lastfm.api_secret = Some(api_secret);
@@ -241,7 +234,7 @@ fn main() -> Result<()> {
             return tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(wizard::run());
+                .block_on(utils::wizard::run());
         }
 
         Some(cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-"
@@ -268,7 +261,7 @@ fn main() -> Result<()> {
         let response = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(ipc::send_command(&cmd))?;
+            .block_on(utils::ipc::send_command(&cmd))?;
         println!("{response}");
         return Ok(());
     }
@@ -289,7 +282,7 @@ fn main() -> Result<()> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(wizard::run())?;
+            .block_on(utils::wizard::run())?;
      }
 
     tokio::runtime::Builder::new_multi_thread()
@@ -306,8 +299,8 @@ fn main() -> Result<()> {
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("isi_music=warn".parse()?),)
                 .init();
 
-            let theme = Theme::load();
-            let theme_rx = Theme::watch()?;
+            let theme = utils::theme::Theme::load();
+            let theme_rx = utils::theme::Theme::watch()?;
             let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
             enable_raw_mode()?;

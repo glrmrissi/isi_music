@@ -14,7 +14,7 @@ use librespot_playback::{
     mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
-use crate::audio_sink::{AnalyzerSink, N_BANDS};
+use crate::audio::audio_sink::{AnalyzerSink, N_BANDS};
 use crate::spotify::TrackSummary;
 use crate::config;
 use crate::ui::PlaybackState;

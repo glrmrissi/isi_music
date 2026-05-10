@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode, TrackInfo};
-use crate::audio_sink::{AnalyzingSource, N_BANDS};
+use crate::audio::audio_sink::{AnalyzingSource, N_BANDS};
 use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]

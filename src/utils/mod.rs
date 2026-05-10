@@ -1,0 +1,8 @@
+#[cfg(feature = "mpris")]
+pub mod mpris;
+pub mod theme;
+pub mod lastfm;
+pub mod lyrics;
+pub mod wizard;
+pub mod ipc;
+pub mod discord;
