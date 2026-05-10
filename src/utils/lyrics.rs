@@ -23,9 +23,7 @@ impl LyricsData {
         if !self.is_synced || self.lines.is_empty() {
             return None;
         }
-        self.lines
-            .iter()
-            .rposition(|l| l.time_ms <= progress_ms)
+        self.lines.iter().rposition(|l| l.time_ms <= progress_ms)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -90,18 +88,18 @@ fn parse_timestamp(s: &str) -> Option<u64> {
     let s = s.trim();
     let colon = s.find(':')?;
     let mm: u64 = s[..colon].trim().parse().ok()?;
-
     let rest = &s[colon + 1..];
-    let (ss_str, cs): (&str, u64) = if let Some(dot) = rest.find('.') {
+
+    let (ss_str, cs_ms): (&str, u64) = if let Some(dot) = rest.find('.') {
         let cs_str = &rest[dot + 1..];
         let cs: u64 = cs_str.parse().unwrap_or(0);
-        let cs_ms = match cs_str.len() {
+        let ms = match cs_str.len() {
             1 => cs * 100,
             2 => cs * 10,
             3 => cs,
             _ => cs * 10,
         };
-        (&rest[..dot], cs_ms)
+        (&rest[..dot], ms)
     } else if let Some(c2) = rest.find(':') {
         let cs: u64 = rest[c2 + 1..].trim().parse().unwrap_or(0);
         (&rest[..c2], cs * 10)
@@ -110,7 +108,7 @@ fn parse_timestamp(s: &str) -> Option<u64> {
     };
 
     let ss: u64 = ss_str.trim().parse().ok()?;
-    Some(mm * 60_000 + ss * 1_000 + cs)
+    Some(mm * 60_000 + ss * 1_000 + cs_ms)
 }
 
 fn parse_plain(text: &str) -> LyricsData {
@@ -128,21 +126,27 @@ fn parse_plain(text: &str) -> LyricsData {
     }
 }
 
+
 pub struct LyricsCache {
     conn: Connection,
 }
 
 impl LyricsCache {
-    pub fn open(path: &PathBuf) -> Result<Self> {
-        let conn = Connection::open(path)?;
+    pub fn open(db_path: &PathBuf) -> Result<Self> {
+        let conn = Connection::open(db_path)?;
+
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS lyrics_cache (
-                uri         TEXT    PRIMARY KEY,
-                lyrics_json TEXT    NOT NULL,
-                is_synced   INTEGER DEFAULT 0,
-                saved_at    INTEGER NOT NULL
-            );",
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous  = NORMAL;
+             CREATE TABLE IF NOT EXISTS lyrics_cache (
+                 uri         TEXT    PRIMARY KEY,
+                 lyrics_json TEXT    NOT NULL,
+                 is_synced   INTEGER NOT NULL DEFAULT 0,
+                 saved_at    INTEGER NOT NULL
+             );",
         )?;
+
+        tracing::info!("lyrics: tabela pronta em {}", db_path.display());
         Ok(Self { conn })
     }
 
@@ -161,7 +165,7 @@ impl LyricsCache {
         let json = match serde_json::to_string(data) {
             Ok(j) => j,
             Err(e) => {
-                warn!("lyrics: failed to serialize: {e}");
+                warn!("lyrics: falha ao serializar: {e}");
                 return;
             }
         };
@@ -175,7 +179,7 @@ impl LyricsCache {
              VALUES (?1, ?2, ?3, ?4)",
             params![uri, json, data.is_synced as i32, now],
         ) {
-            warn!("lyrics: cache write failed: {e}");
+            warn!("lyrics: falha ao gravar cache: {e}");
         }
     }
 }
@@ -217,6 +221,7 @@ async fn fetch_from_lrclib(
 
     None
 }
+
 
 #[derive(Default)]
 struct HandleInner {

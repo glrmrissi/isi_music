@@ -210,7 +210,6 @@ pub struct App {
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
     local_scan_total: usize,
     lyrics: crate::utils::lyrics::LyricsHandle,
-    last_lyrics_uri: String,
 }
 
 impl App {
@@ -240,22 +239,6 @@ impl App {
                 SpotifyClient::new_unauthenticated().await
             }
         };
-
-        let lyrics_db_path = {
-            let mut p = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            p.push("isi-music");
-            std::fs::create_dir_all(&p).ok();
-            p.push("lyrics.db");
-            p
-        };
-        let lyrics = crate::utils::lyrics::LyricsHandle::new(
-            lyrics_db_path,
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(8))
-                .build()
-                .unwrap_or_default(),
-        )
-        .expect("Failed to open lyrics cache");
 
         let volume = crate::config::load_volume();
 
@@ -291,6 +274,16 @@ impl App {
         };
 
         let db_path = crate::config::get_local_db_path();
+
+        // Lyrics: tabela lyrics_cache dentro do mesmo library.db
+        let lyrics = crate::utils::lyrics::LyricsHandle::new(
+            db_path.clone().into(),
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+                .unwrap_or_default(),
+        )
+        .expect("Failed to open lyrics cache");
 
         let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume, &db_path) {
             Ok(p) => Some(Box::new(p) as Box<dyn AudioPlayer>),
@@ -413,7 +406,6 @@ impl App {
             local_scan_rx: None,
             local_scan_total: 0,
             lyrics,
-            last_lyrics_uri: String::new(),
         })
     }
 
@@ -436,31 +428,37 @@ impl App {
 
             self.poll_local_scan();
 
+            if let Some(data) = self.lyrics.take() {
+                self.state.playback.lyrics_loading = false;
+                self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
+            } else if self.lyrics.is_loading() {
+                self.state.playback.lyrics_loading = true;
+            }
+
             if let Some(player) = &self.player {
                 if let Some(pb) = player.current_playback_state() {
                     let prev_title = self.state.playback.title.clone();
                     let progress = self.state.playback.progress_ms;
                     let radio_mode = self.state.playback.radio_mode;
 
-                    if let Some(data) = self.lyrics.take() {
-                        self.state.playback.lyrics_loading = false;
-                        self.state.playback.lyrics =
-                            if data.is_empty() { None } else { Some(data) };
-                    } else if self.lyrics.is_loading() {
-                        self.state.playback.lyrics_loading = true;
-                    }
-
                     if pb.is_local {
+                        let saved_lyrics         = self.state.playback.lyrics.take();
+                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
+                        let saved_lyrics_scroll  = self.state.playback.lyrics_scroll;
+
                         self.state.playback = pb;
-                        self.state.playback.progress_ms = progress;
-                        self.state.playback.radio_mode = radio_mode;
+                        self.state.playback.progress_ms    = progress;
+                        self.state.playback.radio_mode     = radio_mode;
+                        self.state.playback.lyrics         = saved_lyrics;
+                        self.state.playback.lyrics_loading = saved_lyrics_loading;
+                        self.state.playback.lyrics_scroll  = saved_lyrics_scroll;
 
                         if self.state.playback.title != prev_title {
                             self.state.album_art = None;
                             self.album_art_pending = None;
                             self.last_art_uri.clear();
 
-                            if let Some(cover_str) = &self.state.playback.cover_path.clone() {
+                            if let Some(cover_str) = self.state.playback.cover_path.as_deref() {
                                 let path = std::path::PathBuf::from(cover_str);
                                 if path.exists() {
                                     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -475,9 +473,9 @@ impl App {
                         }
                     } else {
                         self.state.playback.is_playing = pb.is_playing;
-                        self.state.playback.volume = pb.volume;
-                        self.state.playback.shuffle = pb.shuffle;
-                        self.state.playback.repeat = pb.repeat;
+                        self.state.playback.volume     = pb.volume;
+                        self.state.playback.shuffle    = pb.shuffle;
+                        self.state.playback.repeat     = pb.repeat;
                     }
                 }
             }
@@ -613,8 +611,14 @@ impl App {
                 self.sync_queue_display();
                 if self.player.is_none() {
                     if let Ok(current_pb) = self.spotify.fetch_playback().await {
-                        self.state.playback = current_pb.clone();
-                        self.art_url = current_pb.art_url;
+                        let saved_lyrics         = self.state.playback.lyrics.take();
+                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
+                        let saved_lyrics_scroll  = self.state.playback.lyrics_scroll;
+                        self.art_url             = current_pb.art_url.clone();
+                        self.state.playback      = current_pb;
+                        self.state.playback.lyrics         = saved_lyrics;
+                        self.state.playback.lyrics_loading = saved_lyrics_loading;
+                        self.state.playback.lyrics_scroll  = saved_lyrics_scroll;
                     }
                 }
             }
