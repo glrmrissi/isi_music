@@ -101,7 +101,7 @@ impl Default for LayoutNode {
         Self {
             direction: Some(SerializableDirection::Vertical),
             constraints: Some(vec![
-                Length(4),   // Header
+                Length(3),   // Header
                 Fill(1),     // Main body
                 Length(1),   // Progress/Marquee row
                 Length(1),   // Help/Status row
