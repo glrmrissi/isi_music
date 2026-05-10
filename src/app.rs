@@ -275,7 +275,6 @@ impl App {
 
         let db_path = crate::config::get_local_db_path();
 
-        // Lyrics: tabela lyrics_cache dentro do mesmo library.db
         let lyrics = crate::utils::lyrics::LyricsHandle::new(
             db_path.clone().into(),
             reqwest::Client::builder()
@@ -428,13 +427,6 @@ impl App {
 
             self.poll_local_scan();
 
-            if let Some(data) = self.lyrics.take() {
-                self.state.playback.lyrics_loading = false;
-                self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
-            } else if self.lyrics.is_loading() {
-                self.state.playback.lyrics_loading = true;
-            }
-
             if let Some(player) = &self.player {
                 if let Some(pb) = player.current_playback_state() {
                     let prev_title = self.state.playback.title.clone();
@@ -442,7 +434,7 @@ impl App {
                     let radio_mode = self.state.playback.radio_mode;
 
                     if pb.is_local {
-                        let saved_lyrics         = self.state.playback.lyrics.take();
+                        let saved_lyrics = self.state.playback.lyrics.take();
                         let saved_lyrics_loading = self.state.playback.lyrics_loading;
                         let saved_lyrics_scroll  = self.state.playback.lyrics_scroll;
 
@@ -508,6 +500,14 @@ impl App {
                     }
                 }
             }
+
+            if let Some(data) = self.lyrics.take() {
+                self.state.playback.lyrics_loading = false;
+                self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
+            } else if self.lyrics.is_loading() {
+                self.state.playback.lyrics_loading = true;
+            }
+
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {

@@ -146,7 +146,6 @@ impl LyricsCache {
              );",
         )?;
 
-        tracing::info!("lyrics: tabela pronta em {}", db_path.display());
         Ok(Self { conn })
     }
 
@@ -165,7 +164,7 @@ impl LyricsCache {
         let json = match serde_json::to_string(data) {
             Ok(j) => j,
             Err(e) => {
-                warn!("lyrics: falha ao serializar: {e}");
+                warn!("lyrics: failed to serialize: {e}");
                 return;
             }
         };
@@ -179,7 +178,7 @@ impl LyricsCache {
              VALUES (?1, ?2, ?3, ?4)",
             params![uri, json, data.is_synced as i32, now],
         ) {
-            warn!("lyrics: falha ao gravar cache: {e}");
+            warn!("lyrics: failed to write cache: {e}");
         }
     }
 }
@@ -197,7 +196,7 @@ async fn fetch_from_lrclib(
 
     let resp = http
         .get(&url)
-        .header("User-Agent", "isi-music/0.1 (https://github.com/your/repo)")
+        .header("User-Agent", "isi-music/0.1 (https://github.com/glrmrissi/isi-music)")
         .send()
         .await
         .ok()?;
