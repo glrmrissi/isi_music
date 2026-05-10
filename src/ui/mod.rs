@@ -8,8 +8,8 @@ use ratatui::{
 use rspotify::model::RepeatState;
 use ratatui_image::{protocol::StatefulProtocol};
 use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
-use crate::theme::Theme;
-use crate::theme::{LayoutNode, UiWidget};
+use crate::utils::theme::Theme;
+use crate::utils::theme::{LayoutNode, UiWidget};
 
 pub struct AlbumArtData {
     pub image_state: Option<StatefulProtocol>,
@@ -31,6 +31,10 @@ pub struct PlaybackState {
     pub cover_path: Option<String>, 
     pub is_local: bool,
     pub radio_mode: bool,
+    pub lyrics: Option<crate::utils::lyrics::LyricsData>,
+    pub lyrics_scroll: usize,
+    pub lyrics_loading: bool,
+
 }
 
 impl Default for PlaybackState {
@@ -50,6 +54,10 @@ impl Default for PlaybackState {
             cover_path: None, 
             is_local: false,
             radio_mode: false,
+            lyrics: None,
+            lyrics_scroll: 0,
+            lyrics_loading: false,
+
         }
     }
 }
@@ -376,6 +384,7 @@ pub struct UiState {
     pub show_visualizer: bool,
     pub track_sort_by: TrackSortBy,
     pub sorted_track_indices: Vec<usize>,
+    pub show_lyrics: bool,
 }
 
 impl UiState {
@@ -429,6 +438,7 @@ impl UiState {
             show_visualizer: true,
             track_sort_by: TrackSortBy::Default,
             sorted_track_indices: Vec::new(),
+            show_lyrics: false,
         }
     }
 
@@ -1057,55 +1067,58 @@ impl Ui {
         frame.render_stateful_widget(list, area, &mut state.playlist_list);
     }
 
-    fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+     fn render_now_playing(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
-
+ 
         let accent = if focused {
             self.theme.border_active
         } else {
             self.theme.border_inactive
         };
-
+ 
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(accent));
-
+ 
         let inner = block.inner(area);
-
         frame.render_widget(block, area);
-
+ 
         if inner.width < 10 || inner.height < 5 {
             return;
         }
-
+ 
         let root = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(18), 
-                Constraint::Min(0),     
+                Constraint::Length(18), // top info
+                Constraint::Length(8),  // lyrics
+                Constraint::Min(0),     // visualizer
             ])
             .split(inner);
-
+ 
         let top_area = Rect {
             x: root[0].x + 2,
             y: root[0].y + 1,
             width: root[0].width.saturating_sub(4),
             height: root[0].height.saturating_sub(1),
         };
-
-        let viz_area = Rect {
-            x: root[1].x + 1,
+ 
+        let lyrics_area = Rect {
+            x: root[1].x + 2,
             y: root[1].y,
-            width: root[1].width.saturating_sub(2),
+            width: root[1].width.saturating_sub(4),
             height: root[1].height,
         };
 
-        let art_size = top_area
-            .height
-            .min(18)
-            .min(top_area.width / 4)
-            .max(12);
-
+        let viz_area = Rect {
+            x: root[2].x + 1,
+            y: root[2].y,
+            width: root[2].width.saturating_sub(2),
+            height: root[2].height,
+        };
+        
+        let art_size = top_area.height.min(18).min(top_area.width / 4).max(12);
+ 
         let top_cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1114,10 +1127,10 @@ impl Ui {
                 Constraint::Min(0),
             ])
             .split(top_area);
-
+ 
         let art_area  = top_cols[0];
         let info_area = top_cols[2];
-
+ 
         let info_grid = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1125,16 +1138,16 @@ impl Ui {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Length(1),
+                Constraint::Length(2),
                 Constraint::Min(0),
             ])
             .split(info_area);
-
+ 
         let title_area    = info_grid[0];
         let artist_area   = info_grid[1];
         let album_area    = info_grid[2];
         let progress_area = info_grid[4];
-
+ 
         if let Some(art) = &mut state.album_art {
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
@@ -1144,60 +1157,64 @@ impl Ui {
                 );
             }
         }
-
+ 
         let pb = &state.playback;
-
+ 
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(Span::styled(
-                    pb.title.clone(),
-                    Style::default()
-                        .fg(self.theme.text_primary)
-                        .add_modifier(Modifier::BOLD),
-                )),
-            ]),
+            Paragraph::new(vec![Line::from(Span::styled(
+                pb.title.clone(),
+                Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD),
+            ))]),
             title_area,
         );
-
+ 
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        "Artist  ",
-                        Style::default()
-                            .fg(self.theme.border_inactive)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(
-                        pb.artist.clone(),
-                        Style::default().fg(self.theme.text_primary),
-                    ),
-                ]),
-            ]),
+            Paragraph::new(vec![Line::from(vec![
+                Span::styled(
+                    "Artist  ",
+                    Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM),
+                ),
+                Span::styled(pb.artist.clone(), Style::default().fg(self.theme.text_primary)),
+            ])]),
             artist_area,
         );
-
+ 
+        let album_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(0), Constraint::Length(12)])
+            .split(album_area);
+ 
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        "Album   ",
-                        Style::default()
-                            .fg(self.theme.border_inactive)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(
-                        pb.album.clone(),
-                        Style::default().fg(self.theme.text_primary),
-                    ),
-                ]),
-            ]),
-            album_area,
+            Paragraph::new(vec![Line::from(vec![
+                Span::styled(
+                    "Album   ",
+                    Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM),
+                ),
+                Span::styled(pb.album.clone(), Style::default().fg(self.theme.text_primary)),
+            ])]),
+            album_split[0],
         );
-
+ 
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(vec![Span::styled(
+                format!(" Vol: {}% ", pb.volume),
+                Style::default().fg(self.theme.border_inactive),
+            )])])
+            .alignment(ratatui::layout::Alignment::Right),
+            album_split[1],
+        );
+ 
         self.render_progress(frame, &state.playback, progress_area);
+ 
+        if state.show_lyrics {
+            self.render_lyrics(frame, state, lyrics_area);
+        }
+ 
         self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area, state);
+        
+        // Paragraph::new(Line::from(Span::styled("[N/P] Skip  [PageDown/Up] Move Lyrics  [V] Vizualizer  [Y] Lyrics  [S] Shuffle  [R] Repeat  [/] Search  [L] Like  [+/-] Vol", Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM))));
     }
+
 
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
@@ -1220,6 +1237,113 @@ impl Ui {
 
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
     }
+
+    fn render_lyrics(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        use ratatui::widgets::Wrap;
+
+        let pb = &state.playback;
+        let block = Block::default();
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner.width < 4 || inner.height < 2 {
+            return;
+        }
+
+        let Some(lyrics) = &pb.lyrics else {
+            let msg = if pb.lyrics_loading {
+                "Loading lyrics..."
+            } else if pb.title.is_empty() {
+                "No track playing"
+            } else {
+                "No lyrics found"
+            };
+            
+            let vertical_center = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(45),
+                    Constraint::Length(1),
+                    Constraint::Min(0),
+                ])
+                .split(inner);
+
+            frame.render_widget(
+                Paragraph::new(msg)
+                    .style(Style::default().fg(self.theme.border_inactive))
+                    .alignment(Alignment::Center),
+                vertical_center[1],
+            );
+            return;
+        };
+
+        let visible_rows = inner.height as usize;
+
+        if lyrics.is_synced {
+            let active = lyrics.active_idx(pb.progress_ms).unwrap_or(0);
+
+            let half = visible_rows / 2;
+            let start_idx = active.saturating_sub(half);
+            let lines_to_render = lyrics.lines.iter()
+                .skip(start_idx)
+                .take(visible_rows);
+
+            let items: Vec<ListItem> = lines_to_render
+                .enumerate()
+                .map(|(rel, line)| {
+                    let abs = start_idx + rel;
+                    if abs == active {
+                        ListItem::new(Line::from(Span::styled(
+                            format!("{}", line.text),
+                            Style::default()
+                                .fg(self.theme.border_active)
+                                .add_modifier(Modifier::BOLD),
+                        )).alignment(Alignment::Center))
+                    } else {
+                        let distance = (abs as isize - active as isize).unsigned_abs();
+                        let style = if distance <= 2 {
+                            Style::default().fg(self.theme.text_primary)
+                        } else {
+                            Style::default()
+                                .fg(self.theme.border_inactive)
+                                .add_modifier(Modifier::DIM)
+                        };
+                        ListItem::new(Line::from(Span::styled(
+                            format!("{}", line.text),
+                            style,
+                        )).alignment(Alignment::Center))
+                    }
+                })
+                .collect();
+
+            let list = List::new(items);
+            frame.render_widget(list, inner);
+
+        } else {
+            let total = lyrics.lines.len();
+            let max_scroll = total.saturating_sub(visible_rows);
+            let scroll = pb.lyrics_scroll.min(max_scroll);
+
+            let text_lines: Vec<Line> = lyrics.lines[scroll..]
+                .iter()
+                .take(visible_rows)
+                .map(|l| {
+                    Line::from(Span::styled(
+                        format!("{}", l.text),
+                        Style::default().fg(self.theme.text_primary),
+                    )).alignment(Alignment::Center)
+                })
+                .collect();
+
+            frame.render_widget(
+                Paragraph::new(text_lines)
+                    .alignment(Alignment::Center)
+                    .wrap(Wrap { trim: false }),
+                inner,
+            );
+        }
+    }
+
 
     fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
@@ -1519,7 +1643,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.2.11".to_string()
+            "isi-music v0.3.0".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };

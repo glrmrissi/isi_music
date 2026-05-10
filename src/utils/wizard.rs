@@ -6,7 +6,7 @@ use console::{Term, style};
 use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
 
 use crate::config::{AppConfig, LastfmConfig};
-use crate::theme::Theme;
+use crate::utils::theme::Theme;
 
 struct Preset {
     name: &'static str,
@@ -285,7 +285,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
             style("Running Last.fm auth flow — a browser window will open.").dim()
         );
 
-        let token = crate::lastfm::LastfmClient::get_auth_token(&api_key).await?;
+        let token = crate::utils::lastfm::LastfmClient::get_auth_token(&api_key).await?;
         let auth_url = format!(
             "https://www.last.fm/api/auth/?api_key={}&token={}",
             api_key, token
@@ -302,7 +302,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         print!("  Finalising… ");
         io::stdout().flush().ok();
 
-        match crate::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
+        match crate::utils::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
             Ok(session_key) => {
                 cfg.lastfm.session_key = Some(session_key);
                 println!("{}", style("✓").green());
