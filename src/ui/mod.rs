@@ -1135,6 +1135,7 @@ impl Ui {
         let album_area    = info_grid[2];
         let progress_area = info_grid[4];
 
+
         if let Some(art) = &mut state.album_art {
             if let Some(img_state) = &mut art.image_state {
                 frame.render_stateful_widget(
@@ -1177,6 +1178,14 @@ impl Ui {
             artist_area,
         );
 
+        let album_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(0),     
+                Constraint::Length(12), 
+            ])
+            .split(album_area);
+
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
@@ -1192,7 +1201,20 @@ impl Ui {
                     ),
                 ]),
             ]),
-            album_area,
+            album_split[0],
+        );
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!(" Vol: {}% ", pb.volume),
+                        Style::default().fg(self.theme.border_inactive)
+                    ),
+                ]),
+            ])
+            .alignment(ratatui::layout::Alignment::Right),
+            album_split[1], 
         );
 
         self.render_progress(frame, &state.playback, progress_area);
