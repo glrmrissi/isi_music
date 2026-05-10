@@ -7,12 +7,308 @@ use rspotify::{
         RepeatState, TrackId,
     },
 };
+use rusqlite::params;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config;
 use crate::ui::PlaybackState;
 use super::auth::SpotifyAuth;
 
+#[derive(Clone)]
+struct SearchCache {
+    store: Arc<RwLock<HashMap<String, (Instant, FullSearchResults)>>>,
+    ttl: Duration,
+    db_path: String,
+}
+
+impl SearchCache {
+    fn new(ttl_seconds: u64) -> Self {
+        let db_path = crate::config::get_local_db_path();
+        let ttl = Duration::from_secs(ttl_seconds);
+
+        let preloaded = Self::load_from_db_sync(&db_path, ttl).unwrap_or_else(|e| {
+            warn!("Search cache: could not load from disk: {e}");
+            HashMap::new()
+        });
+
+        Self {
+            store: Arc::new(RwLock::new(preloaded)),
+            ttl,
+            db_path,
+        }
+    }
+
+    fn unix_now() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    fn open_conn(db_path: &str) -> rusqlite::Result<rusqlite::Connection> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE IF NOT EXISTS search_cache (
+                 key      TEXT PRIMARY KEY,
+                 data     TEXT NOT NULL,
+                 saved_at INTEGER NOT NULL
+             );",
+        )?;
+        Ok(conn)
+    }
+
+    fn load_from_db_sync(
+        db_path: &str,
+        ttl: Duration,
+    ) -> anyhow::Result<HashMap<String, (Instant, FullSearchResults)>> {
+        let conn = Self::open_conn(db_path)?;
+        let ttl_secs = ttl.as_secs() as i64;
+        let now = Self::unix_now();
+
+        conn.execute(
+            "DELETE FROM search_cache WHERE (? - saved_at) >= ?",
+            params![now, ttl_secs],
+        )?;
+
+        let mut stmt = conn.prepare("SELECT key, data FROM search_cache")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut map = HashMap::new();
+        for row in rows.flatten() {
+            let (key, data) = row;
+            if let Ok(cached) = serde_json::from_str::<CachedSearch>(&data) {
+                map.insert(key, (Instant::now(), FullSearchResults::from(cached)));
+            }
+        }
+        info!("Search cache: loaded {} entries from disk", map.len());
+        Ok(map)
+    }
+
+    async fn get(&self, key: &str) -> Option<FullSearchResults> {
+        let guard = self.store.read().await;
+        if let Some((ts, results)) = guard.get(key) {
+            if ts.elapsed() < self.ttl {
+                return Some(results.clone());
+            }
+        }
+        None
+    }
+
+    async fn insert(&self, key: String, results: FullSearchResults) {
+        self.store.write().await.insert(key.clone(), (Instant::now(), results.clone()));
+
+        let db_path = self.db_path.clone();
+        let now = Self::unix_now();
+        let cached: CachedSearch = results.into();
+        tokio::task::spawn_blocking(move || {
+            let Ok(data) = serde_json::to_string(&cached) else { return; };
+            let Ok(conn) = SearchCache::open_conn(&db_path) else { return; };
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO search_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
+                params![key, data, now],
+            );
+        });
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedSearch {
+    tracks:          Vec<CachedTrack>,
+    artists:         Vec<CachedArtist>,
+    albums:          Vec<CachedAlbum>,
+    playlists:       Vec<CachedPlaylist>,
+    tracks_total:    u32,
+    artists_total:   u32,
+    albums_total:    u32,
+    playlists_total: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedTrack    { name: String, artist: String, album: String, duration_ms: u64, uri: String, cover_path: Option<String> }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedArtist   { id: String, name: String, uri: String, genres: String }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedAlbum    { id: String, name: String, artist: String, uri: String, total_tracks: u32 }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedPlaylist { id: String, name: String, uri: String, total_tracks: u32, art_url: Option<String> }
+
+impl From<FullSearchResults> for CachedSearch {
+    fn from(r: FullSearchResults) -> Self {
+        Self {
+            tracks:          r.tracks.into_iter().map(|t| CachedTrack { name: t.name, artist: t.artist, album: t.album, duration_ms: t.duration_ms, uri: t.uri, cover_path: t.cover_path }).collect(),
+            artists:         r.artists.into_iter().map(|a| CachedArtist { id: a.id, name: a.name, uri: a.uri, genres: a.genres }).collect(),
+            albums:          r.albums.into_iter().map(|a| CachedAlbum { id: a.id, name: a.name, artist: a.artist, uri: a.uri, total_tracks: a.total_tracks }).collect(),
+            playlists:       r.playlists.into_iter().map(|p| CachedPlaylist { id: p.id, name: p.name, uri: p.uri, total_tracks: p.total_tracks, art_url: p.art_url }).collect(),
+            tracks_total:    r.tracks_total,
+            artists_total:   r.artists_total,
+            albums_total:    r.albums_total,
+            playlists_total: r.playlists_total,
+        }
+    }
+}
+
+impl From<CachedSearch> for FullSearchResults {
+    fn from(c: CachedSearch) -> Self {
+        Self {
+            tracks:          c.tracks.into_iter().map(|t| TrackSummary { name: t.name, artist: t.artist, album: t.album, duration_ms: t.duration_ms, uri: t.uri, cover_path: t.cover_path }).collect(),
+            artists:         c.artists.into_iter().map(|a| ArtistSummary { id: a.id, name: a.name, uri: a.uri, genres: a.genres }).collect(),
+            albums:          c.albums.into_iter().map(|a| AlbumSummary { id: a.id, name: a.name, artist: a.artist, uri: a.uri, total_tracks: a.total_tracks }).collect(),
+            playlists:       c.playlists.into_iter().map(|p| PlaylistSummary { id: p.id, name: p.name, uri: p.uri, total_tracks: p.total_tracks, art_url: p.art_url }).collect(),
+            tracks_total:    c.tracks_total,
+            artists_total:   c.artists_total,
+            albums_total:    c.albums_total,
+            playlists_total: c.playlists_total,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LibraryCache {
+    db_path: String,
+}
+
+impl LibraryCache {
+    pub async fn new() -> Self {
+        let db_path = crate::config::get_local_db_path();
+        let cache = Self { db_path: db_path.clone() };
+        
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 CREATE TABLE IF NOT EXISTS library_cache (...);"
+            )
+        }).await;
+        
+        cache
+    }
+
+    fn open(&self) -> rusqlite::Result<rusqlite::Connection> {
+        let conn = rusqlite::Connection::open(&self.db_path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        Ok(conn)
+    }
+
+    fn unix_now() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    pub fn get_tracks(&self, key: &str) -> Option<(Vec<TrackSummary>, u32)> {
+        let conn = self.open().ok()?;
+        let (data, total): (String, u32) = conn
+            .query_row(
+                "SELECT data, total FROM library_cache WHERE key = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()?;
+        let rows: Vec<CachedTrack> = serde_json::from_str(&data).ok()?;
+        let tracks = rows
+            .into_iter()
+            .map(|t| TrackSummary {
+                name: t.name, artist: t.artist, album: t.album,
+                duration_ms: t.duration_ms, uri: t.uri, cover_path: t.cover_path,
+            })
+            .collect();
+        Some((tracks, total))
+    }
+
+    pub fn save_tracks(&self, key: &str, tracks: &[TrackSummary], total: u32) {
+        let rows: Vec<CachedTrack> = tracks
+            .iter()
+            .map(|t| CachedTrack {
+                name: t.name.clone(), artist: t.artist.clone(), album: t.album.clone(),
+                duration_ms: t.duration_ms, uri: t.uri.clone(), cover_path: t.cover_path.clone(),
+            })
+            .collect();
+        let Ok(data) = serde_json::to_string(&rows) else { return };
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO library_cache (key, data, total, saved_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![key, data, total, Self::unix_now()],
+        );
+    }
+
+    pub fn get_albums(&self) -> Option<(Vec<AlbumSummary>, u32)> {
+        let conn = self.open().ok()?;
+        let (data, total): (String, u32) = conn
+            .query_row(
+                "SELECT data, total FROM library_cache WHERE key = 'albums'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()?;
+        let rows: Vec<CachedAlbum> = serde_json::from_str(&data).ok()?;
+        let albums = rows
+            .into_iter()
+            .map(|a| AlbumSummary { id: a.id, name: a.name, artist: a.artist, uri: a.uri, total_tracks: a.total_tracks })
+            .collect();
+        Some((albums, total))
+    }
+
+    pub fn save_albums(&self, albums: &[AlbumSummary], total: u32) {
+        let rows: Vec<CachedAlbum> = albums
+            .iter()
+            .map(|a| CachedAlbum { id: a.id.clone(), name: a.name.clone(), artist: a.artist.clone(), uri: a.uri.clone(), total_tracks: a.total_tracks })
+            .collect();
+        let Ok(data) = serde_json::to_string(&rows) else { return };
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO library_cache (key, data, total, saved_at)
+             VALUES ('albums', ?1, ?2, ?3)",
+            params![data, total, Self::unix_now()],
+        );
+    }
+
+    pub fn get_artists(&self) -> Option<Vec<ArtistSummary>> {
+        let conn = self.open().ok()?;
+        let (data,): (String,) = conn
+            .query_row(
+                "SELECT data FROM library_cache WHERE key = 'artists'",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .ok()?;
+        let rows: Vec<CachedArtist> = serde_json::from_str(&data).ok()?;
+        Some(rows.into_iter().map(|a| ArtistSummary { id: a.id, name: a.name, uri: a.uri, genres: a.genres }).collect())
+    }
+
+    pub fn save_artists(&self, artists: &[ArtistSummary]) {
+        let rows: Vec<CachedArtist> = artists
+            .iter()
+            .map(|a| CachedArtist { id: a.id.clone(), name: a.name.clone(), uri: a.uri.clone(), genres: a.genres.clone() })
+            .collect();
+        let Ok(data) = serde_json::to_string(&rows) else { return };
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO library_cache (key, data, total, saved_at)
+             VALUES ('artists', ?1, 0, ?2)",
+            params![data, Self::unix_now()],
+        );
+    }
+
+    pub fn invalidate(&self, key: &str) {
+        if let Ok(conn) = self.open() {
+            let _ = conn.execute(
+                "DELETE FROM library_cache WHERE key = ?1",
+                params![key],
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct PlaylistSummary {
     pub id: String,
     pub name: String,
@@ -32,6 +328,7 @@ pub struct TrackSummary {
     pub cover_path: Option<String>
 }
 
+#[derive(Clone, Debug)]
 pub struct ArtistSummary {
     pub id: String,
     pub name: String,
@@ -39,6 +336,7 @@ pub struct ArtistSummary {
     pub genres: String,
 }
 
+#[derive(Clone, Debug)]
 pub struct AlbumSummary {
     pub id: String,
     pub name: String,
@@ -47,6 +345,7 @@ pub struct AlbumSummary {
     pub total_tracks: u32,
 }
 
+#[derive(Clone, Debug)]
 pub struct ShowSummary {
     pub id: String,
     pub name: String,
@@ -56,6 +355,7 @@ pub struct ShowSummary {
     pub total_episodes: u32,
 }
 
+#[derive(Clone, Debug)]
 pub struct FullSearchResults {
     pub tracks: Vec<TrackSummary>,
     pub artists: Vec<ArtistSummary>,
@@ -74,10 +374,12 @@ pub struct SpotifyClient {
     repeat_state: RepeatState,
     user_market: Option<String>,
     pub authenticated: bool,
+    search_cache: SearchCache,
+    pub library_cache: LibraryCache,
 }
 
 impl SpotifyClient {
-    pub fn new_unauthenticated() -> Self {
+    pub async fn new_unauthenticated() -> Self {
         let client = SpotifyAuth::build_client().unwrap_or_else(|_| {
             let creds = rspotify::Credentials::new_pkce("dummy");
             let oauth = rspotify::OAuth {
@@ -94,6 +396,8 @@ impl SpotifyClient {
             repeat_state: RepeatState::Off,
             user_market: None,
             authenticated: false,
+            search_cache: SearchCache::new(600),
+            library_cache: LibraryCache::new().await,
         }
     }
 
@@ -103,7 +407,7 @@ impl SpotifyClient {
 
         if client_id.is_empty() || client_id == "your_client_id_here" {
             warn!("Spotify client_id is empty or default. Starting in unauthenticated mode.");
-            return Ok(Self::new_unauthenticated());
+            return Ok(Self::new_unauthenticated().await);
         }
         
         let mut client = SpotifyAuth::build_client()?;
@@ -178,6 +482,8 @@ impl SpotifyClient {
             repeat_state: RepeatState::Off,
             user_market: None,
             authenticated: true,
+            search_cache: SearchCache::new(600),
+            library_cache: LibraryCache::new().await,
         };
         spotify.user_market = spotify.fetch_user_market().await.ok();
         Ok(spotify)
@@ -206,6 +512,13 @@ impl SpotifyClient {
 
     pub async fn fetch_liked_tracks(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
         if !self.authenticated { return Ok((Vec::new(), 0)); }
+
+        let key = format!("liked:{offset}");
+        if let Some(cached) = self.library_cache.get_tracks(&key) {
+            info!("Library cache hit: liked songs offset={offset}");
+            return Ok(cached);
+        }
+
         let page = self
             .client
             .current_user_saved_tracks_manual(None, Some(50), Some(offset))
@@ -222,7 +535,6 @@ impl SpotifyClient {
                 .join(", ");
             let duration_ms = track.duration.num_milliseconds().try_into().unwrap_or(0u64);
             let uri = track.id.as_ref().map(|id| id.uri()).unwrap_or_default();
-            // None because spotify uses another field to show cover art
             let cover_path = None;
             tracks.push(TrackSummary {
                 name: track.name,
@@ -233,6 +545,7 @@ impl SpotifyClient {
                 cover_path
             });
         }
+        self.library_cache.save_tracks(&key, &tracks, total);
         Ok((tracks, total))
     }
 
@@ -277,6 +590,11 @@ impl SpotifyClient {
 
     pub async fn fetch_playlist_tracks(&self, playlist_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
         if !self.authenticated { return Ok((Vec::new(), 0)); }
+        let key = format!("playlist:{playlist_id}:{offset}");
+        if let Some(cached) = self.library_cache.get_tracks(&key) {
+            info!("Library cache hit: playlist {playlist_id} offset={offset}");
+            return Ok(cached);
+        }
         let token = self
             .get_access_token()
             .await
@@ -330,6 +648,7 @@ impl SpotifyClient {
             }
         }
 
+        self.library_cache.save_tracks(&key, &tracks, total);
         Ok((tracks, total))
     }
 
@@ -454,6 +773,13 @@ impl SpotifyClient {
     }
 
     async fn search_internal(&self, query: &str, search_type: &str, offset: u32, limit: u32) -> Result<FullSearchResults> {
+        let cache_key = format!("{}:{}:{}:{}", query, search_type, offset, limit);
+
+        if let Some(cached) = self.search_cache.get(&cache_key).await {
+            info!("Search cache hit: {}", query);
+            return Ok(cached);
+        }
+
         let token = self
             .get_access_token()
             .await
@@ -554,11 +880,18 @@ impl SpotifyClient {
             }
         }
 
-        Ok(FullSearchResults { tracks, artists, albums, playlists, tracks_total, artists_total, albums_total, playlists_total })
+        let results = FullSearchResults { tracks, artists, albums, playlists, tracks_total, artists_total, albums_total, playlists_total };
+        self.search_cache.insert(cache_key, results.clone()).await;
+        Ok(results)
     }
 
     pub async fn fetch_album_tracks(&self, album_id: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
         if !self.authenticated { return Ok((Vec::new(), 0)); }
+        let key = format!("album:{album_id}:{offset}");
+        if let Some(cached) = self.library_cache.get_tracks(&key) {
+            info!("Library cache hit: album {album_id} offset={offset}");
+            return Ok(cached);
+        }
         let token = self
             .get_access_token()
             .await
@@ -596,6 +929,7 @@ impl SpotifyClient {
             }
         }
 
+        self.library_cache.save_tracks(&key, &tracks, total);
         Ok((tracks, total))
     }
 
@@ -614,6 +948,12 @@ impl SpotifyClient {
 
     pub async fn fetch_saved_albums(&self, offset: u32) -> Result<(Vec<AlbumSummary>, u32)> {
         if !self.authenticated { return Ok((Vec::new(), 0)); }
+        if offset == 0 {
+            if let Some(cached) = self.library_cache.get_albums() {
+                info!("Library cache hit: saved albums");
+                return Ok(cached);
+            }
+        }
         let page = self
             .client
             .current_user_saved_albums_manual(None, Some(20), Some(offset))
@@ -633,11 +973,18 @@ impl SpotifyClient {
             let total_tracks = album.tracks.total;
             albums.push(AlbumSummary { id, name: album.name, artist, uri, total_tracks });
         }
+        if offset == 0 {
+            self.library_cache.save_albums(&albums, total);
+        }
         Ok((albums, total))
     }
 
     pub async fn fetch_followed_artists(&self) -> Result<Vec<ArtistSummary>> {
         if !self.authenticated { return Ok(Vec::new()); }
+        if let Some(cached) = self.library_cache.get_artists() {
+            info!("Library cache hit: followed artists");
+            return Ok(cached);
+        }
         let page = self
             .client
             .current_user_followed_artists(None, Some(50))
@@ -650,11 +997,17 @@ impl SpotifyClient {
             let genres = artist.genres.iter().take(2).map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
             artists.push(ArtistSummary { id, name, uri, genres });
         }
+        self.library_cache.save_artists(&artists);
         Ok(artists)
     }
 
     pub async fn fetch_artist_tracks(&self, artist_name: &str, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
         if !self.authenticated { return Ok((Vec::new(), 0)); }
+        let key = format!("artist:{artist_name}:{offset}");
+        if let Some(cached) = self.library_cache.get_tracks(&key) {
+            info!("Library cache hit: artist {artist_name} offset={offset}");
+            return Ok(cached);
+        }
         let token = self
             .get_access_token()
             .await
@@ -700,6 +1053,7 @@ impl SpotifyClient {
             }
         }
 
+        self.library_cache.save_tracks(&key, &tracks, total);
         Ok((tracks, total))
     }
 
@@ -967,7 +1321,7 @@ impl SpotifyClient {
                                     album: t["album"]["name"].as_str().unwrap_or_default().to_string(),
                                     duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
                                     uri,
-                                    cover_path: None, // None because spotify use another way to show cover art
+                                    cover_path: None,
                                 });
                             }
                         }

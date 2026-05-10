@@ -235,7 +235,7 @@ impl App {
             Ok(s) => s,
             Err(e) => {
                 warn!("Spotify unavailable ({e:#}), starting in local-only mode");
-                SpotifyClient::new_unauthenticated()
+                SpotifyClient::new_unauthenticated().await
             }
         };
 
