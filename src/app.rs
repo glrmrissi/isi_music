@@ -160,14 +160,14 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
     (title, artist, album, duration_ms, cover_art)
 }
 
-use crate::discord::DiscordRpc;
-use crate::lastfm::LastfmClient;
+use crate::utils::discord::DiscordRpc;
+use crate::utils::lastfm::LastfmClient;
 #[cfg(feature = "mpris")]
-use crate::mpris::{MprisCmd, MprisHandle, MprisState};
+use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
 use crate::player::NativePlayer;
 use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification, RepeatMode};
 use crate::spotify::SpotifyClient;
-use crate::theme::Theme;
+use crate::utils::theme::Theme;
 use crate::ui::{ActiveContent, AlbumArtData, Focus, SearchPanel, SearchResults, Ui, UiState};
 use rspotify::model::RepeatState;
 
@@ -209,6 +209,8 @@ pub struct App {
     spotify_streaming_disabled: bool,
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
     local_scan_total: usize,
+    lyrics: crate::utils::lyrics::LyricsHandle,
+    last_lyrics_uri: String,
 }
 
 impl App {
@@ -238,6 +240,22 @@ impl App {
                 SpotifyClient::new_unauthenticated().await
             }
         };
+
+        let lyrics_db_path = {
+            let mut p = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            p.push("isi-music");
+            std::fs::create_dir_all(&p).ok();
+            p.push("lyrics.db");
+            p
+        };
+        let lyrics = crate::utils::lyrics::LyricsHandle::new(
+            lyrics_db_path,
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+                .unwrap_or_default(),
+        )
+        .expect("Failed to open lyrics cache");
 
         let volume = crate::config::load_volume();
 
@@ -334,7 +352,7 @@ impl App {
         state.art_url = initial_art.clone();
 
         #[cfg(feature = "mpris")]
-        let mpris = match crate::mpris::spawn().await {
+        let mpris = match crate::utils::mpris::spawn().await {
             Ok(h) => {
                 tracing::info!("MPRIS D-Bus server started");
                 Some(h)
@@ -350,7 +368,7 @@ impl App {
                 .discord
                 .app_id
                 .as_deref()
-                .unwrap_or(crate::discord::DEFAULT_APP_ID);
+                .unwrap_or(crate::utils::discord::DEFAULT_APP_ID);
             DiscordRpc::spawn(app_id)
         } else {
             None
@@ -394,6 +412,8 @@ impl App {
             spotify_streaming_disabled: false,
             local_scan_rx: None,
             local_scan_total: 0,
+            lyrics,
+            last_lyrics_uri: String::new(),
         })
     }
 
@@ -421,6 +441,14 @@ impl App {
                     let prev_title = self.state.playback.title.clone();
                     let progress = self.state.playback.progress_ms;
                     let radio_mode = self.state.playback.radio_mode;
+
+                    if let Some(data) = self.lyrics.take() {
+                        self.state.playback.lyrics_loading = false;
+                        self.state.playback.lyrics =
+                            if data.is_empty() { None } else { Some(data) };
+                    } else if self.lyrics.is_loading() {
+                        self.state.playback.lyrics_loading = true;
+                    }
 
                     if pb.is_local {
                         self.state.playback = pb;
@@ -1118,6 +1146,15 @@ impl App {
                 }
             }
 
+            (KeyCode::Char('y') | KeyCode::Char('Y'), _) => {
+                self.state.show_lyrics = !self.state.show_lyrics;
+                self.state.status_msg = Some(if self.state.show_lyrics {
+                    "Lyrics panel on".to_string()
+                } else {
+                    "Lyrics panel off".to_string()
+                });
+            }
+
             (KeyCode::Char('c'), _)
                 if modifiers != KeyModifiers::CONTROL
                     && !self.state.fullscreen_player
@@ -1157,6 +1194,34 @@ impl App {
                     player.volume_down();
                     self.state.playback.volume = player.volume();
                 }
+            }
+
+            (KeyCode::PageDown, _)
+                if self.state.fullscreen_player
+                    && self
+                        .state
+                        .playback
+                        .lyrics
+                        .as_ref()
+                        .map(|l| !l.is_synced)
+                        .unwrap_or(false) =>
+            {
+                self.state.playback.lyrics_scroll =
+                    self.state.playback.lyrics_scroll.saturating_add(4);
+            }
+
+            (KeyCode::PageUp, _)
+                if self.state.fullscreen_player
+                    && self
+                        .state
+                        .playback
+                        .lyrics
+                        .as_ref()
+                        .map(|l| !l.is_synced)
+                        .unwrap_or(false) =>
+            {
+                self.state.playback.lyrics_scroll =
+                    self.state.playback.lyrics_scroll.saturating_sub(4);
             }
 
             _ => {}
@@ -1684,6 +1749,19 @@ impl App {
                 });
             }
         }
+
+        self.state.playback.lyrics = None;
+        self.state.playback.lyrics_loading = false;
+        self.state.playback.lyrics_scroll = 0;
+
+        let title = self.state.playback.title.clone();
+        let artist = self.state.playback.artist.clone();
+        let uri = self.current_track_uri.clone();
+
+        if !title.is_empty() && !artist.is_empty() {
+            self.state.playback.lyrics_loading = true;
+            self.lyrics.request(&title, &artist, &uri);
+        }
     }
 
     async fn maybe_load_more(&mut self) {
@@ -1814,13 +1892,15 @@ impl App {
         }
 
         let display_len = self.state.sorted_track_indices.len();
-        
+
         if display_len == 0 || selected < display_len.saturating_sub(3) {
             return;
         }
-        
+
         let track_len = self.state.tracks.len();
-        if (self.state.tracks_offset as usize) >= track_len && track_len < self.state.tracks_total as usize {
+        if (self.state.tracks_offset as usize) >= track_len
+            && track_len < self.state.tracks_total as usize
+        {
             self.state.tracks_loading = true;
             let offset = self.state.tracks_offset;
             let id = self.state.active_playlist_id.clone();
@@ -1844,7 +1924,7 @@ impl App {
                     self.state.tracks_total = total;
                     self.state.tracks_offset += new_tracks.len() as u32;
                     self.state.tracks.append(&mut new_tracks);
-                    
+
                     self.state.rebuild_sort_indices();
                 }
                 Err(e) => {

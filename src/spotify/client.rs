@@ -727,6 +727,10 @@ impl SpotifyClient {
             cover_path: None,
             is_local: false,
             radio_mode: false,
+            lyrics: None,
+            lyrics_scroll: 0,
+            lyrics_loading: false,
+
         })
     }
 
