@@ -294,6 +294,7 @@ impl App {
                 .timeout(std::time::Duration::from_secs(8))
                 .build()
                 .unwrap_or_default(),
+            debug_overlay.clone(),
         )
         .expect("Failed to open lyrics cache");
 
@@ -533,13 +534,18 @@ impl App {
                 }
             }
 
-            if let Some(data) = self.lyrics.take() {
-                self.state.playback.lyrics_loading = false;
-                self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
-            } else if self.lyrics.is_loading() {
-                self.state.playback.lyrics_loading = true;
+            match (self.lyrics.poll(), self.lyrics.is_loading()) {
+                (Some(data), _) => {
+                    self.state.playback.lyrics_loading = false;
+                    self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
+                }
+                (None, true) => {
+                    self.state.playback.lyrics_loading = true;
+                }
+                (None, false) => {
+                    self.state.playback.lyrics_loading = false;
+                }
             }
-
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
