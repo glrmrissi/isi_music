@@ -154,6 +154,7 @@ QUEUE MANAGEMENT
   isi-music --play-id <N>            Play track by ID (from --ls)
 
 SETUP
+  isi-music setup                    First config
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
 

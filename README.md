@@ -222,6 +222,7 @@ enabled = true
 | `n` / `p` | Next / previous track |
 | `s` | Toggle shuffle |
 | `r` | Cycle repeat (off → queue → track) |
+| `d` | Debug painel |
 | `+` / `-` | Volume up / down |
 | `←` / `→` | Seek ±5 s (hold for ±10 s) |
 | `/` | Search |
