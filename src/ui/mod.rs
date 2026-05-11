@@ -7,8 +7,10 @@ use ratatui::{
 };
 use rspotify::model::RepeatState;
 use ratatui_image::{protocol::StatefulProtocol};
-use crate::spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary};
+use std::sync::{Arc};
+use crate::{spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary}};
 use crate::utils::theme::Theme;
+use crate::utils::debug_overlay::{DebugOverlay};
 use crate::utils::theme::{LayoutNode, UiWidget};
 
 pub struct AlbumArtData {
@@ -33,8 +35,7 @@ pub struct PlaybackState {
     pub radio_mode: bool,
     pub lyrics: Option<crate::utils::lyrics::LyricsData>,
     pub lyrics_scroll: usize,
-    pub lyrics_loading: bool,
-
+    pub lyrics_loading: bool
 }
 
 impl Default for PlaybackState {
@@ -56,8 +57,7 @@ impl Default for PlaybackState {
             radio_mode: false,
             lyrics: None,
             lyrics_scroll: 0,
-            lyrics_loading: false,
-
+            lyrics_loading: false
         }
     }
 }
@@ -720,15 +720,17 @@ fn scroll_down(state: &mut ListState, len: usize) {
 
 pub struct Ui {
     theme: Theme,
+    debug_overlay: Arc<DebugOverlay>,
 }
 
 impl Ui {
-    pub fn new(theme: Theme) -> Self {
-        Self { theme }
+    pub fn new(theme: Theme, debug_overlay: Arc<DebugOverlay>) -> Self {
+        Self { theme, debug_overlay }
     }
 
     pub fn render(&self, frame: &mut Frame, state: &mut UiState) {
         let area = frame.area();
+
         let root_area = Rect {
             x: area.x + 1,
             y: area.y + 1,
@@ -738,11 +740,12 @@ impl Ui {
 
         if state.fullscreen_player {
             self.render_now_playing(frame, state, root_area);
-            return;
+        } else {
+            let layout_tree = self.theme.layout_tree.clone();
+            self.render_recursive(frame, state, root_area, &layout_tree);
         }
 
-        let layout_tree = self.theme.layout_tree.clone();
-        self.render_recursive(frame, state, root_area, &layout_tree);
+        self.debug_overlay.render(frame, area);
     }
 
     fn render_recursive(&self, frame: &mut Frame, state: &mut UiState, area: Rect, node: &LayoutNode) {
@@ -1000,6 +1003,7 @@ impl Ui {
         };
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Left), inner);
     }
+
 
     fn render_library(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Library;

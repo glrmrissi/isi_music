@@ -6,3 +6,4 @@ pub mod lyrics;
 pub mod wizard;
 pub mod ipc;
 pub mod discord;
+pub mod debug_overlay;

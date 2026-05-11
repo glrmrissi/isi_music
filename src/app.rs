@@ -9,6 +9,7 @@ use std::string::String;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -210,7 +211,7 @@ pub struct App {
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
     local_scan_total: usize,
     lyrics: crate::utils::lyrics::LyricsHandle,
-    last_lyrics_uri: String,
+    pub debug_overlay: Arc<DebugOverlay>
 }
 
 impl App {
@@ -233,29 +234,22 @@ impl App {
             ))),
             _ => None,
         };
+
+        let debug_overlay = Arc::new(DebugOverlay::new());
+
+        debug_overlay.log(LogLevel::Info, "isi-music starting up");
+
         let mut spotify = match SpotifyClient::new().await {
             Ok(s) => s,
             Err(e) => {
-                warn!("Spotify unavailable ({e:#}), starting in local-only mode");
+                debug_overlay.log(
+                    LogLevel::Warn, 
+                    format!("Spotify unavailable ({e:#}), starting in local-only mode")
+                );
+                
                 SpotifyClient::new_unauthenticated().await
             }
         };
-
-        let lyrics_db_path = {
-            let mut p = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            p.push("isi-music");
-            std::fs::create_dir_all(&p).ok();
-            p.push("lyrics.db");
-            p
-        };
-        let lyrics = crate::utils::lyrics::LyricsHandle::new(
-            lyrics_db_path,
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(8))
-                .build()
-                .unwrap_or_default(),
-        )
-        .expect("Failed to open lyrics cache");
 
         let volume = crate::config::load_volume();
 
@@ -265,7 +259,7 @@ impl App {
             match spotify.get_access_token().await {
                 Some(token) => match NativePlayer::new(token, false).await {
                     Ok(p) => {
-                        tracing::info!("Native player started");
+                        debug_overlay.log(LogLevel::Info, "Native player Started");
                         Some(Box::new(p) as Box<dyn AudioPlayer>)
                     }
                     Err(e) => {
@@ -276,13 +270,15 @@ impl App {
                                 "⚠ Spotify Premium required for streaming. Starting in local-only mode.".to_string(),
                             );
                         } else {
-                            warn!("Native player unavailable: {e:#}");
+                            debug_overlay.log(
+                                LogLevel::Warn, 
+                                format!("Failed to load playlists: {e:#}")
+                            );
                         }
                         None
                     }
                 },
                 None => {
-                    warn!("Token not available for native player");
                     None
                 }
             }
@@ -292,10 +288,23 @@ impl App {
 
         let db_path = crate::config::get_local_db_path();
 
+        let lyrics = crate::utils::lyrics::LyricsHandle::new(
+            db_path.clone().into(),
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+                .unwrap_or_default(),
+            debug_overlay.clone(),
+        )
+        .expect("Failed to open lyrics cache");
+
         let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume, &db_path) {
             Ok(p) => Some(Box::new(p) as Box<dyn AudioPlayer>),
             Err(e) => {
-                warn!("Local player: {e:#}");
+                debug_overlay.log(
+                    LogLevel::Error, 
+                    format!("Local Player ({e:#})")
+                );
                 None
             }
         };
@@ -354,11 +363,17 @@ impl App {
         #[cfg(feature = "mpris")]
         let mpris = match crate::utils::mpris::spawn().await {
             Ok(h) => {
-                tracing::info!("MPRIS D-Bus server started");
+                debug_overlay.log(
+                    LogLevel::Info, 
+                    format!("MPRIS D-Bus server started")
+                );
                 Some(h)
             }
             Err(e) => {
-                tracing::warn!("MPRIS unavailable: {e}");
+                debug_overlay.log(
+                    LogLevel::Error, 
+                    format!("MPRIS unavailable: {e}")
+                );
                 None
             }
         };
@@ -382,7 +397,7 @@ impl App {
             parked_player,
             local_active,
             lastfm,
-            ui: Ui::new(theme.clone()),
+            ui: Ui::new(theme.clone(), debug_overlay.clone()),
             state,
             last_tick: Instant::now(),
             should_quit: false,
@@ -413,7 +428,7 @@ impl App {
             local_scan_rx: None,
             local_scan_total: 0,
             lyrics,
-            last_lyrics_uri: String::new(),
+            debug_overlay,
         })
     }
 
@@ -427,7 +442,7 @@ impl App {
         loop {
             if let Ok(new_theme) = self.theme_rx.try_recv() {
                 self.theme = new_theme.clone();
-                self.ui = Ui::new(new_theme);
+                self.ui = Ui::new(new_theme, self.debug_overlay.clone());
             }
 
             let now = Instant::now();
@@ -442,25 +457,24 @@ impl App {
                     let progress = self.state.playback.progress_ms;
                     let radio_mode = self.state.playback.radio_mode;
 
-                    if let Some(data) = self.lyrics.take() {
-                        self.state.playback.lyrics_loading = false;
-                        self.state.playback.lyrics =
-                            if data.is_empty() { None } else { Some(data) };
-                    } else if self.lyrics.is_loading() {
-                        self.state.playback.lyrics_loading = true;
-                    }
-
                     if pb.is_local {
+                        let saved_lyrics = self.state.playback.lyrics.take();
+                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
+                        let saved_lyrics_scroll  = self.state.playback.lyrics_scroll;
+
                         self.state.playback = pb;
-                        self.state.playback.progress_ms = progress;
-                        self.state.playback.radio_mode = radio_mode;
+                        self.state.playback.progress_ms    = progress;
+                        self.state.playback.radio_mode     = radio_mode;
+                        self.state.playback.lyrics         = saved_lyrics;
+                        self.state.playback.lyrics_loading = saved_lyrics_loading;
+                        self.state.playback.lyrics_scroll  = saved_lyrics_scroll;
 
                         if self.state.playback.title != prev_title {
                             self.state.album_art = None;
                             self.album_art_pending = None;
                             self.last_art_uri.clear();
 
-                            if let Some(cover_str) = &self.state.playback.cover_path.clone() {
+                            if let Some(cover_str) = self.state.playback.cover_path.as_deref() {
                                 let path = std::path::PathBuf::from(cover_str);
                                 if path.exists() {
                                     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -472,12 +486,21 @@ impl App {
                                     self.album_art_pending = Some(rx);
                                 }
                             }
+
+                            self.lyrics.request(
+                                &self.state.playback.title, 
+                                &self.state.playback.artist, 
+                                &self.current_track_uri 
+                            );
+
+                            self.state.playback.lyrics = None;
+                            self.state.playback.lyrics_loading = true;
                         }
                     } else {
                         self.state.playback.is_playing = pb.is_playing;
-                        self.state.playback.volume = pb.volume;
-                        self.state.playback.shuffle = pb.shuffle;
-                        self.state.playback.repeat = pb.repeat;
+                        self.state.playback.volume     = pb.volume;
+                        self.state.playback.shuffle    = pb.shuffle;
+                        self.state.playback.repeat     = pb.repeat;
                     }
                 }
             }
@@ -508,6 +531,19 @@ impl App {
                     } else {
                         player.seek(target_pos);
                     }
+                }
+            }
+
+            match (self.lyrics.poll(), self.lyrics.is_loading()) {
+                (Some(data), _) => {
+                    self.state.playback.lyrics_loading = false;
+                    self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
+                }
+                (None, true) => {
+                    self.state.playback.lyrics_loading = true;
+                }
+                (None, false) => {
+                    self.state.playback.lyrics_loading = false;
                 }
             }
             if let Some(player) = &mut self.player {
@@ -576,6 +612,10 @@ impl App {
                 }
             }
 
+            {
+                self.debug_overlay.update_metrics();
+            }
+
             if needs_crossover {
                 let parked_has_queue = self
                     .parked_player
@@ -613,8 +653,14 @@ impl App {
                 self.sync_queue_display();
                 if self.player.is_none() {
                     if let Ok(current_pb) = self.spotify.fetch_playback().await {
-                        self.state.playback = current_pb.clone();
-                        self.art_url = current_pb.art_url;
+                        let saved_lyrics         = self.state.playback.lyrics.take();
+                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
+                        let saved_lyrics_scroll  = self.state.playback.lyrics_scroll;
+                        self.art_url             = current_pb.art_url.clone();
+                        self.state.playback      = current_pb;
+                        self.state.playback.lyrics         = saved_lyrics;
+                        self.state.playback.lyrics_loading = saved_lyrics_loading;
+                        self.state.playback.lyrics_scroll  = saved_lyrics_scroll;
                     }
                 }
             }
@@ -711,7 +757,10 @@ impl App {
                             });
                         }
                         Err(e) => {
-                            warn!("Failed to decode image: {}", e);
+                            self.debug_overlay.log(
+                                LogLevel::Error, 
+                                format!("MPRIS unavailable: {e}")
+                            );
                         }
                     }
                 }
@@ -997,6 +1046,10 @@ impl App {
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
                 }
+            }
+
+            (KeyCode::Char('d'), _) => {
+                self.debug_overlay.toggle_visible();
             }
 
             (KeyCode::Char(' '), _) => {
@@ -2047,7 +2100,10 @@ impl App {
                     self.state.playback.album = track.album.clone();
 
                     self.state.playback.art_url = track.cover_path.clone();
-                    warn!("Loading cover from: {:?}", self.state.playback.art_url);
+                    self.debug_overlay.log(
+                        LogLevel::Info, 
+                        format!("Loading cover from: {:?}", self.state.playback.art_url)
+                    );
 
                     self.state.playback.duration_ms = track.duration_ms;
                     self.state.playback.progress_ms = 0;

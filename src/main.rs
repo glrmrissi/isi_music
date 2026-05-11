@@ -118,22 +118,31 @@ USAGE
   isi-music [COMMAND]
 
 TUI KEYBINDINGS
-  Tab / hjkl / ↑↓     Navigate panels
-  Enter                Play selected track / open album or artist
-  Space                Play / pause
-  n / p                Next / previous track
-  s                    Toggle shuffle
-  r                    Cycle repeat  (off → queue → track)
-  + / -                Volume up / down
-  ←→                   Seek ±5 s  (hold for ±10 s)
-  /                    Search Spotify
-  a                    Add track to queue
-  c                    Toggle album art panel
-  z                    Toggle fullscreen player
-  l                    Like current track
-  Backspace            Back to previous search results
-  Esc                  Close search / exit fullscreen
-  q / Ctrl-C           Quit
+    Tab / hjkl / ↑↓      Navigate panels and lists
+    Enter                Play selected / open album or artist
+    Space                Play / pause
+    n / p                Next / previous track
+    s                    Toggle shuffle
+    r                    Cycle repeat (off → queue → track)
+    d                    Debug painel
+    / -                  Volume up / down
+    ← / →                Seek ±5 s (hold for ±10 s)
+    /                    Search
+    a                    Add track to queue
+    Delete               Remove selected item from queue
+    R                    Toggle Radio Mode (auto-recommendations)
+    Alt+r                Get similar tracks
+    c                    Toggle album art / cover art
+    y                    Lyrics
+    v                    Toggle visualizer
+    PgDown / PgUp        Scroll lyrics
+    z                    Toggle fullscreen player
+    l                    Like current track
+    Backspace            Back to previous search results
+    Esc                  Close search / exit fullscreen
+    o                    Order by
+    Ctrl+F               Quick Search
+    q / Ctrl+C           Quit
 
 DAEMON MODE
   isi-music --daemon                 Start daemon in background
@@ -154,6 +163,7 @@ QUEUE MANAGEMENT
   isi-music --play-id <N>            Play track by ID (from --ls)
 
 SETUP
+  isi-music setup                    First config
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
 

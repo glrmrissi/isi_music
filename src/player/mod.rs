@@ -64,11 +64,6 @@ pub trait AudioPlayer: Send {
         self.set_queue(uris, start_index);
     }
 
-    fn get_tracks_paginated(&self, offset: usize, limit: usize) -> Vec<TrackInfo> {
-        let _ = (offset, limit);
-        Vec::new()
-    }
-
     fn play(&mut self);
     fn pause(&mut self);
     fn toggle(&mut self);

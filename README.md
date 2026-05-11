@@ -1,6 +1,8 @@
 # isi-music
 
-### Please, if you are not a developer, download the version that is in the release :)
+### If you're not a developer, we recommend downloading the prebuilt release. :)
+
+#### This project is currently in a testing phase. Any feedback is highly appreciated and very helpful for improvements.
 
 [![Release](https://img.shields.io/github/v/release/glrmrissi/isi_music?style=flat-square&color=1DB954&label=version)](https://github.com/glrmrissi/isi_music/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
@@ -8,7 +10,6 @@
 
 A terminal music player written in Rust. Stream from Spotify via librespot or play local audio files with full metadata support — no browser, no Electron, no bloat.
 
-![preview](https://github.com/user-attachments/assets/f67383b5-cc7d-4486-8d7a-ffea9ad2e997)
 ![purple](https://github.com/user-attachments/assets/27d7420e-918f-4d04-9986-34301b60d22c)
 ![blue](https://github.com/user-attachments/assets/2f5cd6f4-d403-4c98-aa80-fc8d5df847d5)
 
@@ -171,7 +172,12 @@ cargo build --release
 
 ## Configuration
 
-The config file is created automatically on first run:
+### First-time setup:
+
+When you open the project for the first time, run the following command to initialize the environment:
+```
+isi-music setup 
+```
 
 | Platform | Path |
 |----------|------|
@@ -180,14 +186,17 @@ The config file is created automatically on first run:
 | Windows | `%APPDATA%\isi-music\config.toml` |
 
 ```toml
-# Required only for Spotify streaming — omit if using local files only
+# If you want to use Spotify, just remove the client_id, like this:
+# [spotify]
+# (leave empty)
+
 [spotify]
-client_id = "your_client_id_here"
+client_id = "" # For local mode
 
 # Optional: local audio files (MP3, FLAC, OGG, WAV, AIFF)
 # Automatic metadata extraction and embedded cover art support
 [local]
-music_dir = "~/Music" # If this path don't work, use entire path
+music_dir = "~/Music" # If this path doesn't work use entire path
 
 # Optional: Last.fm scrobbling
 [lastfm]
@@ -199,16 +208,6 @@ session_key = "obtained_via_setup-lastfm"
 [discord]
 enabled = true
 ```
-
-### Spotify Setup
-
-1. Register an app at [developer.spotify.com](https://developer.spotify.com/dashboard)
-2. Set the redirect URI to `http://127.0.0.1:8888/callback`
-3. Copy the Client ID into `config.toml`
-
-isi-music uses **PKCE authentication** — only the Client ID is required. No client secret.
-
-On first run with Spotify configured, a browser window opens for OAuth authorization. The token is cached and reused automatically on subsequent runs.
 
 ---
 
@@ -223,6 +222,7 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 | `n` / `p` | Next / previous track |
 | `s` | Toggle shuffle |
 | `r` | Cycle repeat (off → queue → track) |
+| `d` | Debug painel |
 | `+` / `-` | Volume up / down |
 | `←` / `→` | Seek ±5 s (hold for ±10 s) |
 | `/` | Search |
@@ -235,6 +235,12 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 | `l` | Like current track |
 | `Backspace` | Back to previous search results |
 | `Esc` | Close search / exit fullscreen |
+| `y` | Lyrics |
+| `v` | Hidden/Show vizualizer |
+| `c` | Hidden/Show cover art |
+| `PgDown` / `PgUp` | Scroll Lyrics |
+| `o` | Order by |
+| `Ctrl+F` | Quick Search |
 | `q` / `Ctrl+C` | Quit |
 
 ---
@@ -244,6 +250,7 @@ On first run with Spotify configured, a browser window opens for OAuth authoriza
 Themes are fully customizable. Create `~/.config/isi-music/theme.toml` to override the default theme.
 
 ```toml
+# Persona 3
 border_active = "#00d4ff"    
 border_inactive = "#002b4d"  
 highlight_bg = "#004b7a"      
@@ -339,7 +346,7 @@ Custom RGB: `rgb(r, g, b)` where r, g, b are 0-255
 
 ## Local Files
 
-Play local audio files without any Spotify account. Supported formats: MP3, FLAC, OGG, WAV, AIFF, Opus.
+As a fallback option, using MP3 is recommended. You can play local audio files without a Spotify account. Supported formats include: MP3, FLAC, OGG, WAV, and AIFF.
 
 ### Setup
 
@@ -371,7 +378,7 @@ Note: If no Spotify credentials are configured, isi-music starts in local-only m
 
 ---
 
-## Daemon Mode
+## Daemon Mode - For now, only work with spotify
 
 Keep music playing after closing the terminal and control it from the command line.
 
