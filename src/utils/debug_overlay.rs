@@ -125,6 +125,7 @@ impl DebugOverlay {
     pub fn update_metrics(&self) {
         let mut g = self.inner.lock().unwrap();
         let now = Instant::now();
+        
         if now.duration_since(g.last_metric_update) < Duration::from_millis(800) {
             return;
         }
@@ -137,11 +138,16 @@ impl DebugOverlay {
                     fields[13].parse::<u64>(),
                     fields[14].parse::<u64>(),
                 ) {
-                    let total_jiffies =
-                        (utime + stime).saturating_sub(g.prev_utime + g.prev_stime);
+                    let current_total_jiffies = utime + stime;
+                    let delta_jiffies = current_total_jiffies.saturating_sub(g.prev_utime + g.prev_stime);
                     let wall_secs = now.duration_since(g.prev_wall).as_secs_f64();
-                    let cpu = (total_jiffies as f64 / 100.0 / wall_secs * 100.0) as f32;
-                    g.metrics.cpu_percent = cpu.clamp(0.0, 999.0);
+
+                    if wall_secs > 0.0 {
+                        let cpu = (delta_jiffies as f64 / 100.0) / wall_secs * 10.0; 
+                        
+                        g.metrics.cpu_percent = (cpu as f32).clamp(0.0, 999.0);
+                    }
+
                     g.prev_utime = utime;
                     g.prev_stime = stime;
                     g.prev_wall = now;
@@ -177,36 +183,41 @@ impl DebugOverlay {
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let g = self.inner.lock().unwrap();
-
         if !g.visible {
             return;
         }
 
-        let popup = centered_rect(80, 85, area);
+        let height = 18u16;
+        let debug_area = Rect {
+            x: area.x + 1,
+            y: area.y + area.height.saturating_sub(height),
+            width: area.width.saturating_sub(2),
+            height: height.min(area.height),
+        };
 
-        frame.render_widget(Clear, popup);
+        frame.render_widget(Clear, debug_area);
 
         let outer = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .title(" 󰃤 Debug Overlay  [D] fechar ")
+            .title(" 󰃤 Debug Overlay [D] Close ")
             .title_alignment(Alignment::Center)
             .style(Style::default().fg(Color::DarkGray));
 
-        let inner = outer.inner(popup);
-        frame.render_widget(outer, popup);
+        let inner = outer.inner(debug_area);
+        frame.render_widget(outer, debug_area);
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(7),  
-                Constraint::Length(1), 
-                Constraint::Min(0),     
+                Constraint::Length(6),   
+                Constraint::Length(1),   
+                Constraint::Min(0),
             ])
             .split(inner);
 
         self.render_metrics(frame, &g.metrics, sections[0]);
-
+        
         frame.render_widget(
             Paragraph::new("─".repeat(sections[1].width as usize))
                 .style(Style::default().fg(Color::DarkGray)),
@@ -316,26 +327,6 @@ impl DebugHandle {
     pub fn log_audio(&self, msg: impl Into<String>) {
         self.log(LogLevel::Audio, msg);
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 #[cfg(test)]
