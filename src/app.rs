@@ -9,6 +9,7 @@ use std::string::String;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -210,6 +211,7 @@ pub struct App {
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
     local_scan_total: usize,
     lyrics: crate::utils::lyrics::LyricsHandle,
+    pub debug_overlay: Arc<DebugOverlay>
 }
 
 impl App {
@@ -232,10 +234,19 @@ impl App {
             ))),
             _ => None,
         };
+
+        let debug_overlay = Arc::new(DebugOverlay::new());
+
+        debug_overlay.log(LogLevel::Info, "isi-music starting up");
+
         let mut spotify = match SpotifyClient::new().await {
             Ok(s) => s,
             Err(e) => {
-                warn!("Spotify unavailable ({e:#}), starting in local-only mode");
+                debug_overlay.log(
+                    LogLevel::Warn, 
+                    format!("Spotify unavailable ({e:#}), starting in local-only mode")
+                );
+                
                 SpotifyClient::new_unauthenticated().await
             }
         };
@@ -248,7 +259,7 @@ impl App {
             match spotify.get_access_token().await {
                 Some(token) => match NativePlayer::new(token, false).await {
                     Ok(p) => {
-                        tracing::info!("Native player started");
+                        debug_overlay.log(LogLevel::Info, "Native player Started");
                         Some(Box::new(p) as Box<dyn AudioPlayer>)
                     }
                     Err(e) => {
@@ -259,13 +270,15 @@ impl App {
                                 "⚠ Spotify Premium required for streaming. Starting in local-only mode.".to_string(),
                             );
                         } else {
-                            warn!("Native player unavailable: {e:#}");
+                            debug_overlay.log(
+                                LogLevel::Warn, 
+                                format!("Failed to load playlists: {e:#}")
+                            );
                         }
                         None
                     }
                 },
                 None => {
-                    warn!("Token not available for native player");
                     None
                 }
             }
@@ -287,7 +300,10 @@ impl App {
         let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume, &db_path) {
             Ok(p) => Some(Box::new(p) as Box<dyn AudioPlayer>),
             Err(e) => {
-                warn!("Local player: {e:#}");
+                debug_overlay.log(
+                    LogLevel::Error, 
+                    format!("Local Player ({e:#})")
+                );
                 None
             }
         };
@@ -346,11 +362,17 @@ impl App {
         #[cfg(feature = "mpris")]
         let mpris = match crate::utils::mpris::spawn().await {
             Ok(h) => {
-                tracing::info!("MPRIS D-Bus server started");
+                debug_overlay.log(
+                    LogLevel::Info, 
+                    format!("MPRIS D-Bus server started")
+                );
                 Some(h)
             }
             Err(e) => {
-                tracing::warn!("MPRIS unavailable: {e}");
+                debug_overlay.log(
+                    LogLevel::Error, 
+                    format!("MPRIS unavailable: {e}")
+                );
                 None
             }
         };
@@ -374,7 +396,7 @@ impl App {
             parked_player,
             local_active,
             lastfm,
-            ui: Ui::new(theme.clone()),
+            ui: Ui::new(theme.clone(), debug_overlay.clone()),
             state,
             last_tick: Instant::now(),
             should_quit: false,
@@ -405,6 +427,7 @@ impl App {
             local_scan_rx: None,
             local_scan_total: 0,
             lyrics,
+            debug_overlay,
         })
     }
 
@@ -418,7 +441,7 @@ impl App {
         loop {
             if let Ok(new_theme) = self.theme_rx.try_recv() {
                 self.theme = new_theme.clone();
-                self.ui = Ui::new(new_theme);
+                self.ui = Ui::new(new_theme, self.debug_overlay.clone());
             }
 
             let now = Instant::now();
@@ -462,6 +485,15 @@ impl App {
                                     self.album_art_pending = Some(rx);
                                 }
                             }
+
+                            self.lyrics.request(
+                                &self.state.playback.title, 
+                                &self.state.playback.artist, 
+                                &self.current_track_uri 
+                            );
+
+                            self.state.playback.lyrics = None;
+                            self.state.playback.lyrics_loading = true;
                         }
                     } else {
                         self.state.playback.is_playing = pb.is_playing;
@@ -572,6 +604,10 @@ impl App {
                         }
                     }
                 }
+            }
+
+            {
+                self.debug_overlay.update_metrics();
             }
 
             if needs_crossover {
@@ -715,7 +751,10 @@ impl App {
                             });
                         }
                         Err(e) => {
-                            warn!("Failed to decode image: {}", e);
+                            self.debug_overlay.log(
+                                LogLevel::Error, 
+                                format!("MPRIS unavailable: {e}")
+                            );
                         }
                     }
                 }
@@ -1001,6 +1040,10 @@ impl App {
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
                 }
+            }
+
+            (KeyCode::Char('d'), _) => {
+                self.debug_overlay.toggle_visible();
             }
 
             (KeyCode::Char(' '), _) => {
@@ -2051,7 +2094,10 @@ impl App {
                     self.state.playback.album = track.album.clone();
 
                     self.state.playback.art_url = track.cover_path.clone();
-                    warn!("Loading cover from: {:?}", self.state.playback.art_url);
+                    self.debug_overlay.log(
+                        LogLevel::Info, 
+                        format!("Loading cover from: {:?}", self.state.playback.art_url)
+                    );
 
                     self.state.playback.duration_ms = track.duration_ms;
                     self.state.playback.progress_ms = 0;
