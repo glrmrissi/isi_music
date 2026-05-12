@@ -4,9 +4,13 @@ use ratatui::layout::{Constraint, Direction};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{channel, Receiver},
+    Arc,
+};
 use std::thread;
 use std::time::Duration;
-use std::sync::mpsc::{channel, Receiver};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "snake_case")]
@@ -101,10 +105,10 @@ impl Default for LayoutNode {
         Self {
             direction: Some(SerializableDirection::Vertical),
             constraints: Some(vec![
-                Length(3),   // Header
-                Fill(1),     // Main body
-                Length(1),   // Progress/Marquee row
-                Length(1),   // Help/Status row
+                Length(3),
+                Fill(1),
+                Length(1),
+                Length(1),
             ]),
             widget: None,
             children: Some(vec![
@@ -161,10 +165,10 @@ pub struct Theme {
     pub text_primary: Color,
     #[serde(with = "color_serde")]
     pub accent_color: Color,
-    
+
     #[serde(default)]
     pub widget_styles: HashMap<UiWidget, WidgetStyle>,
-    
+
     #[serde(default)]
     pub layout_tree: LayoutNode,
 }
@@ -180,6 +184,46 @@ impl Default for Theme {
             widget_styles:   HashMap::new(),
             layout_tree:     LayoutNode::default(),
         }
+    }
+}
+
+pub struct ThemeWatcher {
+    rx: Receiver<Theme>,
+    stop: Arc<AtomicBool>,
+}
+
+impl ThemeWatcher {
+    pub fn recv(&self) -> Option<Theme> {
+        self.rx.try_recv().ok()
+    }
+
+    pub fn receiver(&self) -> &Receiver<Theme> {
+        &self.rx
+    }
+
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for ThemeWatcher {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl std::ops::Deref for ThemeWatcher {
+    type Target = std::sync::mpsc::Receiver<Theme>;
+    fn deref(&self) -> &Self::Target {
+        &self.rx
+    }
+}
+
+impl From<ThemeWatcher> for std::sync::mpsc::Receiver<Theme> {
+    fn from(w: ThemeWatcher) -> Self {
+        w.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let md = std::mem::ManuallyDrop::new(w);
+        unsafe { std::ptr::read(&md.rx) }
     }
 }
 
@@ -209,31 +253,45 @@ impl Theme {
             .unwrap_or_default()
     }
 
-     pub fn watch() -> std::io::Result<Receiver<Theme>> {
+    pub fn watch() -> std::io::Result<ThemeWatcher> {
         let (tx, rx) = channel();
         let path = Self::get_path().unwrap_or_else(|| PathBuf::from("theme.toml"));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
 
-        thread::spawn(move || {
-            let mut last_modified = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok());
+        thread::Builder::new()
+            .name("theme-watcher".into())
+            .spawn(move || {
+                let mut last_modified = fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
 
-            loop {
-                thread::sleep(Duration::from_millis(500));
+                loop {
+                    if stop_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
 
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    if let Ok(current_modified) = metadata.modified() {
-                        if Some(current_modified) != last_modified {
-                            last_modified = Some(current_modified);
-                            let new_theme = Theme::load();
-                            let _ = tx.send(new_theme);
+                    thread::sleep(Duration::from_millis(500));
+
+                    if stop_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    if let Ok(metadata) = fs::metadata(&path) {
+                        if let Ok(current_modified) = metadata.modified() {
+                            if Some(current_modified) != last_modified {
+                                last_modified = Some(current_modified);
+                                let new_theme = Theme::load();
+                                if tx.send(new_theme).is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
-            }
-        });
+            })?;
 
-        Ok(rx)
+        Ok(ThemeWatcher { rx, stop })
     }
 }
 
@@ -272,7 +330,7 @@ mod color_serde {
 
 fn parse_color_from_str(s: &str) -> Result<Color, String> {
     let s = s.trim().to_lowercase();
-    
+
     if s.starts_with('#') && s.len() == 7 {
         let r = u8::from_str_radix(&s[1..3], 16).map_err(|_| "Invalid R")?;
         let g = u8::from_str_radix(&s[3..5], 16).map_err(|_| "Invalid G")?;

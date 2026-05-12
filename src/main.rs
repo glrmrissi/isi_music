@@ -319,7 +319,7 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker, theme, theme_rx).await?;
+            let mut app = App::new(picker, theme, theme_rx.into()).await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

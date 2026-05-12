@@ -17,6 +17,8 @@ use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]
 pub struct LocalTrack {
+    // This id is used but for now i just put allow dead_code, not good pratice. 
+    #[allow(dead_code)]
     pub id: i64,
     pub path: PathBuf,
     pub uri: String,
