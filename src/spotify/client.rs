@@ -183,7 +183,12 @@ impl LibraryCache {
             let conn = rusqlite::Connection::open(&db_path)?;
             conn.execute_batch(
                 "PRAGMA journal_mode=WAL;
-                 CREATE TABLE IF NOT EXISTS library_cache (...);"
+                CREATE TABLE IF NOT EXISTS library_cache (
+                    key      TEXT PRIMARY KEY,
+                    data     TEXT NOT NULL,
+                    total    INTEGER NOT NULL,
+                    saved_at INTEGER NOT NULL
+                );"
             )
         }).await;
         

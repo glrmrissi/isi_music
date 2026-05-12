@@ -861,6 +861,10 @@ impl App {
         Ok(())
     }
 
+    fn char_matches(c: char, target: &str) -> bool {
+        c.to_lowercase().to_string() == target
+    }
+
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
 
@@ -967,23 +971,25 @@ impl App {
             _ => {}
         }
 
-        match (code, modifiers) {
-            (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+        match code {
+            KeyCode::Char(c) if Self::char_matches(c, "q") || (c == 'c' && modifiers == KeyModifiers::CONTROL) => {
                 self.should_quit = true;
             }
 
-            (KeyCode::Char('f'), KeyModifiers::CONTROL) => match self.state.active_content {
-                ActiveContent::Tracks | ActiveContent::None | ActiveContent::LocalFiles => {
-                    self.state.start_quick_search();
-                    self.state.apply_quick_filter();
+            KeyCode::Char(c) if Self::char_matches(c, "f") && modifiers == KeyModifiers::CONTROL => {
+                match self.state.active_content {
+                    ActiveContent::Tracks | ActiveContent::None | ActiveContent::LocalFiles => {
+                        self.state.start_quick_search();
+                        self.state.apply_quick_filter();
+                    }
+                    _ => {
+                        self.state.status_msg =
+                            Some("Quick search only works with Tracks or Local Files".to_string());
+                    }
                 }
-                _ => {
-                    self.state.status_msg =
-                        Some("Quick search only works with Tracks or Local Files".to_string());
-                }
-            },
+            }
 
-            (KeyCode::Char('o'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "o") => {
                 if matches!(
                     self.state.active_content,
                     ActiveContent::Tracks | ActiveContent::None
@@ -994,38 +1000,45 @@ impl App {
                 }
             }
 
-            (KeyCode::Up, KeyModifiers::CONTROL) => self.state.nav_first(),
-            (KeyCode::Down, KeyModifiers::CONTROL) => {
+            KeyCode::Up if modifiers == KeyModifiers::CONTROL => self.state.nav_first(),
+            KeyCode::Down if modifiers == KeyModifiers::CONTROL => {
                 self.state.nav_last();
                 self.maybe_load_more().await;
             }
 
-            (KeyCode::Char('v'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "v") => {
                 self.state.show_visualizer = !self.state.show_visualizer;
             }
 
-            (KeyCode::Up, _) | (KeyCode::Char('k'), _) => self.state.nav_up(),
-            (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+            KeyCode::Up => self.state.nav_up(),
+            KeyCode::Char(c) if c == 'k' || c == 'K' => self.state.nav_up(),
+
+            KeyCode::Down => {
+                self.state.nav_down();
+                self.maybe_load_more().await;
+            }
+            KeyCode::Char(c) if c == 'j' || c == 'J' => {
                 self.state.nav_down();
                 self.maybe_load_more().await;
             }
 
-            (KeyCode::Tab, _) => {
+
+            KeyCode::Tab => {
                 if self.state.focus == Focus::Search {
                     self.state.switch_search_panel();
                 } else {
                     self.state.switch_focus();
                 }
             }
-            (KeyCode::BackTab, _) => {
+            KeyCode::BackTab => {
                 self.state.switch_focus_prev();
             }
 
-            (KeyCode::Enter, _) => self.handle_enter().await,
+            KeyCode::Enter => self.handle_enter().await,
 
-            (KeyCode::Char('/'), _) => self.state.start_search(),
+            KeyCode::Char('/') => self.state.start_search(),
 
-            (KeyCode::Backspace, _) => {
+            KeyCode::Backspace => {
                 if self.state.quick_search_active {
                     self.state.cancel_quick_search();
                 } else if let Some(prev) = self.state.previous_search.take() {
@@ -1035,7 +1048,7 @@ impl App {
                 }
             }
 
-            (KeyCode::Esc, _) => {
+            KeyCode::Esc => {
                 if self.state.quick_search_active {
                     self.state.cancel_quick_search();
                 } else if self.state.fullscreen_player {
@@ -1048,11 +1061,11 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('d'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "d") => {
                 self.debug_overlay.toggle_visible();
             }
 
-            (KeyCode::Char(' '), _) => {
+            KeyCode::Char(' ') => {
                 if let Some(player) = &mut self.player {
                     player.toggle();
                 } else if self.spotify.authenticated {
@@ -1060,7 +1073,7 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('a'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "a") => {
                 let track = if self.state.active_content == ActiveContent::LocalFiles {
                     self.state.local_tree_list.selected().and_then(|vi| {
                         let actual_vi = self.state.sorted_track_indices.get(vi)?;
@@ -1105,7 +1118,7 @@ impl App {
                 }
             }
 
-            (KeyCode::Delete, _) if self.state.focus == Focus::Queue => {
+            KeyCode::Delete if self.state.focus == Focus::Queue => {
                 if let Some(idx) = self.state.queue_list.selected() {
                     let active_len = self
                         .player
@@ -1136,7 +1149,7 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('n'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "n") => {
                 if let Some(player) = &mut self.player {
                     player.next();
                     self.state.playback.progress_ms = 0;
@@ -1149,7 +1162,7 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('p'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "p") => {
                 if let Some(player) = &mut self.player {
                     player.prev();
                     self.state.playback.progress_ms = 0;
@@ -1160,18 +1173,18 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('s'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "s") => {
                 if let Some(player) = &mut self.player {
                     player.toggle_shuffle();
                     self.state.playback.shuffle = player.shuffle();
                 }
             }
 
-            (KeyCode::Char('r'), KeyModifiers::ALT) => {
+            KeyCode::Char(c) if Self::char_matches(c, "r") && modifiers == KeyModifiers::ALT => {
                 self.get_similar_tracks().await;
             }
 
-            (KeyCode::Char('R'), _) => {
+            KeyCode::Char('R') => {
                 self.radio_mode = !self.radio_mode;
                 self.state.playback.radio_mode = self.radio_mode;
                 let msg = if self.radio_mode {
@@ -1182,7 +1195,7 @@ impl App {
                 self.state.status_msg = Some(msg.to_string());
             }
 
-            (KeyCode::Char('r'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "r") => {
                 if let Some(player) = &mut self.player {
                     player.cycle_repeat();
                     self.state.playback.repeat = match player.repeat() {
@@ -1193,13 +1206,13 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('z'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "z") => {
                 if !self.state.playback.title.is_empty() {
                     self.state.fullscreen_player = !self.state.fullscreen_player;
                 }
             }
 
-            (KeyCode::Char('y') | KeyCode::Char('Y'), _) => {
+            KeyCode::Char(c) if c == 'y' || c == 'Y' => {
                 self.state.show_lyrics = !self.state.show_lyrics;
                 self.state.status_msg = Some(if self.state.show_lyrics {
                     "Lyrics panel on".to_string()
@@ -1208,23 +1221,7 @@ impl App {
                 });
             }
 
-            (KeyCode::Char('c'), _)
-                if modifiers != KeyModifiers::CONTROL
-                    && !self.state.fullscreen_player
-                    && !(self.state.search_results.is_none()
-                        && self.state.active_content == ActiveContent::None
-                        && !self.state.playback.title.is_empty()) =>
-            {
-                self.state.show_album_art = !self.state.show_album_art;
-                if self.state.show_album_art {
-                    self.last_art_uri.clear();
-                } else {
-                    self.state.album_art = None;
-                    self.album_art_pending = None;
-                }
-            }
-
-            (KeyCode::Char('l'), _) => {
+            KeyCode::Char(c) if Self::char_matches(c, "l") => {
                 if !self.spotify.authenticated {
                     self.state.status_msg = Some("Spotify not connected".to_string());
                 } else {
@@ -1235,21 +1232,21 @@ impl App {
                 }
             }
 
-            (KeyCode::Char('+'), _) | (KeyCode::Char('='), _) => {
+            KeyCode::Char(c) if c == '+' || c == '=' => {
                 if let Some(player) = &mut self.player {
                     player.volume_up();
                     self.state.playback.volume = player.volume();
                 }
             }
 
-            (KeyCode::Char('-'), _) => {
+            KeyCode::Char(c) if c == '-' => {
                 if let Some(player) = &mut self.player {
                     player.volume_down();
                     self.state.playback.volume = player.volume();
                 }
             }
 
-            (KeyCode::PageDown, _)
+            KeyCode::PageDown
                 if self.state.fullscreen_player
                     && self
                         .state
@@ -1263,7 +1260,7 @@ impl App {
                     self.state.playback.lyrics_scroll.saturating_add(4);
             }
 
-            (KeyCode::PageUp, _)
+            KeyCode::PageUp
                 if self.state.fullscreen_player
                     && self
                         .state
