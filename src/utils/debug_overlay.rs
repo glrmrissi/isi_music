@@ -187,7 +187,7 @@ impl DebugOverlay {
             return;
         }
 
-        let height = 18u16;
+        let height = 30u16;
         let debug_area = Rect {
             x: area.x + 1,
             y: area.y + area.height.saturating_sub(height),
