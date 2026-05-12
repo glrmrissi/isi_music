@@ -8,7 +8,9 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square)](LICENSE)
 
-A terminal music player written in Rust. Stream from Spotify via librespot or play local audio files with full metadata support — no browser, no Electron, no bloat.
+isi-music is a high-performance terminal audio player built in Rust for direct, efficient music playback. It serves as a lightweight alternative to resource-heavy desktop clients, eliminating the overhead of Electron and web-based wrappers. The engine integrates natively with Spotify through librespot and provides robust support for local audio files, ensuring high-fidelity playback across your entire library.
+
+The application is engineered for speed, utilizing an SQLite-backed cache for persistent metadata and lyrics management. It features an automated multi-source lyrics fetcher that prioritizes synced data from LRCLIB and Musixmatch, falling back to lyrics.ovh when necessary. By focusing on native binaries and a specialized terminal user interface, isi-music delivers a fast, low-latency audio experience that maximizes system resources while maintaining a comprehensive feature set for power users.
 
 ![purple](https://github.com/user-attachments/assets/27d7420e-918f-4d04-9986-34301b60d22c)
 ![blue](https://github.com/user-attachments/assets/2f5cd6f4-d403-4c98-aa80-fc8d5df847d5)
@@ -207,6 +209,10 @@ session_key = "obtained_via_setup-lastfm"
 # Optional: Discord Rich Presence
 [discord]
 enabled = true
+
+# Optional:  Musixmatch Api
+[musixmatch]
+musixmatch_api_key = "TEST_API_KEY"
 ```
 
 ---
