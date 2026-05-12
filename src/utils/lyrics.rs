@@ -218,6 +218,7 @@ async fn fetch_lyrics(
     title: &str,
     artist: &str,
     debug_overlay: &Arc<DebugOverlay>,
+    musixmatch_api_key: Option<String>,
 ) -> Option<LyricsData> {
     let normalized_title = normalize_search_query(title);
     let normalized_artist = normalize_search_query(artist);
@@ -226,8 +227,10 @@ async fn fetch_lyrics(
         return Some(lyrics);
     }
 
-    if let Some(lyrics) = fetch_from_musixmatch(http, &normalized_title, &normalized_artist, debug_overlay).await {
-        return Some(lyrics);
+    if let Some(key) = musixmatch_api_key {
+        if let Some(lyrics) = fetch_from_musixmatch(http, &normalized_title, &normalized_artist, debug_overlay, &key).await {
+            return Some(lyrics);
+        }
     }
 
     info!("lyrics: all synced APIs failed, trying fallback -> lyrics.ovh");
@@ -334,7 +337,13 @@ struct MusixmatchResponse {
 
 #[derive(Debug, Deserialize)]
 struct MusixmatchMessage {
+    header: MusixmatchHeader,
     body: MusixmatchBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct MusixmatchHeader {
+    status_code: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -342,7 +351,6 @@ struct MusixmatchBody {
     #[serde(default)]
     track_list: Vec<MusixmatchTrack>,
 }
-
 #[derive(Debug, Deserialize)]
 struct MusixmatchTrack {
     track: TrackData,
@@ -361,6 +369,7 @@ async fn fetch_from_musixmatch(
     title: &str,
     artist: &str,
     debug_overlay: &Arc<DebugOverlay>,
+    api_key: &str,
 ) -> Option<LyricsData> {
     debug_overlay.log(
         LogLevel::Info,
@@ -371,26 +380,18 @@ async fn fetch_from_musixmatch(
         "https://api.musixmatch.com/ws/1.1/track.search?q_track={}&q_artist={}&f_has_lyrics=true&apikey={}",
         urlencoding::encode(title),
         urlencoding::encode(artist),
-        "c38d4b3f87bd1dac158c1537cf3e5e28"
+        api_key
     );
 
     let search_resp = match tokio::time::timeout(Duration::from_secs(5), http.get(&search_url).send()).await {
-        Ok(Ok(r)) if r.status().is_success() => r,
         Ok(Ok(r)) => {
-            debug_overlay.log(
-                LogLevel::Warn,
-                format!("lyrics: musixmatch search returned status {}", r.status()),
-            );
-            return None;
+            if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+                debug_overlay.log(LogLevel::Error, "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string());
+                return None;
+            }
+            r
         }
-        Ok(Err(e)) => {
-            debug_overlay.log(LogLevel::Warn, format!("lyrics: musixmatch request failed: {e}"));
-            return None;
-        }
-        Err(_) => {
-            debug_overlay.log(LogLevel::Warn, "lyrics: musixmatch request timed out");
-            return None;
-        }
+        _ => return None,
     };
 
     let search_json: MusixmatchResponse = match search_resp.json().await {
@@ -401,12 +402,28 @@ async fn fetch_from_musixmatch(
         }
     };
 
-    let track = search_json.message.body.track_list.first()?;
+    match search_json.message.header.status_code {
+        401 => {
+            debug_overlay.log(LogLevel::Error, "lyrics: Musixmatch API Key invalid (Internal 401)".to_string());
+            return None;
+        }
+        200 => {}
+        code => {
+            debug_overlay.log(LogLevel::Warn, format!("lyrics: Musixmatch returned internal code {}", code));
+            return None;
+        }
+    }
+
+    let track = match search_json.message.body.track_list.first() {
+        Some(t) => t,
+        None => {
+            debug_overlay.log(LogLevel::Info, "lyrics: no tracks found on musixmatch".to_string());
+            return None;
+        }
+    };
+
     if !track.track.has_lyrics {
-        debug_overlay.log(
-            LogLevel::Warn,
-            format!("lyrics: track {} has no lyrics on musixmatch", track.track.track_name),
-        );
+        debug_overlay.log(LogLevel::Warn, format!("lyrics: track '{}' has no lyrics", track.track.track_name));
         return None;
     }
 
@@ -414,11 +431,11 @@ async fn fetch_from_musixmatch(
     let lyrics_url = format!(
         "https://api.musixmatch.com/ws/1.1/track.lyrics.get?track_id={}&apikey={}",
         track_id,
-        "c38d4b3f87bd1dac158c1537cf3e5e28"
+        api_key
     );
 
     let lyrics_resp = match tokio::time::timeout(Duration::from_secs(5), http.get(&lyrics_url).send()).await {
-        Ok(Ok(r)) if r.status().is_success() => r,
+        Ok(Ok(r)) => r,
         _ => return None,
     };
 
@@ -436,10 +453,7 @@ async fn fetch_from_musixmatch(
 
         if !cleaned.is_empty() {
             let parsed = parse_plain(&cleaned);
-            debug_overlay.log(
-                LogLevel::Info,
-                format!("lyrics: found from musixmatch ({} lines)", parsed.lines.len()),
-            );
+            debug_overlay.log(LogLevel::Info, format!("lyrics: found from musixmatch ({} lines)", parsed.lines.len()));
             return Some(parsed);
         }
     }
@@ -539,18 +553,40 @@ struct HandleInner {
 pub struct LyricsHandle {
     inner: Arc<Mutex<HandleInner>>,
     cache: Arc<Mutex<LyricsCache>>,
-    http: reqwest::Client,
+    http: Arc<reqwest::Client>,
     debug_overlay: Arc<DebugOverlay>,
+    musixmatch_api_key: Option<String>,
 }
 
 impl LyricsHandle {
     pub fn new(db_path: PathBuf, http: reqwest::Client, debug_overlay: Arc<DebugOverlay>) -> Result<Self> {
+        Self::with_shared_client(db_path, Arc::new(http), debug_overlay)
+    }
+
+    pub fn with_shared_client(db_path: PathBuf, http: Arc<reqwest::Client>, debug_overlay: Arc<DebugOverlay>) -> Result<Self> {
         let cache = LyricsCache::open(&db_path)?;
+        let musixmatch_api_key = crate::config::AppConfig::load()
+            .ok()
+            .and_then(|cfg| cfg.get_musixmatch_api_key());
+
+        if musixmatch_api_key.is_none() {
+            debug_overlay.log(
+                LogLevel::Warn,
+                format!("lyrics: no musixmatch API key found, using fallback (may have low rate limits)"),
+            );
+        }
+
+        debug_overlay.log(
+            LogLevel::Warn,
+            format!("lyrics: no musixmatch API key found, using fallback (may have low rate limits) {:?}", musixmatch_api_key),
+        );
+
         Ok(Self {
             inner: Arc::new(Mutex::new(HandleInner::default())),
             cache: Arc::new(Mutex::new(cache)),
             http,
             debug_overlay,
+            musixmatch_api_key,
         })
     }
 
@@ -585,9 +621,10 @@ impl LyricsHandle {
         let artist = artist.to_string();
         let uri = uri.to_string();
         let debug_overlay = self.debug_overlay.clone();
+        let musixmatch_api_key = self.musixmatch_api_key.clone();
 
         tokio::spawn(async move {
-            let result = fetch_lyrics(&http, &title, &artist, &debug_overlay).await;
+            let result = fetch_lyrics(&http, &title, &artist, &debug_overlay, musixmatch_api_key).await;
             if let Some(ref data) = result {
                 if let Ok(c) = cache.lock() {
                     c.save(&uri, data, &debug_overlay);
