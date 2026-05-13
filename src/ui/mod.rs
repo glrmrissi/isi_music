@@ -823,18 +823,33 @@ impl Ui {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
+        let art_height = lines.len() as u16;
         if inner.width < 5 || inner.height < 1 {
             return;
         }
 
-        for (line_idx, line) in lines.iter().take(inner.height as usize).enumerate() {
-            let y = inner.y + line_idx as u16;
-            let mut x = inner.x;
+        let vertical_start = if inner.height > art_height {
+            (inner.height - art_height) / 2
+        } else {
+            0
+        };
 
+        for (line_idx, line) in lines.iter().take(inner.height as usize).enumerate() {
+            let y = inner.y + vertical_start + line_idx as u16;
+            if y >= inner.y + inner.height { break; }
+
+            let line_width = line.chars().count() as u16;
+            let horizontal_start = if inner.width > line_width {
+                (inner.width - line_width) / 2
+            } else {
+                0
+            };
+
+            let mut x = inner.x + horizontal_start;
             for ch in line.chars() {
                 if x >= inner.x + inner.width { break; }
                 if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
-                    cell.set_char(ch).set_fg(self.theme.text_primary);
+                    cell.set_char(ch).set_fg(self.theme.accent_color);
                 }
                 x = x.saturating_add(1);
             }
