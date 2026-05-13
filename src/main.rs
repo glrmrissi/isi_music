@@ -4,6 +4,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
 
@@ -213,12 +215,14 @@ fn main() -> Result<()> {
         }
         unsafe {
             libc::setsid();
-            let null = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
-            if null >= 0 {
-                libc::dup2(null, 0);
-                libc::dup2(null, 1);
-                libc::dup2(null, 2);
-                libc::close(null);
+        }
+
+        if let Ok(file) = OpenOptions::new().read(true).write(true).open("/dev/null") {
+            let fd = file.as_raw_fd();
+            unsafe {
+                libc::dup2(fd, libc::STDIN_FILENO);
+                libc::dup2(fd, libc::STDOUT_FILENO);
+                libc::dup2(fd, libc::STDERR_FILENO);
             }
         }
         return tokio::runtime::Builder::new_current_thread()
@@ -319,7 +323,7 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker, theme, theme_rx.into()).await?;
+            let mut app = App::new(picker, theme, theme_rx).await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
+use crate::utils::theme::ThemeWatcher;
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -205,7 +206,7 @@ pub struct App {
     recent_track_uris: std::collections::VecDeque<String>,
     playing_tracks: Vec<crate::spotify::TrackSummary>,
     theme: Theme,
-    theme_rx: std::sync::mpsc::Receiver<Theme>,
+    theme_rx: ThemeWatcher,
     consecutive_unavailable: u32,
     spotify_streaming_disabled: bool,
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
@@ -218,7 +219,7 @@ impl App {
     pub async fn new(
         picker: Picker,
         theme: Theme,
-        theme_rx: std::sync::mpsc::Receiver<Theme>,
+        theme_rx: ThemeWatcher,
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
@@ -440,7 +441,7 @@ impl App {
         self.last_tick = Instant::now();
 
         loop {
-            if let Ok(new_theme) = self.theme_rx.try_recv() {
+            while let Ok(new_theme) = self.theme_rx.try_recv() {
                 self.theme = new_theme.clone();
                 self.ui = Ui::new(new_theme, self.debug_overlay.clone());
             }

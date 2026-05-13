@@ -256,48 +256,67 @@ musixmatch_api_key = "TEST_API_KEY"
 Themes are fully customizable. Create `~/.config/isi-music/theme.toml` to override the default theme.
 
 ```toml
-# Persona 3
+# --- Persona 3 Theme ---
 border_active = "#00d4ff"    
 border_inactive = "#002b4d"  
 highlight_bg = "#004b7a"      
 text_primary = "#ffffff"
 accent_color = "#ffeb3b"    
 
+# --- ASCII Art Settings ---
+ascii_art_inline = [
+    "      .---.         ",
+    "     /|66_\\        ",
+    "     \\| ^ /---.    ",
+    "      |'-'| UI |   ",
+    "      |   |____|   ",
+    "      |   |        ",
+    "      '---'        ",
+    "    _________      ",
+    "   /        /|     ",
+    "  /________/ |     ",
+    "  |        | |     ",
+    "  |  ISI   | /     ",
+    "  |________|/      "
+]
+
+# --- UI Layout Tree ---
 [layout_tree]
 direction = "vertical"
 constraints = [
-    { length = 3 },    # Header
-    { fill = 1 },      # Main body
-    { length = 1 },    # Progress/Marquee row
-    { length = 1 }     # Help/Status row
+    { length = 3 },    # Header/Visualizer
+    { fill = 1 },      # Main Body
+    { length = 1 },    # Marquee/Progress
+    { length = 1 }     # Help/Status
 ]
 
+# 1. Header Row
 [[layout_tree.children]]
 direction = "horizontal"
 constraints = [
     { fill = 1 },      
     { length = 40 }   
 ]
-
     [[layout_tree.children.children]]
     widget = "header"
 
     [[layout_tree.children.children]]
     widget = "visualizer"
 
-# --- Main body ---
+# 2. Main Body Row
 [[layout_tree.children]]
 direction = "horizontal"
 constraints = [
     { percentage = 25 },
     { fill = 1 }
 ]
-    # Sidebar (vertical: Library | Playlists)
+    # Sidebar (Library + Playlists + ASCII Art)
     [[layout_tree.children.children]]
     direction = "vertical"
     constraints = [
-        { length = 7 },
-        { fill = 1 }
+        { length = 7 },  # Library
+        { length = 15 }, # Playlists
+        { fill = 1 }     # ASCII Art (takes remaining space)
     ]
         [[layout_tree.children.children.children]]
         widget = "library"
@@ -305,7 +324,10 @@ constraints = [
         [[layout_tree.children.children.children]]
         widget = "playlists"
 
-    # Right column
+        [[layout_tree.children.children.children]]
+        widget = "ascii_art"
+
+    # Main Content Area
     [[layout_tree.children.children]]
     direction = "vertical"
     constraints = [
@@ -314,10 +336,11 @@ constraints = [
     ]
         [[layout_tree.children.children.children]]
         widget = "main_content"
+
         [[layout_tree.children.children.children]]
         widget = "queue"
 
-# --- Progress row ---
+# 3. Playback Row
 [[layout_tree.children]]
 direction = "horizontal"
 constraints = [
@@ -326,10 +349,11 @@ constraints = [
 ]
     [[layout_tree.children.children]]
     widget = "marquee"
+
     [[layout_tree.children.children]]
     widget = "progress"
 
-# --- Help/Status ---
+# 4. Status Bar
 [[layout_tree.children]]
 widget = "help"
 ```

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ratatui::style::{Color, Style, Modifier};
 use ratatui::layout::{Constraint, Direction};
+use tracing::warn;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
@@ -41,6 +42,7 @@ pub enum UiWidget {
     Marquee,
     Visualizer,
     Help,
+    AsciiArt,
     Spacer,
 }
 
@@ -171,6 +173,15 @@ pub struct Theme {
 
     #[serde(default)]
     pub layout_tree: LayoutNode,
+
+    #[serde(default)]
+    pub ascii_art: Option<String>,
+
+    #[serde(default)]
+    pub ascii_art_inline: Option<Vec<String>>,
+    
+    #[serde(default)]
+    pub ascii_art_path: Option<PathBuf>,
 }
 
 impl Default for Theme {
@@ -183,6 +194,9 @@ impl Default for Theme {
             accent_color:    Color::Green,
             widget_styles:   HashMap::new(),
             layout_tree:     LayoutNode::default(),
+            ascii_art: None,
+            ascii_art_inline: None,
+            ascii_art_path:  None,
         }
     }
 }
@@ -193,14 +207,6 @@ pub struct ThemeWatcher {
 }
 
 impl ThemeWatcher {
-    pub fn recv(&self) -> Option<Theme> {
-        self.rx.try_recv().ok()
-    }
-
-    pub fn receiver(&self) -> &Receiver<Theme> {
-        &self.rx
-    }
-
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
@@ -216,14 +222,6 @@ impl std::ops::Deref for ThemeWatcher {
     type Target = std::sync::mpsc::Receiver<Theme>;
     fn deref(&self) -> &Self::Target {
         &self.rx
-    }
-}
-
-impl From<ThemeWatcher> for std::sync::mpsc::Receiver<Theme> {
-    fn from(w: ThemeWatcher) -> Self {
-        w.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        let md = std::mem::ManuallyDrop::new(w);
-        unsafe { std::ptr::read(&md.rx) }
     }
 }
 
@@ -259,39 +257,44 @@ impl Theme {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
 
-        thread::Builder::new()
-            .name("theme-watcher".into())
-            .spawn(move || {
-                let mut last_modified = fs::metadata(&path)
-                    .ok()
-                    .and_then(|m| m.modified().ok());
+        thread::spawn(move || {
+            let mut last_content = fs::read_to_string(&path).unwrap_or_default();
 
-                loop {
-                    if stop_clone.load(Ordering::Relaxed) {
-                        break;
-                    }
+            loop {
+                if stop_clone.load(Ordering::Relaxed) { break; }
 
-                    thread::sleep(Duration::from_millis(500));
+                if let Ok(current_content) = fs::read_to_string(&path) {
+                    if current_content != last_content {
+                        thread::sleep(Duration::from_millis(50));
 
-                    if stop_clone.load(Ordering::Relaxed) {
-                        break;
-                    }
-
-                    if let Ok(metadata) = fs::metadata(&path) {
-                        if let Ok(current_modified) = metadata.modified() {
-                            if Some(current_modified) != last_modified {
-                                last_modified = Some(current_modified);
-                                let new_theme = Theme::load();
-                                if tx.send(new_theme).is_err() {
-                                    break;
-                                }
+                        if let Ok(new_theme) = toml::from_str::<Theme>(&current_content) {
+                            if tx.send(new_theme).is_ok() {
+                                last_content = current_content;
                             }
+                        } else {
+                            warn!("Error on theme.toml");
                         }
                     }
                 }
-            })?;
+
+                thread::sleep(Duration::from_millis(500));
+            }
+        });
 
         Ok(ThemeWatcher { rx, stop })
+    }
+
+    pub fn load_ascii_art(&self) -> Option<Vec<String>> {
+        if let Some(ref lines) = self.ascii_art_inline {
+            if !lines.is_empty() { return Some(lines.clone()); }
+        }
+
+        if let Some(ref path) = self.ascii_art_path {
+            if let Ok(content) = fs::read_to_string(path) {
+                return Some(content.lines().map(|s| s.to_string()).collect());
+            }
+        }
+        None
     }
 }
 
