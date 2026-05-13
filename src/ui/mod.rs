@@ -769,6 +769,7 @@ impl Ui {
                     self.render_visualizer(frame, &pb, &viz_bands, area, state);
                 }
                 UiWidget::Help        => self.render_help(frame, state, area),
+                UiWidget::AsciiArt    => self.render_ascii_art(frame, area),
                 UiWidget::Spacer      => {}
             }
             return;
@@ -810,6 +811,32 @@ impl Ui {
                 ActiveContent::Albums    => self.render_albums(frame, state, area),
                 ActiveContent::Artists   => self.render_artists(frame, state, area),
                 ActiveContent::Shows     => self.render_shows(frame, state, area),
+            }
+        }
+    }
+
+    fn render_ascii_art(&self, frame: &mut Frame, area: Rect) {
+        let Some(lines) = self.theme.load_ascii_art() else { return; };
+        if lines.is_empty() { return; }
+
+        let block = Block::default();
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if inner.width < 5 || inner.height < 1 {
+            return;
+        }
+
+        for (line_idx, line) in lines.iter().take(inner.height as usize).enumerate() {
+            let y = inner.y + line_idx as u16;
+            let mut x = inner.x;
+
+            for ch in line.chars() {
+                if x >= inner.x + inner.width { break; }
+                if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+                    cell.set_char(ch).set_fg(self.theme.text_primary);
+                }
+                x = x.saturating_add(1);
             }
         }
     }
@@ -1003,7 +1030,6 @@ impl Ui {
         };
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Left), inner);
     }
-
 
     fn render_library(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Library;
@@ -1233,7 +1259,6 @@ impl Ui {
         );
     }
 
-
     fn render_welcome(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1361,7 +1386,6 @@ impl Ui {
             );
         }
     }
-
 
     fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Tracks;
