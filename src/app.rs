@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use crate::utils::theme::ThemeWatcher;
 use tokio::sync::oneshot;
-use tracing::warn;
+use tracing::{warn, info};
 
 pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<Vec<u8>>) {
     use symphonia::core::{
@@ -212,7 +212,10 @@ pub struct App {
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
     local_scan_total: usize,
     lyrics: crate::utils::lyrics::LyricsHandle,
-    pub debug_overlay: Arc<DebugOverlay>
+    pub debug_overlay: Arc<DebugOverlay>,
+    reconnect_attempts: u32,
+    last_reconnect_attempt: Option<Instant>,
+    last_playback_health_check: Instant,
 }
 
 impl App {
@@ -430,6 +433,9 @@ impl App {
             local_scan_total: 0,
             lyrics,
             debug_overlay,
+            reconnect_attempts: 0,
+            last_reconnect_attempt: None,
+            last_playback_health_check: Instant::now(),
         })
     }
 
@@ -439,6 +445,8 @@ impl App {
     ) -> Result<()> {
         let tick_rate = Duration::from_millis(16);
         self.last_tick = Instant::now();
+
+        let debug_overlay = Arc::new(DebugOverlay::new());
 
         loop {
             while let Ok(new_theme) = self.theme_rx.try_recv() {
@@ -547,6 +555,9 @@ impl App {
                     self.state.playback.lyrics_loading = false;
                 }
             }
+
+            let mut needs_player_swap: bool = false;
+
             if let Some(player) = &mut self.player {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
@@ -593,22 +604,36 @@ impl App {
                             }
                         }
                         PlayerNotification::FreeAccountDetected => {
-                            self.spotify_streaming_disabled = true;
-                            self.consecutive_unavailable = 0;
-                            self.state.status_msg = Some(
-                                "⚠ Spotify Premium required for streaming. Switched to local-only mode.".to_string(),
-                            );
-                            self.player = None;
-                            self.band_energies = None;
-                            if self.parked_player.is_some() {
-                                std::mem::swap(&mut self.player, &mut self.parked_player);
-                                self.local_active = true;
-                                self.band_energies =
-                                    self.player.as_ref().and_then(|p| p.band_energies());
+                            if !self.spotify_streaming_disabled {
+                                warn!("Free account detected - switching to local-only mode");
+                                self.spotify_streaming_disabled = true;
+                                self.consecutive_unavailable = 0;
+                                
+                                debug_overlay.log(
+                                    LogLevel::Warn, 
+                                    format!("Free account detected - switching to local-only mode")
+                                );
+                                self.state.status_msg = Some(
+                                    "⚠ Spotify Premium required. Switched to local-only mode.".to_string(),
+                                );
+
+                                needs_player_swap = true;
                             }
-                            needs_sync = false;
-                            break;
                         }
+                    }
+                }
+
+                if needs_player_swap  {
+                    self.player = None;
+                    self.band_energies = None;
+                    if self.parked_player.is_some() {
+                        std::mem::swap(&mut self.player, &mut self.parked_player);
+                        self.local_active = true;
+                        self.band_energies =
+                            self.player.as_ref().and_then(|p| p.band_energies());
+                        needs_sync = true;  
+                    } else {
+                        needs_sync = false;
                     }
                 }
             }
@@ -668,6 +693,19 @@ impl App {
 
             if needs_reconnect && !self.session_reconnecting {
                 self.session_reconnecting = true;
+                self.reconnect_player().await;
+            }
+
+            if !self.spotify_streaming_disabled && 
+               self.last_playback_health_check.elapsed() > Duration::from_secs(45) {
+                self.last_playback_health_check = Instant::now();
+                
+                if let Some(_token) = self.spotify.get_access_token().await {}
+            }
+
+            if self.session_reconnecting && 
+               self.reconnect_attempts > 0 && 
+               self.reconnect_attempts < 5 {
                 self.reconnect_player().await;
             }
 
@@ -1281,6 +1319,8 @@ impl App {
     }
 
     async fn handle_enter(&mut self) {
+        let mut needs_reconnect = false;
+        
         match self.state.focus {
             Focus::Library => {
                 let idx = match self.state.library_list.selected() {
@@ -1295,6 +1335,7 @@ impl App {
                 match idx {
                     0 => {
                         self.state.status_msg = Some("Loading Liked Songs…".to_string());
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                         match self.spotify.fetch_liked_tracks(0).await {
                             Ok((tracks, total)) => {
                                 self.state.tracks = tracks;
@@ -1315,11 +1356,21 @@ impl App {
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
-                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                    warn!("Got 401 - triggering reconnect");
+                                    needs_reconnect = true;
+                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                } else {
+                                    self.state.status_msg = Some(format!("Error: {e}"));
+                                }
+                            }
                         }
                     }
                     1 => {
                         self.state.status_msg = Some("Loading saved albums…".to_string());
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                         match self.spotify.fetch_saved_albums(0).await {
                             Ok((albums, total)) => {
                                 self.state.albums = albums;
@@ -1337,11 +1388,21 @@ impl App {
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
-                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                    warn!("Got 401 - triggering reconnect");
+                                    needs_reconnect = true;
+                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                } else {
+                                    self.state.status_msg = Some(format!("Error: {e}"));
+                                }
+                            }
                         }
                     }
                     2 => {
                         self.state.status_msg = Some("Loading followed artists…".to_string());
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                         match self.spotify.fetch_followed_artists().await {
                             Ok(artists) => {
                                 self.state.artists = artists;
@@ -1357,7 +1418,16 @@ impl App {
                                 self.state.status_msg = None;
                                 self.state.focus = Focus::Tracks;
                             }
-                            Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                    warn!("Got 401 - triggering reconnect");
+                                    needs_reconnect = true;
+                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                } else {
+                                    self.state.status_msg = Some(format!("Error: {e}"));
+                                }
+                            }
                         }
                     }
                     3 => {
@@ -1376,6 +1446,7 @@ impl App {
                     let uri = playlist.uri.clone();
                     let name = playlist.name.clone();
                     self.state.status_msg = Some(format!("Loading {name}…"));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     match self.spotify.fetch_playlist_tracks(&id, 0).await {
                         Ok((tracks, total)) => {
                             self.state.tracks = tracks;
@@ -1396,7 +1467,16 @@ impl App {
                             self.state.status_msg = None;
                             self.state.focus = Focus::Tracks;
                         }
-                        Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                warn!("Got 401 - triggering reconnect");
+                                needs_reconnect = true;
+                                self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                            } else {
+                                self.state.status_msg = Some(format!("Error: {e}"));
+                            }
+                        }
                     }
                 }
             }
@@ -1408,6 +1488,7 @@ impl App {
                             let id = album.id.clone();
                             let name = album.name.clone();
                             self.state.status_msg = Some(format!("Loading {name}…"));
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_album_tracks(&id, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
@@ -1426,7 +1507,16 @@ impl App {
                                     self.state.rebuild_sort_indices();
                                     self.state.status_msg = None;
                                 }
-                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                Err(e) => {
+                                    let err_str = e.to_string();
+                                    if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                        warn!("Got 401 - triggering reconnect");
+                                        needs_reconnect = true;
+                                        self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                    } else {
+                                        self.state.status_msg = Some(format!("Error: {e}"));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1437,6 +1527,7 @@ impl App {
                             let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                             let name = artist.name.clone();
                             self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_artist_tracks(&name, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
@@ -1456,7 +1547,16 @@ impl App {
                                     self.state.rebuild_sort_indices();
                                     self.state.status_msg = None;
                                 }
-                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                Err(e) => {
+                                    let err_str = e.to_string();
+                                    if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                        warn!("Got 401 - triggering reconnect");
+                                        needs_reconnect = true;
+                                        self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                    } else {
+                                        self.state.status_msg = Some(format!("Error: {e}"));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1467,6 +1567,7 @@ impl App {
                             let id = show.id.clone();
                             let name = show.name.clone();
                             self.state.status_msg = Some(format!("Loading {name}…"));
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_show_episodes(&id, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
@@ -1485,7 +1586,16 @@ impl App {
                                     self.state.rebuild_sort_indices();
                                     self.state.status_msg = None;
                                 }
-                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                Err(e) => {
+                                    let err_str = e.to_string();
+                                    if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                        warn!("Got 401 - triggering reconnect");
+                                        needs_reconnect = true;
+                                        self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                    } else {
+                                        self.state.status_msg = Some(format!("Error: {e}"));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1597,6 +1707,7 @@ impl App {
                                 .as_deref()
                                 .map(|u| u != "liked_songs" && !u.starts_with("search:"))
                                 .unwrap_or(false);
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             let result = if is_playlist {
                                 let uri = self.state.active_playlist_uri.clone().unwrap();
                                 self.spotify.play_in_context(&uri, &track_uri).await
@@ -1604,7 +1715,14 @@ impl App {
                                 self.spotify.play_track_uri(&track_uri).await
                             };
                             if let Err(e) = result {
-                                self.state.status_msg = Some(format!("Error: {e}"));
+                                let err_str = e.to_string();
+                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                    warn!("Got 401 - triggering reconnect");
+                                    needs_reconnect = true;
+                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                } else {
+                                    self.state.status_msg = Some(format!("Error: {e}"));
+                                }
                             }
                         }
                     }
@@ -1630,6 +1748,7 @@ impl App {
                             self.activate_spotify_player();
                             if let Some(player) = &mut self.player {
                                 self.current_track_uri = track_uri.clone();
+                                tokio::time::sleep(Duration::from_millis(100)).await;
                                 player.set_queue(vec![track_uri], 0);
                                 if let Some(sr) = &self.state.search_results {
                                     if let Some(idx) = sr.track_list.selected() {
@@ -1668,6 +1787,7 @@ impl App {
                             .map(|a| (a.id.clone(), a.name.clone(), a.uri.clone()));
                         if let Some((id, name, uri)) = album {
                             self.state.status_msg = Some(format!("Loading {name}…"));
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_album_tracks(&id, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
@@ -1688,7 +1808,16 @@ impl App {
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
-                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                Err(e) => {
+                                    let err_str = e.to_string();
+                                    if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                        warn!("Got 401 - triggering reconnect");
+                                        needs_reconnect = true;
+                                        self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                    } else {
+                                        self.state.status_msg = Some(format!("Error: {e}"));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1701,6 +1830,7 @@ impl App {
                             .map(|p| (p.id.clone(), p.name.clone(), p.uri.clone()));
                         if let Some((id, name, uri)) = playlist {
                             self.state.status_msg = Some(format!("Loading {name}…"));
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_playlist_tracks(&id, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
@@ -1721,7 +1851,16 @@ impl App {
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
-                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                Err(e) => {
+                                    let err_str = e.to_string();
+                                    if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                        warn!("Got 401 - triggering reconnect");
+                                        needs_reconnect = true;
+                                        self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                    } else {
+                                        self.state.status_msg = Some(format!("Error: {e}"));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1734,6 +1873,7 @@ impl App {
                             .map(|a| (a.id.clone(), a.name.clone()));
                         if let Some((id, name)) = artist {
                             self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_artist_tracks(&name, 0).await {
                                 Ok((tracks, total)) => {
                                     self.state.tracks = tracks;
@@ -1755,7 +1895,16 @@ impl App {
                                     self.state.status_msg = None;
                                     self.state.focus = Focus::Tracks;
                                 }
-                                Err(e) => self.state.status_msg = Some(format!("Error: {e}")),
+                                Err(e) => {
+                                    let err_str = e.to_string();
+                                    if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                                        warn!("Got 401 - triggering reconnect");
+                                        needs_reconnect = true;
+                                        self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                                    } else {
+                                        self.state.status_msg = Some(format!("Error: {e}"));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1763,6 +1912,12 @@ impl App {
                 }
             }
             Focus::Queue => {}
+        }
+
+        if needs_reconnect && !self.session_reconnecting {
+            warn!("Triggering reconnect due to 401");
+            self.session_reconnecting = true;
+            self.reconnect_player().await;
         }
     }
 
@@ -2503,7 +2658,56 @@ impl App {
     }
 
     async fn reconnect_player(&mut self) {
-        warn!("Session lost — attempting to reconnect librespot...");
+        const MAX_RECONNECT_ATTEMPTS: u32 = 5;
+
+        if self.session_reconnecting {
+            if let Some(last_attempt) = self.last_reconnect_attempt {
+                let attempts_so_far = self.reconnect_attempts.min(5);
+                let delay_secs = 2u64.pow(attempts_so_far);
+                let max_delay = Duration::from_secs(60);
+                let delay = Duration::from_secs(delay_secs).min(max_delay);
+
+                if last_attempt.elapsed() < delay {
+                    return;
+                }
+            }
+
+            if self.reconnect_attempts >= MAX_RECONNECT_ATTEMPTS {
+                warn!(
+                    "Max reconnect attempts ({}) reached",
+                    MAX_RECONNECT_ATTEMPTS
+                );
+                self.debug_overlay.log(
+                    LogLevel::Warn, 
+                    format!("Max reconnect attempts ({}) reached",
+                                MAX_RECONNECT_ATTEMPTS)
+                    );
+                self.state.status_msg = Some(
+                    "Connection lost - max retry attempts reached.".to_string(),
+                );
+                self.session_reconnecting = false;
+                return;
+            }
+        }
+
+        self.reconnect_attempts += 1;
+        self.last_reconnect_attempt = Some(Instant::now());
+        self.session_reconnecting = true;
+
+        warn!(
+            "Attempting librespot reconnection ({}/{})",
+            self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+        );
+
+        self.debug_overlay.log(
+            LogLevel::Warn, 
+            format!("Attempting librespot reconnection ({}/{})",
+                self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS)
+            );
+        self.state.status_msg = Some(format!(
+            "Reconnecting ({}/{})...",
+            self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+        ));
 
         if self.spotify_streaming_disabled {
             self.session_reconnecting = false;
@@ -2522,8 +2726,11 @@ impl App {
 
         let Some(token) = self.spotify.get_access_token().await else {
             warn!("Could not get access token for reconnect");
+            self.debug_overlay.log(
+            LogLevel::Warn, 
+            format!("Could not get access token for reconnect")
+            );
             self.state.status_msg = Some("Reconnect failed: no token".to_string());
-            self.session_reconnecting = false;
             return;
         };
 
@@ -2536,13 +2743,24 @@ impl App {
                 }
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
-                self.state.status_msg = Some("Reconnected!".to_string());
-                warn!("Librespot session reconnected successfully");
+                self.state.status_msg = Some("🎵 Reconnected!".to_string());
+                info!("Librespot session reconnected successfully");
+                self.debug_overlay.log(
+                LogLevel::Info, 
+                format!("Librespot session reconnected successfully")
+                );
+                self.reconnect_attempts = 0;
+                self.last_reconnect_attempt = None;
+                self.session_reconnecting = false;
             }
             Err(e) => {
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("free") || msg.contains("premium") {
                     warn!("Spotify free account — disabling streaming permanently");
+                    self.debug_overlay.log(
+                    LogLevel::Warn, 
+                    format!("Spotify free account — disabling streaming permanently")
+                    );
                     self.spotify_streaming_disabled = true;
                     self.state.status_msg = Some(
                         "⚠ Spotify Premium required. Switched to local-only mode.".to_string(),
@@ -2550,16 +2768,29 @@ impl App {
                     if self.parked_player.is_some() {
                         std::mem::swap(&mut self.player, &mut self.parked_player);
                         self.local_active = true;
-                        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+                        self.band_energies =
+                            self.player.as_ref().and_then(|p| p.band_energies());
                     }
+                    self.session_reconnecting = false;
+                } else if msg.contains("401") || msg.contains("unauthorized") {
+                    warn!(
+                        "Reconnect failed with 401 - will retry ({}/{})",
+                        self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+                    );
+                    self.state.status_msg = Some(format!(
+                        "Authorization expired, retrying ({}/{})",
+                        self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+                    ));
                 } else {
                     warn!("Reconnect failed: {e:#}");
+                    self.debug_overlay.log(
+                    LogLevel::Warn, 
+                    format!("Reconnect failed: {e:#}")
+                    );
                     self.state.status_msg = Some(format!("Reconnect failed: {e}"));
                 }
             }
         }
-
-        self.session_reconnecting = false;
     }
 }
 

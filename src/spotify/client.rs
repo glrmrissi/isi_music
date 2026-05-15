@@ -10,13 +10,37 @@ use rspotify::{
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::time::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
 
 use crate::config;
 use crate::ui::PlaybackState;
 use super::auth::SpotifyAuth;
+
+ static SPOTIFY_RATE_LIMITER: LazyLock<Mutex<Instant>> = 
+            LazyLock::new(|| Mutex::new(Instant::now()));
+
+async fn spotify_rate_limit() {
+    let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
+    let elapsed = last_request.elapsed();
+    let min_interval = Duration::from_millis(500);
+    
+    if elapsed < min_interval {
+        let sleep_time = min_interval - elapsed;
+        
+        drop(last_request);  
+        sleep(sleep_time).await;
+        
+        let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
+        *last_request = Instant::now();
+    } else {
+        *last_request = Instant::now();
+    }
+}
 
 #[derive(Clone)]
 struct SearchCache {
@@ -302,15 +326,6 @@ impl LibraryCache {
             params![data, Self::unix_now()],
         );
     }
-
-    pub fn invalidate(&self, key: &str) {
-        if let Ok(conn) = self.open() {
-            let _ = conn.execute(
-                "DELETE FROM library_cache WHERE key = ?1",
-                params![key],
-            );
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -414,6 +429,7 @@ impl SpotifyClient {
             warn!("Spotify client_id is empty or default. Starting in unauthenticated mode.");
             return Ok(Self::new_unauthenticated().await);
         }
+
         
         let mut client = SpotifyAuth::build_client()?;
 
@@ -496,9 +512,71 @@ impl SpotifyClient {
 
     pub async fn get_access_token(&self) -> Option<String> {
         if !self.authenticated { return None; }
-        let guard = self.client.token.lock().await.ok()?;
-        guard.as_ref().map(|t| t.access_token.clone())
+        
+        let guard = match self.client.token.lock().await {
+            Ok(g) => g,
+            Err(_) => return None,
+        };
+        
+        if let Some(token) = guard.as_ref() {
+            use chrono::Utc;
+            
+            if let Some(expires_at) = token.expires_at {
+                if expires_at > Utc::now() {
+                    return Some(token.access_token.clone());
+                }
+            }
+            
+            if let Some(ref rt) = token.refresh_token {
+                let rt_clone = rt.clone();
+                drop(guard);
+                
+                match Self::exchange_refresh_token(&rt_clone).await {
+                    Ok((new_access_token, expires_in, new_rt)) => {
+                        let effective_rt = new_rt.as_deref().unwrap_or(rt_clone.as_str());
+                        config::save_refresh_token(effective_rt);
+                        
+                        use chrono::{Duration, Utc};
+                        use std::collections::HashSet;
+                        
+                        let expires_at = Utc::now() + Duration::try_seconds(expires_in as i64)
+                            .unwrap_or_else(|| Duration::try_seconds(3600).unwrap());
+                        
+                        let scopes: HashSet<String> = [
+                            "streaming", "user-read-private", "user-library-read",
+                            "user-modify-playback-state", "user-read-playback-state",
+                            "user-read-currently-playing", "user-library-modify",
+                            "playlist-read-private", "playlist-modify-private",
+                            "playlist-modify-public",
+                        ].iter().map(|s| s.to_string()).collect();
+                        
+                        let new_token = Token {
+                            access_token: new_access_token.clone(),
+                            expires_in: Duration::try_seconds(expires_in as i64)
+                                .unwrap_or_else(|| Duration::try_seconds(3600).unwrap()),
+                            expires_at: Some(expires_at),
+                            refresh_token: Some(effective_rt.to_string()),
+                            scopes,
+                        };
+                        
+                        if let Ok(mut guard) = self.client.token.lock().await {
+                            *guard = Some(new_token);
+                        }
+                        
+                        return Some(new_access_token);
+                    }
+                    Err(e) => {
+                        warn!("Failed to renew access token with refresh_token: {}", e);
+                        return None;
+                    }
+                }
+            }
+        }
+        
+        None
     }
+
+    
 
     async fn fetch_user_market(&self) -> Result<String> {
         let token = self.get_access_token().await
@@ -607,6 +685,7 @@ impl SpotifyClient {
 
         let offset_str = offset.to_string();
         let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
+        spotify_rate_limit().await;
         let response = self.http
             .get(&url)
             .bearer_auth(&token)
@@ -617,6 +696,17 @@ impl SpotifyClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            
+            if status.as_u16() == 401 {
+                warn!("Got 401 Unauthorized - token may have expired");
+                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+            }
+            
+            if status.as_u16() == 429 {
+                warn!("Rate limited on Spotify API");
+                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            }
+            
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
@@ -796,6 +886,7 @@ impl SpotifyClient {
 
         let offset_str = offset.to_string();
         let limit_str = limit.to_string();
+        spotify_rate_limit().await;
         let response = self.http
             .get("https://api.spotify.com/v1/search")
             .bearer_auth(&token)
@@ -811,6 +902,17 @@ impl SpotifyClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            
+            if status.as_u16() == 401 {
+                warn!("Got 401 Unauthorized - token may have expired");
+                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+            }
+            
+            if status.as_u16() == 429 {
+                warn!("Rate limited on Spotify API");
+                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            }
+            
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
@@ -907,6 +1009,7 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
+        spotify_rate_limit().await;
         let response = self.http
             .get(format!("https://api.spotify.com/v1/albums/{album_id}/tracks"))
             .bearer_auth(&token)
@@ -917,6 +1020,17 @@ impl SpotifyClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            
+            if status.as_u16() == 401 {
+                warn!("Got 401 Unauthorized - token may have expired");
+                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+            }
+            
+            if status.as_u16() == 429 {
+                warn!("Rate limited on Spotify API");
+                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            }
+            
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
@@ -1025,6 +1139,7 @@ impl SpotifyClient {
         let market = self.user_market.as_deref().unwrap_or("BR");
         let query = format!("artist:\"{}\"", artist_name);
         let offset_str = offset.to_string();
+        spotify_rate_limit().await;
         let response = self.http
             .get("https://api.spotify.com/v1/search")
             .bearer_auth(&token)
@@ -1041,6 +1156,17 @@ impl SpotifyClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            
+            if status.as_u16() == 401 {
+                warn!("Got 401 Unauthorized - token may have expired");
+                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+            }
+            
+            if status.as_u16() == 429 {
+                warn!("Rate limited on Spotify API");
+                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            }
+            
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
@@ -1074,6 +1200,7 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         let offset_str = offset.to_string();
+        spotify_rate_limit().await;
         let response = self.http
             .get("https://api.spotify.com/v1/me/shows")
             .bearer_auth(&token)
@@ -1084,6 +1211,17 @@ impl SpotifyClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            
+            if status.as_u16() == 401 {
+                warn!("Got 401 Unauthorized - token may have expired");
+                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+            }
+            
+            if status.as_u16() == 429 {
+                warn!("Rate limited on Spotify API");
+                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            }
+            
             return Err(anyhow::anyhow!("Spotify {status}: {body}"));
         }
 
@@ -1120,6 +1258,7 @@ impl SpotifyClient {
             market_owned = m.clone();
             query.push(("market", &market_owned));
         }
+        spotify_rate_limit().await;
         let response = self.http
             .get(format!("https://api.spotify.com/v1/shows/{show_id}/episodes"))
             .bearer_auth(&token)
