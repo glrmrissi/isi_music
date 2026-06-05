@@ -1,4 +1,4 @@
-use crate::ui::PlaybackState;
+use crate::ui::{PlaybackState, LIBRARY_ITEMS};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use id3::TagLike;
@@ -1097,6 +1097,8 @@ impl App {
                     self.state.previous_search = None;
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
+                } else if self.state.compact_effective && self.state.active_content != ActiveContent::None {
+                    self.state.active_content = ActiveContent::None;
                 }
             }
 
@@ -1271,6 +1273,18 @@ impl App {
                 }
             }
 
+            KeyCode::Char(c) if Self::char_matches(c, "m") => {
+                self.state.compact_mode = !self.state.compact_mode;
+                if self.state.compact_mode && matches!(self.state.focus, Focus::Library | Focus::Playlists | Focus::Queue) {
+                    self.state.focus = Focus::Tracks;
+                }
+                self.state.status_msg = Some(if self.state.compact_mode {
+                    "Compact mode on".to_string()
+                } else {
+                    "Compact mode off".to_string()
+                });
+            }
+
             KeyCode::Char(c) if c == '+' || c == '=' => {
                 if let Some(player) = &mut self.player {
                     player.volume_up();
@@ -1327,155 +1341,16 @@ impl App {
                     Some(i) => i,
                     None => return,
                 };
-                if idx != 4 && !self.spotify.authenticated {
-                    self.state.status_msg =
-                        Some("Spotify not connected — only Local Files available".to_string());
-                    return;
-                }
-                match idx {
-                    0 => {
-                        self.state.status_msg = Some("Loading Liked Songs…".to_string());
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        match self.spotify.fetch_liked_tracks(0).await {
-                            Ok((tracks, total)) => {
-                                self.state.tracks = tracks;
-                                self.state.tracks_total = total;
-                                self.state.tracks_offset = self.state.tracks.len() as u32;
-                                self.state.active_playlist_uri = Some("liked_songs".to_string());
-                                self.state.active_playlist_id = Some("liked_songs".to_string());
-                                self.state
-                                    .track_list
-                                    .select(if self.state.tracks.is_empty() {
-                                        None
-                                    } else {
-                                        Some(0)
-                                    });
-                                self.state.active_content = ActiveContent::Tracks;
-                                self.state.search_results = None;
-                                self.state.rebuild_sort_indices();
-                                self.state.status_msg = None;
-                                self.state.focus = Focus::Tracks;
-                            }
-                            Err(e) => {
-                                let err_str = e.to_string();
-                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                                    warn!("Got 401 - triggering reconnect");
-                                    needs_reconnect = true;
-                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
-                                } else {
-                                    self.state.status_msg = Some(format!("Error: {e}"));
-                                }
-                            }
-                        }
-                    }
-                    1 => {
-                        self.state.status_msg = Some("Loading saved albums…".to_string());
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        match self.spotify.fetch_saved_albums(0).await {
-                            Ok((albums, total)) => {
-                                self.state.albums = albums;
-                                self.state.albums_total = total;
-                                self.state.albums_offset = self.state.albums.len() as u32;
-                                self.state
-                                    .album_list
-                                    .select(if self.state.albums.is_empty() {
-                                        None
-                                    } else {
-                                        Some(0)
-                                    });
-                                self.state.active_content = ActiveContent::Albums;
-                                self.state.search_results = None;
-                                self.state.status_msg = None;
-                                self.state.focus = Focus::Tracks;
-                            }
-                            Err(e) => {
-                                let err_str = e.to_string();
-                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                                    warn!("Got 401 - triggering reconnect");
-                                    needs_reconnect = true;
-                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
-                                } else {
-                                    self.state.status_msg = Some(format!("Error: {e}"));
-                                }
-                            }
-                        }
-                    }
-                    2 => {
-                        self.state.status_msg = Some("Loading followed artists…".to_string());
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        match self.spotify.fetch_followed_artists().await {
-                            Ok(artists) => {
-                                self.state.artists = artists;
-                                self.state
-                                    .artist_list
-                                    .select(if self.state.artists.is_empty() {
-                                        None
-                                    } else {
-                                        Some(0)
-                                    });
-                                self.state.active_content = ActiveContent::Artists;
-                                self.state.search_results = None;
-                                self.state.status_msg = None;
-                                self.state.focus = Focus::Tracks;
-                            }
-                            Err(e) => {
-                                let err_str = e.to_string();
-                                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                                    warn!("Got 401 - triggering reconnect");
-                                    needs_reconnect = true;
-                                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
-                                } else {
-                                    self.state.status_msg = Some(format!("Error: {e}"));
-                                }
-                            }
-                        }
-                    }
-                    3 => {
-                        self.state.status_msg = Some("Podcasts — coming soon".to_string());
-                    }
-                    4 => {
-                        self.load_local_files().await;
-                    }
-                    _ => {}
+                if self.handle_library_item(idx).await {
+                    needs_reconnect = true;
                 }
             }
 
             Focus::Playlists => {
-                if let Some(playlist) = self.state.selected_playlist() {
-                    let id = playlist.id.clone();
-                    let uri = playlist.uri.clone();
-                    let name = playlist.name.clone();
-                    self.state.status_msg = Some(format!("Loading {name}…"));
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    match self.spotify.fetch_playlist_tracks(&id, 0).await {
-                        Ok((tracks, total)) => {
-                            self.state.tracks = tracks;
-                            self.state.tracks_total = total;
-                            self.state.tracks_offset = self.state.tracks.len() as u32;
-                            self.state.active_playlist_uri = Some(uri.clone());
-                            self.state.active_playlist_id = Some(id.clone());
-                            self.state
-                                .track_list
-                                .select(if self.state.tracks.is_empty() {
-                                    None
-                                } else {
-                                    Some(0)
-                                });
-                            self.state.active_content = ActiveContent::Tracks;
-                            self.state.search_results = None;
-                            self.state.rebuild_sort_indices();
-                            self.state.status_msg = None;
-                            self.state.focus = Focus::Tracks;
-                        }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                                warn!("Got 401 - triggering reconnect");
-                                needs_reconnect = true;
-                                self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
-                            } else {
-                                self.state.status_msg = Some(format!("Error: {e}"));
-                            }
+                if let Some(idx) = self.state.playlist_list.selected() {
+                    if idx < self.state.playlists.len() {
+                        if self.handle_playlist_item(idx).await {
+                            needs_reconnect = true;
                         }
                     }
                 }
@@ -1652,6 +1527,27 @@ impl App {
                     }
                 }
                 ActiveContent::Tracks | ActiveContent::None => {
+                    if self.state.compact_effective && self.state.active_content == ActiveContent::None {
+                        if let Some(pos) = self.state.library_list.selected() {
+                            if pos >= 1 && pos < 1 + LIBRARY_ITEMS.len() {
+                                let idx = pos - 1;
+                                if self.handle_library_item(idx).await {
+                                    needs_reconnect = true;
+                                }
+                            } else if !self.state.playlists.is_empty() {
+                                let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
+                                if pos >= playlist_start {
+                                    let idx = pos - playlist_start;
+                                    if self.handle_playlist_item(idx).await {
+                                        needs_reconnect = true;
+                                    }
+                                }
+                            }
+                        }
+                        // Don't return; fall through to reconnect check below.
+                        // selected_track_index() returns None when no tracks loaded,
+                        // so the track play logic is a no-op.
+                    }
                     if let Some(display_idx) = self.state.selected_track_index() {
                         let actual_idx = match self.state.sorted_track_indices.get(display_idx) {
                             Some(&idx) => idx,
@@ -1919,6 +1815,162 @@ impl App {
             self.session_reconnecting = true;
             self.reconnect_player().await;
         }
+    }
+
+    async fn handle_library_item(&mut self, idx: usize) -> bool {
+        if idx != 4 && !self.spotify.authenticated {
+            self.state.status_msg =
+                Some("Spotify not connected — only Local Files available".to_string());
+            return false;
+        }
+        match idx {
+            0 => {
+                self.state.status_msg = Some("Loading Liked Songs…".to_string());
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                match self.spotify.fetch_liked_tracks(0).await {
+                    Ok((tracks, total)) => {
+                        self.state.tracks = tracks;
+                        self.state.tracks_total = total;
+                        self.state.tracks_offset = self.state.tracks.len() as u32;
+                        self.state.active_playlist_uri = Some("liked_songs".to_string());
+                        self.state.active_playlist_id = Some("liked_songs".to_string());
+                        self.state
+                            .track_list
+                            .select(if self.state.tracks.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                        self.state.active_content = ActiveContent::Tracks;
+                        self.state.search_results = None;
+                        self.state.rebuild_sort_indices();
+                        self.state.status_msg = None;
+                        self.state.focus = Focus::Tracks;
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                            warn!("Got 401 - triggering reconnect");
+                            self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                            return true;
+                        } else {
+                            self.state.status_msg = Some(format!("Error: {e}"));
+                        }
+                    }
+                }
+            }
+            1 => {
+                self.state.status_msg = Some("Loading saved albums…".to_string());
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                match self.spotify.fetch_saved_albums(0).await {
+                    Ok((albums, total)) => {
+                        self.state.albums = albums;
+                        self.state.albums_total = total;
+                        self.state.albums_offset = self.state.albums.len() as u32;
+                        self.state
+                            .album_list
+                            .select(if self.state.albums.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                        self.state.active_content = ActiveContent::Albums;
+                        self.state.search_results = None;
+                        self.state.status_msg = None;
+                        self.state.focus = Focus::Tracks;
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                            warn!("Got 401 - triggering reconnect");
+                            self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                            return true;
+                        } else {
+                            self.state.status_msg = Some(format!("Error: {e}"));
+                        }
+                    }
+                }
+            }
+            2 => {
+                self.state.status_msg = Some("Loading followed artists…".to_string());
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                match self.spotify.fetch_followed_artists().await {
+                    Ok(artists) => {
+                        self.state.artists = artists;
+                        self.state
+                            .artist_list
+                            .select(if self.state.artists.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                        self.state.active_content = ActiveContent::Artists;
+                        self.state.search_results = None;
+                        self.state.status_msg = None;
+                        self.state.focus = Focus::Tracks;
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                            warn!("Got 401 - triggering reconnect");
+                            self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                            return true;
+                        } else {
+                            self.state.status_msg = Some(format!("Error: {e}"));
+                        }
+                    }
+                }
+            }
+            3 => {
+                self.state.status_msg = Some("Podcasts — coming soon".to_string());
+            }
+            4 => {
+                self.load_local_files().await;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    async fn handle_playlist_item(&mut self, idx: usize) -> bool {
+        let playlist = match self.state.playlists.get(idx) {
+            Some(p) => p.clone(),
+            None => return false,
+        };
+        self.state.status_msg = Some(format!("Loading {}…", playlist.name));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        match self.spotify.fetch_playlist_tracks(&playlist.id, 0).await {
+            Ok((tracks, total)) => {
+                self.state.tracks = tracks;
+                self.state.tracks_total = total;
+                self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.active_playlist_uri = Some(playlist.uri.clone());
+                self.state.active_playlist_id = Some(playlist.id.clone());
+                self.state
+                    .track_list
+                    .select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                self.state.active_content = ActiveContent::Tracks;
+                self.state.search_results = None;
+                self.state.rebuild_sort_indices();
+                self.state.status_msg = None;
+                self.state.focus = Focus::Tracks;
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+                    warn!("Got 401 - triggering reconnect");
+                    self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+                    return true;
+                } else {
+                    self.state.status_msg = Some(format!("Error: {e}"));
+                }
+            }
+        }
+        false
     }
 
     fn on_track_started(&mut self) {

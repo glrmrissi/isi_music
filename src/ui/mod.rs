@@ -11,7 +11,7 @@ use std::sync::{Arc};
 use crate::{spotify::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary}};
 use crate::utils::theme::Theme;
 use crate::utils::debug_overlay::{DebugOverlay};
-use crate::utils::theme::{LayoutNode, UiWidget};
+use crate::utils::theme::{LayoutNode, SerializableConstraint, SerializableDirection, UiWidget};
 
 pub struct AlbumArtData {
     pub image_state: Option<StatefulProtocol>,
@@ -233,7 +233,7 @@ impl LocalFileTree {
     }
 }
 
-const LIBRARY_ITEMS: &[&str] = &[
+pub const LIBRARY_ITEMS: &[&str] = &[
     "Liked Songs",
     "Albums",
     "Artists",
@@ -385,6 +385,8 @@ pub struct UiState {
     pub track_sort_by: TrackSortBy,
     pub sorted_track_indices: Vec<usize>,
     pub show_lyrics: bool,
+    pub compact_mode: bool,
+    pub compact_effective: bool,
 }
 
 impl UiState {
@@ -439,6 +441,8 @@ impl UiState {
             track_sort_by: TrackSortBy::Default,
             sorted_track_indices: Vec::new(),
             show_lyrics: false,
+            compact_mode: false,
+            compact_effective: false,
         }
     }
 
@@ -604,7 +608,27 @@ impl UiState {
         }
     }
 
+    fn compact_selectable_positions(&self) -> Vec<usize> {
+        let mut positions: Vec<usize> = (1..=LIBRARY_ITEMS.len()).collect();
+        if !self.playlists.is_empty() {
+            let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
+            for i in 0..self.playlists.len() {
+                positions.push(playlist_start + i);
+            }
+        }
+        positions
+    }
+
     pub fn nav_up(&mut self) {
+        if self.compact_effective && self.focus == Focus::Tracks && self.active_content == ActiveContent::None {
+            let selectable = self.compact_selectable_positions();
+            if selectable.is_empty() { return; }
+            let cur = self.library_list.selected().unwrap_or(selectable[0]);
+            let idx = selectable.iter().position(|&p| p == cur).unwrap_or(0);
+            let next = if idx == 0 { selectable.len() - 1 } else { idx - 1 };
+            self.library_list.select(Some(selectable[next]));
+            return;
+        }
         match self.focus {
             Focus::Library => {
                 let i = self.library_list.selected()
@@ -626,6 +650,15 @@ impl UiState {
     }
 
     pub fn nav_down(&mut self) {
+        if self.compact_effective && self.focus == Focus::Tracks && self.active_content == ActiveContent::None {
+            let selectable = self.compact_selectable_positions();
+            if selectable.is_empty() { return; }
+            let cur = self.library_list.selected().unwrap_or(selectable[0]);
+            let idx = selectable.iter().position(|&p| p == cur).unwrap_or(0);
+            let next = if idx >= selectable.len() - 1 { 0 } else { idx + 1 };
+            self.library_list.select(Some(selectable[next]));
+            return;
+        }
         match self.focus {
             Focus::Library => {
                 let i = self.library_list.selected()
@@ -647,6 +680,13 @@ impl UiState {
     }
 
     pub fn nav_first(&mut self) {
+        if self.compact_effective && self.focus == Focus::Tracks && self.active_content == ActiveContent::None {
+            let selectable = self.compact_selectable_positions();
+            if !selectable.is_empty() {
+                self.library_list.select(Some(selectable[0]));
+            }
+            return;
+        }
         match self.focus {
             Focus::Library   => self.library_list.select(Some(0)),
             Focus::Playlists => { if !self.playlists.is_empty() { self.playlist_list.select(Some(0)); } }
@@ -663,6 +703,13 @@ impl UiState {
     }
 
     pub fn nav_last(&mut self) {
+        if self.compact_effective && self.focus == Focus::Tracks && self.active_content == ActiveContent::None {
+            let selectable = self.compact_selectable_positions();
+            if !selectable.is_empty() {
+                self.library_list.select(Some(selectable[selectable.len() - 1]));
+            }
+            return;
+        }
         match self.focus {
             Focus::Library   => self.library_list.select(Some(LIBRARY_ITEMS.len() - 1)),
             Focus::Playlists => { let n = self.playlists.len(); if n > 0 { self.playlist_list.select(Some(n - 1)); } }
@@ -680,6 +727,15 @@ impl UiState {
 
     pub fn switch_focus(&mut self) {
         self.search_active = false;
+        if self.compact_effective {
+            self.focus = match self.focus {
+                Focus::Search => Focus::Tracks,
+                _             => {
+                    if self.search_results.is_some() { Focus::Search } else { Focus::Tracks }
+                }
+            };
+            return;
+        }
         self.focus = match self.focus {
             Focus::Library   => Focus::Playlists,
             Focus::Playlists => if self.search_results.is_some() { Focus::Search } else { Focus::Tracks },
@@ -690,6 +746,15 @@ impl UiState {
 
     pub fn switch_focus_prev(&mut self) {
         self.search_active = false;
+        if self.compact_effective {
+            self.focus = match self.focus {
+                Focus::Search => Focus::Tracks,
+                _             => {
+                    if self.search_results.is_some() { Focus::Search } else { Focus::Tracks }
+                }
+            };
+            return;
+        }
         self.focus = match self.focus {
             Focus::Library   => Focus::Queue,
             Focus::Playlists => Focus::Library,
@@ -738,14 +803,61 @@ impl Ui {
             height: area.height.saturating_sub(2),
         };
 
+        state.compact_effective = state.compact_mode || root_area.width < 100;
+
+        if state.compact_effective && matches!(state.focus, Focus::Library | Focus::Playlists | Focus::Queue) {
+            state.focus = Focus::Tracks;
+        }
+
         if state.fullscreen_player {
             self.render_now_playing(frame, state, root_area);
+        } else if state.compact_effective {
+            let layout_tree = self.build_compact_layout(state);
+            self.render_recursive(frame, state, root_area, &layout_tree);
         } else {
             let layout_tree = self.theme.layout_tree.clone();
             self.render_recursive(frame, state, root_area, &layout_tree);
         }
 
         self.debug_overlay.render(frame, area);
+    }
+
+    fn build_compact_layout(&self, _state: &UiState) -> LayoutNode {
+        use SerializableConstraint::*;
+
+        let leaf = |w: UiWidget| LayoutNode {
+            widget: Some(w), direction: None, constraints: None, children: None,
+        };
+
+        let (main_constraints, main_children) = if self.theme.show_ascii_art {
+            (vec![Percentage(35), Fill(1)], vec![leaf(UiWidget::AsciiArt), leaf(UiWidget::MainContent)])
+        } else {
+            (vec![Fill(1)], vec![leaf(UiWidget::MainContent)])
+        };
+
+        LayoutNode {
+            direction: Some(SerializableDirection::Vertical),
+            constraints: Some(vec![Length(1), Fill(1), Length(1)]),
+            widget: None,
+            children: Some(vec![
+                leaf(UiWidget::Header),
+                LayoutNode {
+                    direction: Some(SerializableDirection::Horizontal),
+                    constraints: Some(main_constraints),
+                    widget: None,
+                    children: Some(main_children),
+                },
+                LayoutNode {
+                    direction: Some(SerializableDirection::Horizontal),
+                    constraints: Some(vec![Percentage(30), Fill(1)]),
+                    widget: None,
+                    children: Some(vec![
+                        leaf(UiWidget::Marquee),
+                        leaf(UiWidget::Progress),
+                    ]),
+                },
+            ]),
+        }
     }
 
     fn render_recursive(&self, frame: &mut Frame, state: &mut UiState, area: Rect, node: &LayoutNode) {
@@ -804,7 +916,7 @@ impl Ui {
         } else {
             match &state.active_content {
                 ActiveContent::None => {
-                    self.render_welcome(frame, area);
+                    self.render_welcome(frame, state, area);
                 }
                 ActiveContent::Tracks    => self.render_tracks(frame, state, area),
                 ActiveContent::LocalFiles => self.render_local_tree(frame, state, area),
@@ -857,6 +969,58 @@ impl Ui {
     }
 
     fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            let items: Vec<ListItem> = state.sorted_track_indices.iter()
+                .filter_map(|&vi| {
+                    let node = state.local_tree.get_visible(vi)?;
+                    let indent = "  ".repeat(node.depth());
+                    let item = match node {
+                        LocalNode::Folder { name, .. } => {
+                            ListItem::new(Line::from(vec![
+                                Span::raw(indent),
+                                Span::styled("  ", Style::default().fg(self.theme.accent_color).add_modifier(Modifier::BOLD)),
+                                Span::styled(name.clone(), Style::default().fg(self.theme.text_primary).add_modifier(Modifier::BOLD)),
+                            ]))
+                        }
+                        LocalNode::Track { track, .. } => {
+                            let is_playing = state.playback.title == track.name
+                                && state.playback.is_local;
+                            let icon = if is_playing { "󰎈 " } else { " " };
+                            let title_style = if is_playing {
+                                Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(self.theme.text_primary)
+                            };
+                            ListItem::new(Line::from(vec![
+                                Span::raw(indent),
+                                Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
+                                Span::styled(track.name.clone(), title_style),
+                                if !track.artist.is_empty() {
+                                    Span::styled(
+                                        format!("  {}", track.artist),
+                                        Style::default().fg(self.theme.border_inactive),
+                                    )
+                                } else {
+                                    Span::raw("")
+                                },
+                            ]))
+                        }
+                    };
+                    Some(item)
+                })
+                .collect();
+            let list = List::new(items)
+                .highlight_style(
+                    Style::default()
+                        .bg(self.theme.highlight_bg)
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("  ");
+            frame.render_stateful_widget(list, area, &mut state.local_tree_list);
+            return;
+        }
+
         let focused = state.focus == Focus::Tracks;
 
         let total_tracks: usize = state.local_tree.all_nodes.iter()
@@ -1007,6 +1171,37 @@ impl Ui {
     }
 
     fn render_header(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+        let compact = area.height < 2;
+
+        if compact {
+            let content = if state.search_active {
+                Line::from(vec![
+                    Span::styled(" Search: ", Style::default().fg(self.theme.border_active)),
+                    Span::styled(&state.search_query, Style::default().fg(self.theme.text_primary)),
+                    Span::styled("█", Style::default().fg(self.theme.border_active).add_modifier(Modifier::SLOW_BLINK)),
+                ])
+            } else if state.quick_search_active {
+                Line::from(vec![
+                    Span::styled(" Quick Search: ", Style::default().fg(self.theme.border_active)),
+                    Span::styled(&state.quick_search_query, Style::default().fg(self.theme.text_primary)),
+                    Span::styled("█", Style::default().fg(self.theme.border_active).add_modifier(Modifier::SLOW_BLINK)),
+                ])
+            } else if let Some(msg) = &state.status_msg {
+                Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
+            } else if state.search_results.is_some() {
+                Line::from(Span::styled(" 󰍉 Search Results", Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)))
+            } else {
+                Line::from(Span::styled(" isi-music ", Style::default().fg(self.theme.border_inactive)))
+            };
+            frame.render_widget(
+                Paragraph::new(content)
+                    .style(Style::default().bg(self.theme.highlight_bg))
+                    .alignment(Alignment::Left),
+                area,
+            );
+            return;
+        }
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1274,14 +1469,43 @@ impl Ui {
         );
     }
 
-    fn render_welcome(&self, frame: &mut Frame, area: Rect) {
+    fn render_welcome(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            let mut items: Vec<ListItem> = Vec::new();
+
+            items.push(ListItem::new(Line::from(Span::styled(
+                " Default",
+                Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::BOLD),
+            ))));
+
+            for name in LIBRARY_ITEMS {
+                items.push(ListItem::new(Line::from(vec![Span::raw(format!("  {name} "))])));
+            }
+
+            if !state.playlists.is_empty() {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    " Playlists",
+                    Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::BOLD),
+                ))));
+
+                for p in &state.playlists {
+                    items.push(ListItem::new(Line::from(vec![Span::raw(format!("  {} ", p.name))])));
+                }
+            }
+
+            let list = List::new(items)
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                .highlight_symbol("  ");
+            frame.render_stateful_widget(list, area, &mut state.library_list);
+            return;
+        }
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(self.theme.border_inactive));
-
+        frame.render_widget(&block, area);
         let inner = block.inner(area);
-        frame.render_widget(block, area);
 
         let lines = vec![
             Line::from(""),
@@ -1403,6 +1627,28 @@ impl Ui {
     }
 
     fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            let items: Vec<ListItem> = state.sorted_track_indices.iter().enumerate().map(|(display_idx, &real_idx)| {
+                let t = &state.tracks[real_idx];
+                let is_playing = state.playback.title == t.name;
+                let style = if is_playing {
+                    Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(self.theme.text_primary)
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:>3}. ", display_idx + 1), Style::default().fg(self.theme.border_inactive)),
+                    Span::styled(t.name.clone(), style),
+                    Span::styled(format!("  {}", t.artist), Style::default().fg(self.theme.border_inactive)),
+                ]))
+            }).collect();
+            let list = List::new(items)
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                .highlight_symbol("  ");
+            frame.render_stateful_widget(list, area, &mut state.track_list);
+            return;
+        }
+
         let focused = state.focus == Focus::Tracks;
 
         let title = if state.active_playlist_uri.as_deref() == Some("liked_songs") {
@@ -1458,6 +1704,21 @@ impl Ui {
     }
 
     fn render_albums(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            let items: Vec<ListItem> = state.albums.iter().enumerate().map(|(idx, a)| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
+                    Span::raw(a.name.clone()),
+                    Span::styled(format!("  {}", a.artist), Style::default().fg(self.theme.border_inactive)),
+                ]))
+            }).collect();
+            let list = List::new(items)
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                .highlight_symbol("  ");
+            frame.render_stateful_widget(list, area, &mut state.album_list);
+            return;
+        }
+
         let focused = state.focus == Focus::Tracks;
 
         let count = if state.albums_total > 0 {
@@ -1497,6 +1758,20 @@ impl Ui {
     }
 
     fn render_artists(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            let items: Vec<ListItem> = state.artists.iter().enumerate().map(|(idx, a)| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
+                    Span::raw(a.name.clone()),
+                ]))
+            }).collect();
+            let list = List::new(items)
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                .highlight_symbol("  ");
+            frame.render_stateful_widget(list, area, &mut state.artist_list);
+            return;
+        }
+
         let focused = state.focus == Focus::Tracks;
 
         let block = Block::default()
@@ -1532,6 +1807,20 @@ impl Ui {
     }
 
     fn render_shows(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            let items: Vec<ListItem> = state.shows.iter().enumerate().map(|(idx, s)| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
+                    Span::raw(s.name.clone()),
+                ]))
+            }).collect();
+            let list = List::new(items)
+                .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                .highlight_symbol("  ");
+            frame.render_stateful_widget(list, area, &mut state.show_list);
+            return;
+        }
+
         let focused = state.focus == Focus::Tracks;
 
         let count = if state.shows_total > 0 {
@@ -1571,6 +1860,76 @@ impl Ui {
     }
 
     fn render_search_panels(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let focus_panel = state.search_results.as_ref().map(|sr| sr.panel).unwrap_or(SearchPanel::Tracks);
+        let is_focused = state.focus == Focus::Search;
+        let is_loading = state.search_results.as_ref().map(|sr| sr.loading).unwrap_or(false);
+
+        let panel_style = |panel: SearchPanel| -> Style {
+            if is_focused && focus_panel == panel {
+                Style::default().fg(self.theme.border_active)
+            } else {
+                Style::default().fg(self.theme.border_inactive)
+            }
+        };
+
+        if state.compact_effective {
+            if let Some(sr) = &mut state.search_results {
+                let items: Vec<ListItem> = match focus_panel {
+                    SearchPanel::Tracks => sr.tracks.iter().enumerate().map(|(idx, t)| {
+                        ListItem::new(Line::from(vec![
+                            Span::styled("󰓇 ", Style::default().fg(self.theme.border_active)),
+                            Span::styled(format!("{:>3}. ", idx + 1), Style::default().fg(self.theme.border_inactive)),
+                            Span::raw(t.name.clone()),
+                            Span::styled(format!("  {}", t.artist), Style::default().fg(self.theme.border_inactive)),
+                        ]))
+                    }).collect(),
+                    SearchPanel::Artists => sr.artists.iter().map(|a| {
+                        ListItem::new(Line::from(vec![
+                            Span::styled("󰋌 ", Style::default().fg(self.theme.border_active)),
+                            Span::raw(a.name.clone()),
+                        ]))
+                    }).collect(),
+                    SearchPanel::Albums => sr.albums.iter().map(|a| {
+                        ListItem::new(Line::from(vec![
+                            Span::styled("󰀥 ", Style::default().fg(self.theme.border_active)),
+                            Span::raw(a.name.clone()),
+                            Span::styled(format!("  {}", a.artist), Style::default().fg(self.theme.border_inactive)),
+                        ]))
+                    }).collect(),
+                    SearchPanel::Playlists => sr.playlists.iter().map(|p| {
+                        ListItem::new(Line::from(vec![
+                            Span::styled("󰲚 ", Style::default().fg(self.theme.border_active)),
+                            Span::raw(p.name.clone()),
+                        ]))
+                    }).collect(),
+                };
+                let label = match focus_panel {
+                    SearchPanel::Tracks => " Tracks ",
+                    SearchPanel::Artists => " Artists ",
+                    SearchPanel::Albums => " Albums ",
+                    SearchPanel::Playlists => " Playlists ",
+                };
+                let title = if is_loading { format!("{label}…") } else { label.to_string() };
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(title, Style::default().fg(self.theme.border_inactive)))),
+                    area,
+                );
+                let list = List::new(items)
+                    .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                    .highlight_symbol("  ");
+                let list_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: area.height.saturating_sub(1) };
+                if list_area.height > 0 {
+                    match focus_panel {
+                        SearchPanel::Tracks => frame.render_stateful_widget(list, list_area, &mut sr.track_list),
+                        SearchPanel::Artists => frame.render_stateful_widget(list, list_area, &mut sr.artist_list),
+                        SearchPanel::Albums => frame.render_stateful_widget(list, list_area, &mut sr.album_list),
+                        SearchPanel::Playlists => frame.render_stateful_widget(list, list_area, &mut sr.playlist_list),
+                    }
+                }
+            }
+            return;
+        }
+
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -1586,23 +1945,11 @@ impl Ui {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(rows[1]);
 
-        let focused_panel   = state.search_results.as_ref().map(|sr| sr.panel).unwrap_or(SearchPanel::Tracks);
-        let is_search_focus = state.focus == Focus::Search;
-        let is_loading      = state.search_results.as_ref().map(|sr| sr.loading).unwrap_or(false);
-
-        let panel_border = |panel: SearchPanel| -> Style {
-            if is_search_focus && focused_panel == panel {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            }
-        };
-
-        let panel_title = |panel: SearchPanel, base: &'static str| -> String {
-            if is_loading && focused_panel == panel { format!("{base} …") } else { base.to_string() }
-        };
-
         if let Some(sr) = &mut state.search_results {
+            let ptitle = |panel: SearchPanel, base: &'static str| -> String {
+                if is_loading && focus_panel == panel { format!("{base} …") } else { base.to_string() }
+            };
+
             let track_items: Vec<ListItem> = sr.tracks.iter().enumerate().map(|(idx, t)| {
                 ListItem::new(Line::from(vec![
                     Span::styled(" 󰓇 ", Style::default().fg(self.theme.border_active)),
@@ -1613,8 +1960,8 @@ impl Ui {
             }).collect();
             let track_list = List::new(track_items)
                 .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-                    .title(panel_title(SearchPanel::Tracks, " 󰎆 Tracks "))
-                    .border_style(panel_border(SearchPanel::Tracks)))
+                    .title(ptitle(SearchPanel::Tracks, " 󰎆 Tracks "))
+                    .border_style(panel_style(SearchPanel::Tracks)))
                 .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
@@ -1631,8 +1978,8 @@ impl Ui {
             }).collect();
             let artist_list = List::new(artist_items)
                 .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-                    .title(panel_title(SearchPanel::Artists, " 󰋌 Artists "))
-                    .border_style(panel_border(SearchPanel::Artists)))
+                    .title(ptitle(SearchPanel::Artists, " 󰋌 Artists "))
+                    .border_style(panel_style(SearchPanel::Artists)))
                 .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
@@ -1646,8 +1993,8 @@ impl Ui {
             }).collect();
             let album_list = List::new(album_items)
                 .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-                    .title(panel_title(SearchPanel::Albums, " 󰀥 Albums "))
-                    .border_style(panel_border(SearchPanel::Albums)))
+                    .title(ptitle(SearchPanel::Albums, " 󰀥 Albums "))
+                    .border_style(panel_style(SearchPanel::Albums)))
                 .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
@@ -1661,8 +2008,8 @@ impl Ui {
             }).collect();
             let pl_list = List::new(pl_items)
                 .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-                    .title(panel_title(SearchPanel::Playlists, " 󰲚 Playlists "))
-                    .border_style(panel_border(SearchPanel::Playlists)))
+                    .title(ptitle(SearchPanel::Playlists, " 󰲚 Playlists "))
+                    .border_style(panel_style(SearchPanel::Playlists)))
                 .highlight_style(Style::default().bg(self.theme.highlight_bg).fg(self.theme.border_active).add_modifier(Modifier::BOLD))
                 .highlight_symbol("  ");
             frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
@@ -1700,7 +2047,7 @@ impl Ui {
 
     fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
         let text = if pb.title.is_empty() {
-            "isi-music v0.3.4".to_string()
+            "isi-music v0.3.5".to_string()
         } else {
             format!("{} • {} ", pb.title, pb.artist)
         };
@@ -1718,6 +2065,28 @@ impl Ui {
     }
 
     fn render_album_art(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.compact_effective {
+            if let Some(art_data) = &mut state.album_art {
+                if let Some(protocol_state) = &mut art_data.image_state {
+                    let size = area.height.min(area.width);
+                    let img_area = Rect {
+                        x: area.x + (area.width.saturating_sub(size)) / 2,
+                        y: area.y + (area.height.saturating_sub(size)) / 2,
+                        width: size,
+                        height: size,
+                    };
+                    if img_area.width > 2 && img_area.height > 2 {
+                        frame.render_stateful_widget(
+                            ratatui_image::StatefulImage::<StatefulProtocol>::default(),
+                            img_area,
+                            protocol_state,
+                        );
+                    }
+                }
+            }
+            return;
+        }
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1783,6 +2152,26 @@ impl Ui {
     }
 
     fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+        let compact = area.height < 2;
+
+        if compact {
+            let content = if let Some(msg) = &state.status_msg {
+                Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
+            } else if state.search_active || state.quick_search_active {
+                Line::from(Span::styled(
+                    " [ESC] Cancel  [ENTER] Search ",
+                    Style::default().fg(self.theme.border_inactive),
+                ))
+            } else {
+                Line::from(Span::styled(
+                    " [↑↓/j/k] Nav  [SPACE] Play  [N/P] Skip  [S] Shuf  [R] Rep  [/] Search  [Q] Quit ",
+                    Style::default().fg(self.theme.border_inactive),
+                ))
+            };
+            frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
+            return;
+        }
+
         let content = if let Some(msg) = &state.status_msg {
             Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
         } else if state.quick_search_active {
@@ -1817,7 +2206,7 @@ impl Ui {
             ))
         } else {
             Line::from(Span::styled(
-                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Ctrl+F] Quick Search  [O] Sort  [Q] Quit ",
+                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Ctrl+F] Quick Search  [O] Sort  [M] Compact  [Q] Quit ",
                 Style::default().fg(self.theme.border_inactive),
             ))
         };

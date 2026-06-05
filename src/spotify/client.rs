@@ -887,15 +887,19 @@ impl SpotifyClient {
         let offset_str = offset.to_string();
         let limit_str = limit.to_string();
         spotify_rate_limit().await;
+        let mut query_params = vec![
+            ("q", query),
+            ("type", search_type),
+            ("limit", limit_str.as_str()),
+            ("offset", offset_str.as_str()),
+        ];
+        if let Some(market) = &self.user_market {
+            query_params.push(("market", market.as_str()));
+        }
         let response = self.http
             .get("https://api.spotify.com/v1/search")
             .bearer_auth(&token)
-            .query(&[
-                ("q", query),
-                ("type", search_type),
-                ("limit", &limit_str),
-                ("offset", &offset_str),
-            ])
+            .query(&query_params)
             .send()
             .await?;
 
@@ -1136,20 +1140,22 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let market = self.user_market.as_deref().unwrap_or("BR");
         let query = format!("artist:\"{}\"", artist_name);
         let offset_str = offset.to_string();
         spotify_rate_limit().await;
+        let mut query_params = vec![
+            ("q", query.as_str()),
+            ("type", "track"),
+            ("limit", "10"),
+            ("offset", offset_str.as_str()),
+        ];
+        if let Some(market) = &self.user_market {
+            query_params.push(("market", market.as_str()));
+        }
         let response = self.http
             .get("https://api.spotify.com/v1/search")
             .bearer_auth(&token)
-            .query(&[
-                ("q", query.as_str()),
-                ("type", "track"),
-                ("limit", "10"),
-                ("offset", &offset_str),
-                ("market", market),
-            ])
+            .query(&query_params)
             .send()
             .await?;
 
@@ -1378,15 +1384,18 @@ impl SpotifyClient {
         if seed_artists.is_empty() { return Ok(vec![]); }
 
         let seed_artist_names: Vec<String> = seed_artists.iter().map(|(_, n)| n.clone()).collect();
-        let market = self.user_market.as_deref().unwrap_or("BR");
 
         let mut featured_artists: Vec<String> = Vec::new();
 
         for (artist_id, _) in seed_artists.iter().take(2) {
+            let mut album_query: Vec<(&str, &str)> = vec![("limit", "5"), ("include_groups", "album,single")];
+            if let Some(market) = &self.user_market {
+                album_query.push(("market", market.as_str()));
+            }
             if let Ok(resp) = self.http
                 .get(format!("https://api.spotify.com/v1/artists/{artist_id}/albums"))
                 .bearer_auth(&token)
-                .query(&[("limit", "5"), ("include_groups", "album,single"), ("market", market)])
+                .query(&album_query)
                 .send()
                 .await
             {
@@ -1400,10 +1409,14 @@ impl SpotifyClient {
                         .collect();
 
                     for album_id in &album_ids {
+                        let mut track_query: Vec<(&str, &str)> = vec![("limit", "10")];
+                        if let Some(market) = &self.user_market {
+                            track_query.push(("market", market.as_str()));
+                        }
                         if let Ok(resp2) = self.http
                             .get(format!("https://api.spotify.com/v1/albums/{album_id}/tracks"))
                             .bearer_auth(&token)
-                            .query(&[("limit", "10"), ("market", market)])
+                            .query(&track_query)
                             .send()
                             .await
                         {
@@ -1440,10 +1453,19 @@ impl SpotifyClient {
             let offset: u32 = rng.gen_range(0..20);
             let query = format!("artist:\"{}\"", artist_name);
             let offset_str = offset.to_string();
+            let mut search_query: Vec<(&str, &str)> = vec![
+                ("q", query.as_str()),
+                ("type", "track"),
+                ("limit", "3"),
+                ("offset", offset_str.as_str()),
+            ];
+            if let Some(market) = &self.user_market {
+                search_query.push(("market", market.as_str()));
+            }
             if let Ok(resp) = self.http
                 .get("https://api.spotify.com/v1/search")
                 .bearer_auth(&token)
-                .query(&[("q", query.as_str()), ("type", "track"), ("limit", "3"), ("offset", &offset_str), ("market", market)])
+                .query(&search_query)
                 .send()
                 .await
             {
