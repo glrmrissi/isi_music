@@ -182,7 +182,12 @@ pub struct Theme {
     
     #[serde(default)]
     pub ascii_art_path: Option<PathBuf>,
+
+    #[serde(default = "default_true")]
+    pub show_ascii_art: bool,
 }
+
+fn default_true() -> bool { true }
 
 impl Default for Theme {
     fn default() -> Self {
@@ -197,6 +202,7 @@ impl Default for Theme {
             ascii_art: None,
             ascii_art_inline: None,
             ascii_art_path:  None,
+            show_ascii_art: true,
         }
     }
 }

@@ -238,6 +238,7 @@ musixmatch_api_key = "TEST_API_KEY"
 | `Alt+r` | Get similar tracks |
 | `c` | Toggle album art panel |
 | `z` | Toggle fullscreen player |
+| `m` | Toggle compact mode |
 | `l` | Like current track |
 | `Backspace` | Back to previous search results |
 | `Esc` | Close search / exit fullscreen |
@@ -264,6 +265,8 @@ text_primary = "#ffffff"
 accent_color = "#ffeb3b"    
 
 # --- ASCII Art Settings ---
+show_ascii_art = true # Only affect compact mode
+
 ascii_art_inline = [
     "      .---.         ",
     "     /|66_\\        ",
