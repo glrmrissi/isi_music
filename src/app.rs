@@ -207,6 +207,8 @@ pub struct App {
     playing_tracks: Vec<crate::spotify::TrackSummary>,
     theme: Theme,
     theme_rx: ThemeWatcher,
+    keybinds: crate::keybinds::Keybinds,
+    keybinds_rx: crate::keybinds::KeybindsWatcher,
     consecutive_unavailable: u32,
     spotify_streaming_disabled: bool,
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
@@ -223,6 +225,8 @@ impl App {
         picker: Picker,
         theme: Theme,
         theme_rx: ThemeWatcher,
+        keybinds: crate::keybinds::Keybinds,
+        keybinds_rx: crate::keybinds::KeybindsWatcher,
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
@@ -427,6 +431,8 @@ impl App {
             playing_tracks: Vec::new(),
             theme,
             theme_rx,
+            keybinds,
+            keybinds_rx,
             consecutive_unavailable: 0,
             spotify_streaming_disabled: false,
             local_scan_rx: None,
@@ -452,6 +458,9 @@ impl App {
             while let Ok(new_theme) = self.theme_rx.try_recv() {
                 self.theme = new_theme.clone();
                 self.ui = Ui::new(new_theme, self.debug_overlay.clone());
+            }
+            while let Ok(new_keybinds) = self.keybinds_rx.rx.try_recv() {
+                self.keybinds = new_keybinds;
             }
 
             let now = Instant::now();
@@ -900,82 +909,79 @@ impl App {
         Ok(())
     }
 
-    fn char_matches(c: char, target: &str) -> bool {
-        c.to_lowercase().to_string() == target
+    async fn handle_quick_search_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => self.state.cancel_quick_search(),
+            KeyCode::Enter => self.state.apply_quick_filter(),
+            KeyCode::Backspace => self.state.quick_search_pop(),
+            KeyCode::Char(c) if c.is_alphanumeric() || c == ' ' || c == '-' => {
+                self.state.quick_search_push(c);
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_search_key(&mut self, code: KeyCode) -> Result<()> {
+        match code {
+            KeyCode::Esc => self.state.cancel_search(),
+            KeyCode::Enter => {
+                let query = self.state.search_query.trim().to_string();
+                if query.is_empty() {
+                    self.state.cancel_search();
+                } else if !self.spotify.authenticated {
+                    self.state.status_msg = Some("Search requires Spotify".to_string());
+                    self.state.search_active = false;
+                } else {
+                    self.state.status_msg = Some(format!("Searching \"{query}\"..."));
+                    match self.spotify.search_all(&query).await {
+                        Ok(results) => {
+                            let total = results.tracks.len()
+                                + results.artists.len()
+                                + results.albums.len()
+                                + results.playlists.len();
+                            self.state.search_results =
+                                Some(SearchResults::new(query.clone(), results));
+                            self.state.tracks.clear();
+                            self.state.active_playlist_uri = None;
+                            self.state.search_active = false;
+                            self.state.focus = Focus::Search;
+                            self.state.status_msg = if total == 0 {
+                                Some(format!("No results for \"{query}\""))
+                            } else {
+                                Some(format!("{total} results for \"{query}\""))
+                            };
+                        }
+                        Err(e) => {
+                            self.state.status_msg = Some(format!("Search error: {e:#}"));
+                            self.state.search_active = false;
+                            tracing::error!("Search failed for \"{query}\": {e:#}");
+                        }
+                    }
+                }
+            }
+            KeyCode::Up => self.state.nav_up(),
+            KeyCode::Down => self.state.nav_down(),
+            KeyCode::Backspace => self.state.search_pop(),
+            KeyCode::Tab => self.state.switch_focus(),
+            KeyCode::Char(c) => self.state.search_push(c),
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
 
         if self.state.quick_search_active {
-            match code {
-                KeyCode::Esc => {
-                    self.state.cancel_quick_search();
-                }
-                KeyCode::Enter => {
-                    self.state.apply_quick_filter();
-                }
-                KeyCode::Backspace => {
-                    self.state.quick_search_pop();
-                }
-                KeyCode::Char(c) => {
-                    if c.is_alphanumeric() || c == ' ' || c == '-' {
-                        self.state.quick_search_push(c);
-                    }
-                }
-                _ => {}
-            }
+            self.handle_quick_search_key(code).await;
             return Ok(());
         }
 
         if self.state.search_active {
-            match code {
-                KeyCode::Esc => self.state.cancel_search(),
-                KeyCode::Enter => {
-                    let query = self.state.search_query.trim().to_string();
-                    if query.is_empty() {
-                        self.state.cancel_search();
-                    } else if !self.spotify.authenticated {
-                        self.state.status_msg = Some("Search requires Spotify".to_string());
-                        self.state.search_active = false;
-                    } else {
-                        self.state.status_msg = Some(format!("Searching \"{query}\"..."));
-                        match self.spotify.search_all(&query).await {
-                            Ok(results) => {
-                                let total = results.tracks.len()
-                                    + results.artists.len()
-                                    + results.albums.len()
-                                    + results.playlists.len();
-                                self.state.search_results =
-                                    Some(SearchResults::new(query.clone(), results));
-                                self.state.tracks.clear();
-                                self.state.active_playlist_uri = None;
-                                self.state.search_active = false;
-                                self.state.focus = Focus::Search;
-                                self.state.status_msg = if total == 0 {
-                                    Some(format!("No results for \"{query}\""))
-                                } else {
-                                    Some(format!("{total} results for \"{query}\""))
-                                };
-                            }
-                            Err(e) => {
-                                self.state.status_msg = Some(format!("Search error: {e:#}"));
-                                self.state.search_active = false;
-                                tracing::error!("Search failed for \"{query}\": {e:#}");
-                            }
-                        }
-                    }
-                }
-                KeyCode::Up => self.state.nav_up(),
-                KeyCode::Down => self.state.nav_down(),
-                KeyCode::Backspace => self.state.search_pop(),
-                KeyCode::Tab => self.state.switch_focus(),
-                KeyCode::Char(c) => self.state.search_push(c),
-                _ => {}
-            }
-            return Ok(());
+            return self.handle_search_key(code).await;
         }
 
+        // Seek holding (special stateful handling before dispatch)
         match code {
             KeyCode::Left | KeyCode::Right => {
                 let now = Instant::now();
@@ -1010,111 +1016,107 @@ impl App {
             _ => {}
         }
 
-        match code {
-            KeyCode::Char(c) if Self::char_matches(c, "q") || (c == 'c' && modifiers == KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "f") && modifiers == KeyModifiers::CONTROL => {
-                match self.state.active_content {
-                    ActiveContent::Tracks | ActiveContent::None | ActiveContent::LocalFiles => {
-                        self.state.start_quick_search();
-                        self.state.apply_quick_filter();
+        // Help overlay intercept — only nav/scroll/help/back pass through, everything else closes help
+        if self.state.show_help {
+            if let Some(action) = self.keybinds.lookup(code, modifiers) {
+                use crate::keybinds::Action as A;
+                match action {
+                    A::NavUp | A::NavDown | A::ScrollUp | A::ScrollDown | A::Help | A::Back => {
+                        self.dispatch(action).await;
                     }
                     _ => {
-                        self.state.status_msg =
-                            Some("Quick search only works with Tracks or Local Files".to_string());
+                        self.state.show_help = false;
+                        self.state.help_scroll = 0;
                     }
                 }
             }
+            return Ok(());
+        }
 
-            KeyCode::Char(c) if Self::char_matches(c, "o") => {
-                if matches!(
-                    self.state.active_content,
-                    ActiveContent::Tracks | ActiveContent::None
-                ) {
-                    self.state.sort_tracks();
-                    self.state.status_msg =
-                        Some(format!("Sorting by: {}", self.state.track_sort_by.label()));
-                }
-            }
+        // Lookup action from keybinds and dispatch
+        if let Some(action) = self.keybinds.lookup(code, modifiers) {
+            self.dispatch(action).await;
+        }
 
-            KeyCode::Up if modifiers == KeyModifiers::CONTROL => self.state.nav_first(),
-            KeyCode::Down if modifiers == KeyModifiers::CONTROL => {
-                self.state.nav_last();
-                self.maybe_load_more().await;
-            }
+        Ok(())
+    }
 
-            KeyCode::Char(c) if Self::char_matches(c, "v") => {
-                self.state.show_visualizer = !self.state.show_visualizer;
-            }
-
-            KeyCode::Up => self.state.nav_up(),
-            KeyCode::Char(c) if c == 'k' || c == 'K' => self.state.nav_up(),
-
-            KeyCode::Down => {
-                self.state.nav_down();
-                self.maybe_load_more().await;
-            }
-            KeyCode::Char(c) if c == 'j' || c == 'J' => {
-                self.state.nav_down();
-                self.maybe_load_more().await;
-            }
-
-
-            KeyCode::Tab => {
-                if self.state.focus == Focus::Search {
-                    self.state.switch_search_panel();
-                } else {
-                    self.state.switch_focus();
-                }
-            }
-            KeyCode::BackTab => {
-                self.state.switch_focus_prev();
-            }
-
-            KeyCode::Enter => self.handle_enter().await,
-
-            KeyCode::Char('/') => self.state.start_search(),
-
-            KeyCode::Backspace => {
-                if self.state.quick_search_active {
-                    self.state.cancel_quick_search();
-                } else if let Some(prev) = self.state.previous_search.take() {
-                    self.state.search_results = Some(prev);
-                    self.state.active_content = ActiveContent::None;
-                    self.state.focus = Focus::Search;
-                }
-            }
-
-            KeyCode::Esc => {
-                if self.state.quick_search_active {
-                    self.state.cancel_quick_search();
-                } else if self.state.fullscreen_player {
-                    self.state.fullscreen_player = false;
-                } else if self.state.search_results.is_some() {
-                    self.state.search_results = None;
-                    self.state.previous_search = None;
-                    self.state.active_content = ActiveContent::None;
-                    self.state.focus = Focus::Library;
-                } else if self.state.compact_effective && self.state.active_content != ActiveContent::None {
-                    self.state.active_content = ActiveContent::None;
-                }
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "d") => {
-                self.debug_overlay.toggle_visible();
-            }
-
-            KeyCode::Char(' ') => {
+    async fn dispatch(&mut self, action: crate::keybinds::Action) {
+        use crate::keybinds::Action as A;
+        match action {
+            A::PlayPause => {
                 if let Some(player) = &mut self.player {
                     player.toggle();
                 } else if self.spotify.authenticated {
                     let _ = self.spotify.toggle_playback().await;
                 }
             }
-
-            KeyCode::Char(c) if Self::char_matches(c, "a") => {
+            A::NextTrack => {
+                if let Some(player) = &mut self.player {
+                    player.next();
+                } else if self.spotify.authenticated {
+                    let _ = self.spotify.next_track().await;
+                }
+            }
+            A::PrevTrack => {
+                if let Some(player) = &mut self.player {
+                    player.prev();
+                } else if self.spotify.authenticated {
+                    let _ = self.spotify.prev_track().await;
+                }
+            }
+            A::VolumeUp => {
+                if let Some(player) = &mut self.player {
+                    player.volume_up();
+                    self.state.playback.volume = player.volume();
+                }
+            }
+            A::VolumeDown => {
+                if let Some(player) = &mut self.player {
+                    player.volume_down();
+                    self.state.playback.volume = player.volume();
+                }
+            }
+            A::SeekForward => {} // handled above in seek holding
+            A::SeekBackward => {} // handled above in seek holding
+            A::ToggleShuffle => {
+                if let Some(player) = &mut self.player {
+                    player.toggle_shuffle();
+                    self.state.playback.shuffle = player.shuffle();
+                }
+            }
+            A::CycleRepeat => {
+                if let Some(player) = &mut self.player {
+                    player.cycle_repeat();
+                    self.state.playback.repeat = match player.repeat() {
+                        RepeatMode::Off => RepeatState::Off,
+                        RepeatMode::Queue => RepeatState::Context,
+                        RepeatMode::Track => RepeatState::Track,
+                    };
+                }
+            }
+            A::ToggleRadio => {
+                self.state.playback.radio_mode = !self.state.playback.radio_mode;
+                if self.state.playback.radio_mode {
+                    self.state.status_msg = Some("Radio mode on".to_string());
+                } else {
+                    self.state.status_msg = Some("Radio mode off".to_string());
+                }
+            }
+            A::GetRecommendations => {
+                self.get_similar_tracks().await;
+            }
+            A::LikeTrack => {
+                if !self.spotify.authenticated {
+                    self.state.status_msg = Some("Spotify not connected".to_string());
+                } else {
+                    match self.spotify.save_current_track().await {
+                        Ok(_) => self.state.status_msg = Some("♥ Liked!".to_string()),
+                        Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
+                    }
+                }
+            }
+            A::AddToQueue => {
                 let track = if self.state.active_content == ActiveContent::LocalFiles {
                     self.state.local_tree_list.selected().and_then(|vi| {
                         let actual_vi = self.state.sorted_track_indices.get(vi)?;
@@ -1158,122 +1160,122 @@ impl App {
                     }
                 }
             }
-
-            KeyCode::Delete if self.state.focus == Focus::Queue => {
-                if let Some(idx) = self.state.queue_list.selected() {
-                    let active_len = self
-                        .player
-                        .as_ref()
-                        .map(|p| p.user_queue().len())
-                        .unwrap_or(0);
-
-                    if idx < active_len {
-                        if let Some(player) = &mut self.player {
-                            player.remove_from_user_queue(idx);
-                        }
-                    } else {
-                        let parked_idx = idx - active_len;
-                        if let Some(player) = &mut self.parked_player {
-                            if parked_idx < player.user_queue().len() {
-                                player.remove_from_user_queue(parked_idx);
+            A::RemoveFromQueue => {
+                if self.state.focus == Focus::Queue {
+                    if let Some(idx) = self.state.queue_list.selected() {
+                        let active_len = self
+                            .player
+                            .as_ref()
+                            .map(|p| p.user_queue().len())
+                            .unwrap_or(0);
+                        if idx < active_len {
+                            if let Some(player) = &mut self.player {
+                                player.remove_from_user_queue(idx);
+                            }
+                        } else {
+                            let parked_idx = idx - active_len;
+                            if let Some(player) = &mut self.parked_player {
+                                if parked_idx < player.user_queue().len() {
+                                    player.remove_from_user_queue(parked_idx);
+                                }
                             }
                         }
-                    }
-
-                    self.sync_queue_display();
-                    let new_sel = if self.state.queue_items.is_empty() {
-                        None
-                    } else {
-                        Some(idx.min(self.state.queue_items.len() - 1))
-                    };
-                    self.state.queue_list.select(new_sel);
-                }
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "n") => {
-                if let Some(player) = &mut self.player {
-                    player.next();
-                    self.state.playback.progress_ms = 0;
-                    self.scrobble_sent = false;
-                    self.track_start_unix = unix_now();
-                    self.sync_track_selection();
-                    self.sync_queue_display();
-                } else if self.spotify.authenticated {
-                    let _ = self.spotify.next_track().await;
-                }
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "p") => {
-                if let Some(player) = &mut self.player {
-                    player.prev();
-                    self.state.playback.progress_ms = 0;
-                    self.scrobble_sent = false;
-                    self.sync_track_selection();
-                } else if self.spotify.authenticated {
-                    let _ = self.spotify.prev_track().await;
-                }
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "s") => {
-                if let Some(player) = &mut self.player {
-                    player.toggle_shuffle();
-                    self.state.playback.shuffle = player.shuffle();
-                }
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "r") && modifiers == KeyModifiers::ALT => {
-                self.get_similar_tracks().await;
-            }
-
-            KeyCode::Char('R') => {
-                self.radio_mode = !self.radio_mode;
-                self.state.playback.radio_mode = self.radio_mode;
-                let msg = if self.radio_mode {
-                    "󰐇 Radio Mode on"
-                } else {
-                    "Radio Mode off"
-                };
-                self.state.status_msg = Some(msg.to_string());
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "r") => {
-                if let Some(player) = &mut self.player {
-                    player.cycle_repeat();
-                    self.state.playback.repeat = match player.repeat() {
-                        RepeatMode::Off => RepeatState::Off,
-                        RepeatMode::Queue => RepeatState::Context,
-                        RepeatMode::Track => RepeatState::Track,
-                    };
-                }
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "z") => {
-                if !self.state.playback.title.is_empty() {
-                    self.state.fullscreen_player = !self.state.fullscreen_player;
-                }
-            }
-
-            KeyCode::Char(c) if c == 'y' || c == 'Y' => {
-                self.state.show_lyrics = !self.state.show_lyrics;
-                self.state.status_msg = Some(if self.state.show_lyrics {
-                    "Lyrics panel on".to_string()
-                } else {
-                    "Lyrics panel off".to_string()
-                });
-            }
-
-            KeyCode::Char(c) if Self::char_matches(c, "l") => {
-                if !self.spotify.authenticated {
-                    self.state.status_msg = Some("Spotify not connected".to_string());
-                } else {
-                    match self.spotify.save_current_track().await {
-                        Ok(_) => self.state.status_msg = Some("♥ Liked!".to_string()),
-                        Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
+                        self.sync_queue_display();
+                        let new_sel = if self.state.queue_items.is_empty() {
+                            None
+                        } else {
+                            Some(idx.min(self.state.queue_items.len() - 1))
+                        };
+                        self.state.queue_list.select(new_sel);
                     }
                 }
             }
-
-            KeyCode::Char(c) if Self::char_matches(c, "m") => {
+            A::SortTracks => {
+                if matches!(
+                    self.state.active_content,
+                    ActiveContent::Tracks | ActiveContent::None
+                ) {
+                    self.state.sort_tracks();
+                    self.state.status_msg =
+                        Some(format!("Sorting by: {}", self.state.track_sort_by.label()));
+                }
+            }
+            A::NavUp => {
+                if self.state.show_help {
+                    self.state.help_scroll = self.state.help_scroll.saturating_sub(1);
+                } else {
+                    self.state.nav_up();
+                }
+            }
+            A::NavDown => {
+                if self.state.show_help {
+                    self.state.help_scroll = self.state.help_scroll.saturating_add(1);
+                } else {
+                    self.state.nav_down();
+                    self.maybe_load_more().await;
+                }
+            }
+            A::NavFirst => self.state.nav_first(),
+            A::NavLast => {
+                self.state.nav_last();
+                self.maybe_load_more().await;
+            }
+            A::TabNext => {
+                if self.state.focus == Focus::Search {
+                    self.state.switch_search_panel();
+                } else {
+                    self.state.switch_focus();
+                }
+            }
+            A::TabPrev => self.state.switch_focus_prev(),
+            A::Enter => self.handle_enter().await,
+            A::Back => {
+                if self.state.show_help {
+                    self.state.show_help = false;
+                    self.state.help_scroll = 0;
+                } else if self.state.quick_search_active {
+                    self.state.cancel_quick_search();
+                } else if self.state.fullscreen_player {
+                    self.state.fullscreen_player = false;
+                } else if self.state.search_results.is_some() {
+                    self.state.search_results = None;
+                    self.state.previous_search = None;
+                    self.state.active_content = ActiveContent::None;
+                    self.state.focus = Focus::Library;
+                } else if self.state.compact_effective && self.state.active_content != ActiveContent::None {
+                    self.state.active_content = ActiveContent::None;
+                }
+            }
+            A::Search => self.state.start_search(),
+            A::QuickSearch => {
+                match self.state.active_content {
+                    ActiveContent::Tracks | ActiveContent::None | ActiveContent::LocalFiles => {
+                        self.state.start_quick_search();
+                        self.state.apply_quick_filter();
+                    }
+                    _ => {
+                        self.state.status_msg =
+                            Some("Quick search only works with Tracks or Local Files".to_string());
+                    }
+                }
+            }
+            A::Help => {
+                self.state.show_help = !self.state.show_help;
+                self.state.help_scroll = 0;
+                if self.state.show_help {
+                    let raw = self.keybinds.format_help_text();
+                    let mut lines = Vec::new();
+                    for (cat, entries) in &raw {
+                        lines.push(format!("#{}", cat));
+                        for entry in entries {
+                            lines.push(format!("  {}", entry));
+                        }
+                        lines.push(String::new());
+                    }
+                    self.state.help_text = lines;
+                }
+            }
+            A::ToggleCompact => {
                 self.state.compact_mode = !self.state.compact_mode;
                 if self.state.compact_mode && matches!(self.state.focus, Focus::Library | Focus::Playlists | Focus::Queue) {
                     self.state.focus = Focus::Tracks;
@@ -1284,52 +1286,49 @@ impl App {
                     "Compact mode off".to_string()
                 });
             }
-
-            KeyCode::Char(c) if c == '+' || c == '=' => {
-                if let Some(player) = &mut self.player {
-                    player.volume_up();
-                    self.state.playback.volume = player.volume();
+            A::ToggleFullscreen => {
+                if !self.state.playback.title.is_empty() {
+                    self.state.fullscreen_player = !self.state.fullscreen_player;
                 }
             }
-
-            KeyCode::Char(c) if c == '-' => {
-                if let Some(player) = &mut self.player {
-                    player.volume_down();
-                    self.state.playback.volume = player.volume();
+            A::ToggleVisualizer => {
+                self.state.show_visualizer = !self.state.show_visualizer;
+            }
+            A::ToggleLyrics => {
+                self.state.show_lyrics = !self.state.show_lyrics;
+                self.state.status_msg = Some(if self.state.show_lyrics {
+                    "Lyrics panel on".to_string()
+                } else {
+                    "Lyrics panel off".to_string()
+                });
+            }
+            A::ToggleDebug => {
+                self.debug_overlay.toggle_visible();
+            }
+            A::ScrollUp => {
+                if self.state.show_help {
+                    self.state.help_scroll = self.state.help_scroll.saturating_sub(4);
+                } else if self.state.fullscreen_player
+                    && self.state.playback.lyrics.as_ref()
+                        .map(|l| !l.is_synced).unwrap_or(false)
+                {
+                    self.state.playback.lyrics_scroll = self.state.playback.lyrics_scroll.saturating_sub(4);
                 }
             }
-
-            KeyCode::PageDown
-                if self.state.fullscreen_player
-                    && self
-                        .state
-                        .playback
-                        .lyrics
-                        .as_ref()
-                        .map(|l| !l.is_synced)
-                        .unwrap_or(false) =>
-            {
-                self.state.playback.lyrics_scroll =
-                    self.state.playback.lyrics_scroll.saturating_add(4);
+            A::ScrollDown => {
+                if self.state.show_help {
+                    self.state.help_scroll = self.state.help_scroll.saturating_add(4);
+                } else if self.state.fullscreen_player
+                    && self.state.playback.lyrics.as_ref()
+                        .map(|l| !l.is_synced).unwrap_or(false)
+                {
+                    self.state.playback.lyrics_scroll = self.state.playback.lyrics_scroll.saturating_add(4);
+                }
             }
-
-            KeyCode::PageUp
-                if self.state.fullscreen_player
-                    && self
-                        .state
-                        .playback
-                        .lyrics
-                        .as_ref()
-                        .map(|l| !l.is_synced)
-                        .unwrap_or(false) =>
-            {
-                self.state.playback.lyrics_scroll =
-                    self.state.playback.lyrics_scroll.saturating_sub(4);
+            A::Quit => {
+                self.should_quit = true;
             }
-
-            _ => {}
         }
-        Ok(())
     }
 
     async fn handle_enter(&mut self) {

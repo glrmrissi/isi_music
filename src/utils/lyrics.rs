@@ -360,6 +360,7 @@ struct MusixmatchTrack {
 struct TrackData {
     track_id: i32,
     track_name: String,
+    #[allow(dead_code)]
     artist_name: String,
     has_lyrics: bool,
 }

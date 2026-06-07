@@ -1,3 +1,4 @@
 /target
+/patches/librespot-core/target
 .env
 .spotify_token_cache.json

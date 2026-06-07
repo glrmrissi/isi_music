@@ -1,8 +1,8 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, BorderType, List, ListItem, ListState, Paragraph},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, BorderType, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 use rspotify::model::RepeatState;
@@ -22,6 +22,7 @@ pub struct PlaybackState {
     pub title: String,
     pub artist: String,
     pub album: String,
+    #[allow(dead_code)]
     pub path: Option<String>,
     pub is_playing: bool,
     pub shuffle: bool,
@@ -387,6 +388,9 @@ pub struct UiState {
     pub show_lyrics: bool,
     pub compact_mode: bool,
     pub compact_effective: bool,
+    pub show_help: bool,
+    pub help_text: Vec<String>,
+    pub help_scroll: usize,
 }
 
 impl UiState {
@@ -443,9 +447,13 @@ impl UiState {
             show_lyrics: false,
             compact_mode: false,
             compact_effective: false,
+            show_help: false,
+            help_text: Vec::new(),
+            help_scroll: 0,
         }
     }
 
+    #[allow(dead_code)]
     pub fn selected_playlist(&self) -> Option<&PlaylistSummary> {
         self.playlist_list.selected().and_then(|i| self.playlists.get(i))
     }
@@ -880,7 +888,7 @@ impl Ui {
                     let pb = state.playback.clone();
                     self.render_visualizer(frame, &pb, &viz_bands, area, state);
                 }
-                UiWidget::Help        => self.render_help(frame, state, area),
+                UiWidget::Help        => {}
                 UiWidget::AsciiArt    => self.render_ascii_art(frame, area),
                 UiWidget::Spacer      => {}
             }
@@ -911,6 +919,13 @@ impl Ui {
     }
 
     fn render_main_area_logic(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        if state.show_help {
+            let visible = (area.height.saturating_sub(4)).max(1) as usize;
+            let max_scroll = state.help_text.len().saturating_sub(visible);
+            state.help_scroll = state.help_scroll.min(max_scroll);
+            self.render_help_panel(frame, state, area);
+            return;
+        }
         if state.search_results.is_some() {
             self.render_search_panels(frame, state, area);
         } else {
@@ -2151,67 +2166,57 @@ impl Ui {
         frame.render_stateful_widget(list, area, &mut state.queue_list);
     }
 
-    fn render_help(&self, frame: &mut Frame, state: &UiState, area: Rect) {
-        let compact = area.height < 2;
+    fn render_help_panel(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Help ")
+            .title_alignment(Alignment::Left)
+            .border_style(Style::default().fg(self.theme.border_active));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
 
-        if compact {
-            let content = if let Some(msg) = &state.status_msg {
-                Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
-            } else if state.search_active || state.quick_search_active {
-                Line::from(Span::styled(
-                    " [ESC] Cancel  [ENTER] Search ",
-                    Style::default().fg(self.theme.border_inactive),
-                ))
+        let scroll = state.help_scroll;
+        let lines: Vec<Line> = state.help_text.iter().map(|line| {
+            if line.starts_with('#') {
+                Line::from(
+                    Span::styled(&line[1..], Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD))
+                )
             } else {
-                Line::from(Span::styled(
-                    " [↑↓/j/k] Nav  [SPACE] Play  [N/P] Skip  [S] Shuf  [R] Rep  [/] Search  [Q] Quit ",
-                    Style::default().fg(self.theme.border_inactive),
-                ))
-            };
-            frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
-            return;
-        }
+                Line::from(Span::styled(line, Style::default().fg(self.theme.text_primary)))
+            }
+        }).collect();
 
-        let content = if let Some(msg) = &state.status_msg {
-            Line::from(Span::styled(msg.clone(), Style::default().fg(self.theme.border_active)))
-        } else if state.quick_search_active {
-            Line::from(Span::styled(
-                " [ESC] Cancel  [Type] Search  [↑↓] Navigate ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
-        } else if state.focus == Focus::Search {
-            Line::from(Span::styled(
-                " [TAB] Switch panel  [↑↓] Navigate  [ENTER] Select  [ESC] Close search ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
-        } else if state.search_active {
-            Line::from(Span::styled(
-                " [ESC] Cancel  [ENTER] Search  [Type] Query ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
-        } else if state.focus == Focus::Queue {
-            Line::from(Span::styled(
-                " [↑↓] Navigate  [DEL] Remove from queue  [TAB] Focus  [A] Add track ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
-        } else if state.active_content == ActiveContent::LocalFiles {
-            Line::from(Span::styled(
-                " [↑↓] Navigate  [ENTER] play/expand folder  [A] Add to queue  [N/P] Skip  [SPACE] Pause  [Ctrl+F] Search ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
-        } else if state.previous_search.is_some() {
-            Line::from(Span::styled(
-                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [A] Queue  [←→] Seek  [BACKSPACE] Back to search ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
+        let total = lines.len();
+        let visible = inner.height.saturating_sub(2) as usize;
+        let max_scroll = total.saturating_sub(visible);
+        let offset = scroll.min(max_scroll);
+
+        let scroll_suffix = if total > visible {
+            let pct = if max_scroll > 0 { (offset * 100) / max_scroll } else { 0 };
+            let n = (pct / 10).clamp(0, 10);
+            let bar: String = (0..10).map(|i| if i < n { '█' } else { '░' }).collect();
+            format!(" {bar} ")
         } else {
-            Line::from(Span::styled(
-                " [hjkl/↑↓] Nav  [SPACE] Play/Pause  [N/P] Skip  [S] Shuffle  [R] Repeat  [A] Queue  [C] Cover  [Z] Player  [←→] Seek  [L] Like  [+/-] Vol  [/] Search  [Ctrl+F] Quick Search  [O] Sort  [M] Compact  [Q] Quit ",
-                Style::default().fg(self.theme.border_inactive),
-            ))
+            String::new()
         };
 
-        frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
+        let title = format!(" Help{scroll_suffix} ");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(title)
+            .title_alignment(Alignment::Left)
+            .border_style(Style::default().fg(self.theme.border_active));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let visible_lines: Vec<&Line> = lines.iter().skip(offset).take(visible).collect();
+        let text: Vec<Line> = visible_lines.into_iter().cloned().collect();
+
+        let paragraph = Paragraph::new(Text::from(text))
+            .block(Block::default().padding(Padding::new(2, 2, 1, 1)));
+        frame.render_widget(paragraph, inner);
     }
 }
 

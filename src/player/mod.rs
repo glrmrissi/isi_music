@@ -41,6 +41,7 @@ pub enum PlayerNotification {
 
 #[derive(Clone, Debug)]
 pub struct TrackInfo {
+    #[allow(dead_code)]
     pub uri: String,
     pub name: String,
     pub artist: String,
@@ -91,6 +92,7 @@ pub trait AudioPlayer: Send {
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
+    #[allow(dead_code)]
     fn current_uri(&self) -> Option<String>;
     fn current_track_info(&self) -> Option<TrackInfo> { None }
 
@@ -362,6 +364,7 @@ impl NativePlayer {
         self.mixer.set_volume(v);
     }
 
+    #[allow(dead_code)]
     pub fn current_uri(&self) -> Option<String> {
         self.current_index().and_then(|i| self.queue.get(i)).cloned()
     }

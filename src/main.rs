@@ -11,6 +11,7 @@ use std::io::{self, Write};
 
 mod app;
 mod config;
+mod keybinds;
 mod spotify;
 mod daemon;
 mod player;
@@ -315,6 +316,8 @@ fn main() -> Result<()> {
 
             let theme = utils::theme::Theme::load();
             let theme_rx = utils::theme::Theme::watch()?;
+            let keybinds = keybinds::Keybinds::load();
+            let keybinds_rx = keybinds::KeybindsWatcher::watch()?;
             let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
             enable_raw_mode()?;
@@ -323,7 +326,7 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker, theme, theme_rx).await?;
+            let mut app = App::new(picker, theme, theme_rx, keybinds, keybinds_rx).await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

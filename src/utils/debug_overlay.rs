@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum LogLevel {
     Info,
     Warn,
@@ -111,6 +112,7 @@ impl DebugOverlay {
         self.handle().log(level, msg);
     }
 
+    #[allow(dead_code)]
     pub fn log_api(&self, method: &str, url: &str, status: u16) {
         self.log(
             LogLevel::Api,
@@ -118,6 +120,7 @@ impl DebugOverlay {
         );
     }
 
+    #[allow(dead_code)]
     pub fn log_audio(&self, msg: impl Into<String>) {
         self.log(LogLevel::Audio, msg);
     }
@@ -320,10 +323,12 @@ impl DebugHandle {
         });
     }
 
+    #[allow(dead_code)]
     pub fn log_api(&self, method: &str, url: &str, status: u16) {
         self.log(LogLevel::Api, format!("{} {}  → {}", method, url, status));
     }
 
+    #[allow(dead_code)]
     pub fn log_audio(&self, msg: impl Into<String>) {
         self.log(LogLevel::Audio, msg);
     }
