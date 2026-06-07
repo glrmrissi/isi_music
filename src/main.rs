@@ -146,41 +146,24 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
 }
 
 fn print_help() {
-    println!(
-        "\
+    println!("\
 isi-music — terminal Spotify player
 
 USAGE
   isi-music               Launch the TUI player
   isi-music [COMMAND]
 
-TUI KEYBINDINGS
-    Tab / hjkl / ↑↓      Navigate panels and lists
-    Enter                Play selected / open album or artist
-    Space                Play / pause
-    n / p                Next / previous track
-    s                    Toggle shuffle
-    r                    Cycle repeat (off → queue → track)
-    d                    Debug painel
-    / -                  Volume up / down
-    ← / →                Seek ±5 s (hold for ±10 s)
-    /                    Search
-    a                    Add track to queue
-    Delete               Remove selected item from queue
-    R                    Toggle Radio Mode (auto-recommendations)
-    Alt+r                Get similar tracks
-    c                    Toggle album art / cover art
-    y                    Lyrics
-    v                    Toggle visualizer
-    PgDown / PgUp        Scroll lyrics
-    z                    Toggle fullscreen player
-    l                    Like current track
-    Backspace            Back to previous search results
-    Esc                  Close search / exit fullscreen
-    o                    Order by
-    Ctrl+F               Quick Search
-    q / Ctrl+C           Quit
+TUI KEYBINDINGS");
 
+    let kb = keybinds::Keybinds::load();
+    for (category, entries) in kb.format_help_text() {
+        println!("  {category}:");
+        for entry in entries {
+            println!("    {entry}");
+        }
+    }
+
+    println!("\
 DAEMON MODE
   isi-music --daemon                 Start daemon in background
   isi-music --quit-daemon            Stop the daemon
@@ -225,8 +208,7 @@ FILES
   Config   ~/.config/isi-music/config.toml
   Log      ~/.local/share/isi-music/isi-music.log
   Socket   $XDG_RUNTIME_DIR/isi-music.sock
-"
-    );
+");
 }
 
 fn main() -> Result<()> {
