@@ -191,7 +191,7 @@ jobs:
       - name: Generate release notes
         run: |
           git cliff \
-            --current \
+            --tag "${{ github.ref_name }}" \
             --config cliff.toml \
             -o changelog-full.md
 
