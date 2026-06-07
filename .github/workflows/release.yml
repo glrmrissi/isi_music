@@ -67,12 +67,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Sync Cargo.toml version with tag
+      - name: Sync version with tag
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
+          echo "Updating version to $VERSION"
+
           sed "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml > Cargo.toml.tmp
           mv Cargo.toml.tmp Cargo.toml
-          echo "Cargo.toml version updated to $VERSION"
+
+          sed '/^name = "isi-music"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' Cargo.lock > Cargo.lock.tmp
+          mv Cargo.lock.tmp Cargo.lock
+
           grep '^version =' Cargo.toml
 
       - name: Install system dependencies (Linux)
