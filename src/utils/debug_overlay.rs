@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
-    Api,   
+    Api,
     Audio,
 }
 
@@ -114,10 +114,7 @@ impl DebugOverlay {
 
     #[allow(dead_code)]
     pub fn log_api(&self, method: &str, url: &str, status: u16) {
-        self.log(
-            LogLevel::Api,
-            format!("{} {}  → {}", method, url, status),
-        );
+        self.log(LogLevel::Api, format!("{} {}  → {}", method, url, status));
     }
 
     #[allow(dead_code)]
@@ -128,7 +125,7 @@ impl DebugOverlay {
     pub fn update_metrics(&self) {
         let mut g = self.inner.lock().unwrap();
         let now = Instant::now();
-        
+
         if now.duration_since(g.last_metric_update) < Duration::from_millis(800) {
             return;
         }
@@ -137,17 +134,17 @@ impl DebugOverlay {
         if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
             let fields: Vec<&str> = stat.split_whitespace().collect();
             if fields.len() > 14 {
-                if let (Ok(utime), Ok(stime)) = (
-                    fields[13].parse::<u64>(),
-                    fields[14].parse::<u64>(),
-                ) {
+                if let (Ok(utime), Ok(stime)) =
+                    (fields[13].parse::<u64>(), fields[14].parse::<u64>())
+                {
                     let current_total_jiffies = utime + stime;
-                    let delta_jiffies = current_total_jiffies.saturating_sub(g.prev_utime + g.prev_stime);
+                    let delta_jiffies =
+                        current_total_jiffies.saturating_sub(g.prev_utime + g.prev_stime);
                     let wall_secs = now.duration_since(g.prev_wall).as_secs_f64();
 
                     if wall_secs > 0.0 {
-                        let cpu = (delta_jiffies as f64 / 100.0) / wall_secs * 10.0; 
-                        
+                        let cpu = (delta_jiffies as f64 / 100.0) / wall_secs * 10.0;
+
                         g.metrics.cpu_percent = (cpu as f32).clamp(0.0, 999.0);
                     }
 
@@ -213,14 +210,14 @@ impl DebugOverlay {
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(6),   
-                Constraint::Length(1),   
+                Constraint::Length(6),
+                Constraint::Length(1),
                 Constraint::Min(0),
             ])
             .split(inner);
 
         self.render_metrics(frame, &g.metrics, sections[0]);
-        
+
         frame.render_widget(
             Paragraph::new("─".repeat(sections[1].width as usize))
                 .style(Style::default().fg(Color::DarkGray)),
@@ -266,15 +263,11 @@ impl DebugOverlay {
             ]),
             Line::from(vec![
                 Span::styled("Backend ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    m.audio_backend.clone(),
-                    Style::default().fg(Color::Magenta),
-                ),
+                Span::styled(m.audio_backend.clone(), Style::default().fg(Color::Magenta)),
             ]),
         ];
 
         frame.render_widget(Paragraph::new(proc_lines), cols[0]);
-
     }
 
     fn render_logs<'a>(&self, frame: &mut Frame, logs: &VecDeque<LogEntry>, area: Rect) {

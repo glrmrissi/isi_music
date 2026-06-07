@@ -1,12 +1,11 @@
+pub mod watcher;
+pub use watcher::KeybindsWatcher;
+
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use std::time::Duration;
-use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -47,43 +46,43 @@ pub enum Action {
 }
 
 impl Action {
-    fn all() -> &'static [( &'static str, &'static [&'static str], Action)] {
+    fn all() -> &'static [(&'static str, &'static [&'static str], Action)] {
         use Action::*;
         &[
-            ("play_pause",        &["space"],          PlayPause),
-            ("next_track",        &["n"],              NextTrack),
-            ("prev_track",        &["p"],              PrevTrack),
-            ("volume_up",         &["+", "="],         VolumeUp),
-            ("volume_down",       &["-"],              VolumeDown),
-            ("seek_forward",      &["right"],          SeekForward),
-            ("seek_backward",     &["left"],           SeekBackward),
-            ("toggle_shuffle",    &["s"],              ToggleShuffle),
-            ("cycle_repeat",      &["r"],              CycleRepeat),
-            ("toggle_radio",      &["R"],              ToggleRadio),
-            ("recommendations",   &["alt+r"],          GetRecommendations),
-            ("like_track",        &["l"],              LikeTrack),
-            ("add_to_queue",      &["a"],              AddToQueue),
-            ("remove_from_queue", &["delete"],         RemoveFromQueue),
-            ("sort_tracks",       &["o"],              SortTracks),
-            ("nav_up",            &["up", "k"],        NavUp),
-            ("nav_down",          &["down", "j"],      NavDown),
-            ("nav_first",         &["ctrl+up"],        NavFirst),
-            ("nav_last",          &["ctrl+down"],      NavLast),
-            ("tab_next",          &["tab"],            TabNext),
-            ("tab_prev",          &["backtab"],        TabPrev),
-            ("enter",             &["enter"],          Enter),
-            ("back",              &["esc"],            Back),
-            ("search",            &["/"],              Search),
-            ("quick_search",      &["ctrl+f"],         QuickSearch),
-            ("help",              &["?"],              Help),
-            ("toggle_compact",    &["m"],              ToggleCompact),
-            ("toggle_fullscreen", &["z"],              ToggleFullscreen),
-            ("toggle_visualizer", &["v"],              ToggleVisualizer),
-            ("toggle_lyrics",     &["y"],              ToggleLyrics),
-            ("toggle_debug",      &["d"],              ToggleDebug),
-            ("scroll_up",         &["pageup"],         ScrollUp),
-            ("scroll_down",       &["pagedown"],       ScrollDown),
-            ("quit",              &["q", "ctrl+c"],    Quit),
+            ("play_pause", &["space"], PlayPause),
+            ("next_track", &["n"], NextTrack),
+            ("prev_track", &["p"], PrevTrack),
+            ("volume_up", &["+", "="], VolumeUp),
+            ("volume_down", &["-"], VolumeDown),
+            ("seek_forward", &["right"], SeekForward),
+            ("seek_backward", &["left"], SeekBackward),
+            ("toggle_shuffle", &["s"], ToggleShuffle),
+            ("cycle_repeat", &["r"], CycleRepeat),
+            ("toggle_radio", &["R"], ToggleRadio),
+            ("recommendations", &["alt+r"], GetRecommendations),
+            ("like_track", &["l"], LikeTrack),
+            ("add_to_queue", &["a"], AddToQueue),
+            ("remove_from_queue", &["delete"], RemoveFromQueue),
+            ("sort_tracks", &["o"], SortTracks),
+            ("nav_up", &["up", "k"], NavUp),
+            ("nav_down", &["down", "j"], NavDown),
+            ("nav_first", &["ctrl+up"], NavFirst),
+            ("nav_last", &["ctrl+down"], NavLast),
+            ("tab_next", &["tab"], TabNext),
+            ("tab_prev", &["backtab"], TabPrev),
+            ("enter", &["enter"], Enter),
+            ("back", &["esc"], Back),
+            ("search", &["/"], Search),
+            ("quick_search", &["ctrl+f"], QuickSearch),
+            ("help", &["?"], Help),
+            ("toggle_compact", &["m"], ToggleCompact),
+            ("toggle_fullscreen", &["z"], ToggleFullscreen),
+            ("toggle_visualizer", &["v"], ToggleVisualizer),
+            ("toggle_lyrics", &["y"], ToggleLyrics),
+            ("toggle_debug", &["d"], ToggleDebug),
+            ("scroll_up", &["pageup"], ScrollUp),
+            ("scroll_down", &["pagedown"], ScrollDown),
+            ("quit", &["q", "ctrl+c"], Quit),
         ]
     }
 }
@@ -158,12 +157,16 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         "pagedown" | "pgdn" => KeyId::PageDown,
         s if s.starts_with('f') && s.len() > 1 => {
             let n: u8 = s[1..].parse().ok()?;
-            if n < 1 || n > 12 { return None; }
+            if n < 1 || n > 12 {
+                return None;
+            }
             KeyId::F(n)
         }
         s => {
             let chars: Vec<char> = s.chars().collect();
-            if chars.len() != 1 { return None; }
+            if chars.len() != 1 {
+                return None;
+            }
             let c = chars[0];
             if c.is_ascii_uppercase() {
                 shift = true;
@@ -172,18 +175,32 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         }
     };
 
-    Some(KeyCombo { key, ctrl, alt, shift })
+    Some(KeyCombo {
+        key,
+        ctrl,
+        alt,
+        shift,
+    })
 }
 
 fn key_combo_to_string(kc: &KeyCombo) -> String {
     let mut parts = Vec::new();
-    if kc.ctrl { parts.push("Ctrl"); }
-    if kc.alt { parts.push("Alt"); }
-    if kc.shift { parts.push("Shift"); }
+    if kc.ctrl {
+        parts.push("Ctrl");
+    }
+    if kc.alt {
+        parts.push("Alt");
+    }
+    if kc.shift {
+        parts.push("Shift");
+    }
     let key = match &kc.key {
         KeyId::Char(c) => {
-            if kc.shift { c.to_ascii_uppercase().to_string() }
-            else { c.to_string() }
+            if kc.shift {
+                c.to_ascii_uppercase().to_string()
+            } else {
+                c.to_string()
+            }
         }
         KeyId::Space => "Space".into(),
         KeyId::Enter => "Enter".into(),
@@ -222,7 +239,10 @@ enum KeySpec {
 }
 
 fn name_to_action(name: &str) -> Option<Action> {
-    Action::all().iter().find(|(n, _, _)| *n == name).map(|(_, _, a)| *a)
+    Action::all()
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, _, a)| *a)
 }
 
 pub fn keybinds_path() -> PathBuf {
@@ -251,7 +271,10 @@ impl Keybinds {
             keys_for.insert(*action, combos);
         }
 
-        Keybinds { action_for, keys_for }
+        Keybinds {
+            action_for,
+            keys_for,
+        }
     }
 
     pub fn load() -> Self {
@@ -274,7 +297,7 @@ impl Keybinds {
         let parsed: KeybindsToml = match toml::from_str(&content) {
             Ok(p) => p,
             Err(e) => {
-                warn!("Failed to parse keybinds.toml: {e}");
+                tracing::warn!("Failed to parse keybinds.toml: {e}");
                 return defaults;
             }
         };
@@ -287,10 +310,12 @@ impl Keybinds {
             ("modes", parsed.modes),
             ("actions", parsed.actions),
         ] {
-            let Some(section) = section else { continue; };
+            let Some(section) = section else {
+                continue;
+            };
             for (name, spec) in section {
                 let Some(action) = name_to_action(&name) else {
-                    warn!("Unknown action '{}' in [{}] section", name, section_name);
+                    tracing::warn!("Unknown action '{}' in [{}] section", name, section_name);
                     continue;
                 };
 
@@ -299,7 +324,6 @@ impl Keybinds {
                     KeySpec::Multiple(v) => v,
                 };
 
-                // Remove old key combos for this action (from defaults)
                 if let Some(old_combos) = result.keys_for.get(&action) {
                     for kc in old_combos {
                         result.action_for.remove(kc);
@@ -312,7 +336,7 @@ impl Keybinds {
                         result.action_for.insert(kc.clone(), action);
                         new_combos.push(kc);
                     } else {
-                        warn!("Invalid key combo '{}' for action '{}'", ks, name);
+                        tracing::warn!("Invalid key combo '{}' for action '{}'", ks, name);
                     }
                 }
                 result.keys_for.insert(action, new_combos);
@@ -323,6 +347,15 @@ impl Keybinds {
     }
 
     pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+        if matches!(code, KeyCode::Char(' ')) {
+            let combo = KeyCombo {
+                key: KeyId::Space,
+                ctrl: modifiers.contains(KeyModifiers::CONTROL),
+                alt: modifiers.contains(KeyModifiers::ALT),
+                shift: modifiers.contains(KeyModifiers::SHIFT),
+            };
+            return self.action_for.get(&combo).copied();
+        }
         if let KeyCode::Char(c) = code {
             let shift = modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase();
             let c_lower = c.to_ascii_lowercase();
@@ -336,7 +369,6 @@ impl Keybinds {
         }
 
         let key = match code {
-            KeyCode::Char(' ') => KeyId::Space,
             KeyCode::Enter => KeyId::Enter,
             KeyCode::Tab => KeyId::Tab,
             KeyCode::BackTab => KeyId::BackTab,
@@ -367,47 +399,88 @@ impl Keybinds {
 
     pub fn format_help_text(&self) -> Vec<(String, Vec<String>)> {
         let categories: &[(&str, &[Action])] = &[
-            ("Playback", &[
-                Action::PlayPause, Action::NextTrack, Action::PrevTrack,
-                Action::VolumeUp, Action::VolumeDown,
-                Action::SeekForward, Action::SeekBackward,
-                Action::ToggleShuffle, Action::CycleRepeat,
-                Action::ToggleRadio, Action::GetRecommendations,
-            ]),
-            ("Navigation", &[
-                Action::NavUp, Action::NavDown, Action::NavFirst, Action::NavLast,
-                Action::TabNext, Action::TabPrev,
-                Action::Enter, Action::Back,
-            ]),
-            ("Modes", &[
-                Action::Search, Action::QuickSearch, Action::Help,
-                Action::ToggleCompact, Action::ToggleFullscreen,
-                Action::ToggleVisualizer, Action::ToggleLyrics,
-                Action::ToggleDebug, Action::ScrollUp, Action::ScrollDown,
-            ]),
-            ("Actions", &[
-                Action::LikeTrack, Action::AddToQueue, Action::RemoveFromQueue,
-                Action::SortTracks, Action::Quit,
-            ]),
+            (
+                "Playback",
+                &[
+                    Action::PlayPause,
+                    Action::NextTrack,
+                    Action::PrevTrack,
+                    Action::VolumeUp,
+                    Action::VolumeDown,
+                    Action::SeekForward,
+                    Action::SeekBackward,
+                    Action::ToggleShuffle,
+                    Action::CycleRepeat,
+                    Action::ToggleRadio,
+                    Action::GetRecommendations,
+                ],
+            ),
+            (
+                "Navigation",
+                &[
+                    Action::NavUp,
+                    Action::NavDown,
+                    Action::NavFirst,
+                    Action::NavLast,
+                    Action::TabNext,
+                    Action::TabPrev,
+                    Action::Enter,
+                    Action::Back,
+                ],
+            ),
+            (
+                "Modes",
+                &[
+                    Action::Search,
+                    Action::QuickSearch,
+                    Action::Help,
+                    Action::ToggleCompact,
+                    Action::ToggleFullscreen,
+                    Action::ToggleVisualizer,
+                    Action::ToggleLyrics,
+                    Action::ToggleDebug,
+                    Action::ScrollUp,
+                    Action::ScrollDown,
+                ],
+            ),
+            (
+                "Actions",
+                &[
+                    Action::LikeTrack,
+                    Action::AddToQueue,
+                    Action::RemoveFromQueue,
+                    Action::SortTracks,
+                    Action::Quit,
+                ],
+            ),
         ];
 
         let mut result = Vec::new();
         for (cat_name, actions) in categories {
-            let entries: Vec<String> = actions.iter().filter_map(|a| {
-                let keys = self.keys_for.get(a)?;
-                if keys.is_empty() { return None; }
-                let key_strs: Vec<String> = keys.iter().map(key_combo_to_string).collect();
-                let action_name = format!("{:?}", a);
-                let spaced = action_name
-                    .chars()
-                    .flat_map(|c| {
-                        if c.is_uppercase() { vec![' ', c] } else { vec![c] }
-                    })
-                    .collect::<String>()
-                    .trim()
-                    .to_string();
-                Some(format!("{}  {}", key_strs.join("/"), spaced))
-            }).collect();
+            let entries: Vec<String> = actions
+                .iter()
+                .filter_map(|a| {
+                    let keys = self.keys_for.get(a)?;
+                    if keys.is_empty() {
+                        return None;
+                    }
+                    let key_strs: Vec<String> = keys.iter().map(key_combo_to_string).collect();
+                    let action_name = format!("{:?}", a);
+                    let spaced = action_name
+                        .chars()
+                        .flat_map(|c| {
+                            if c.is_uppercase() {
+                                vec![' ', c]
+                            } else {
+                                vec![c]
+                            }
+                        })
+                        .collect::<String>()
+                        .trim()
+                        .to_string();
+                    Some(format!("{}  {}", key_strs.join("/"), spaced))
+                })
+                .collect();
             if !entries.is_empty() {
                 result.push((cat_name.to_string(), entries));
             }
@@ -434,35 +507,67 @@ impl KeybindsTomlOutput {
             let key_strs: Vec<String> = keys.iter().map(|s| s.to_string()).collect();
             let entry = (name.to_string(), key_strs);
             match action {
-                Action::PlayPause | Action::NextTrack | Action::PrevTrack
-                | Action::VolumeUp | Action::VolumeDown
-                | Action::SeekForward | Action::SeekBackward
-                | Action::ToggleShuffle | Action::CycleRepeat
-                | Action::ToggleRadio | Action::GetRecommendations
+                Action::PlayPause
+                | Action::NextTrack
+                | Action::PrevTrack
+                | Action::VolumeUp
+                | Action::VolumeDown
+                | Action::SeekForward
+                | Action::SeekBackward
+                | Action::ToggleShuffle
+                | Action::CycleRepeat
+                | Action::ToggleRadio
+                | Action::GetRecommendations
                 | Action::LikeTrack => playback.push(entry),
-                Action::NavUp | Action::NavDown | Action::NavFirst | Action::NavLast
-                | Action::TabNext | Action::TabPrev
-                | Action::Enter | Action::Back => navigation.push(entry),
-                Action::Search | Action::QuickSearch | Action::Help
-                | Action::ToggleCompact | Action::ToggleFullscreen
-                | Action::ToggleVisualizer | Action::ToggleLyrics
-                | Action::ToggleDebug | Action::ScrollUp | Action::ScrollDown => modes.push(entry),
-                Action::AddToQueue | Action::RemoveFromQueue | Action::SortTracks
+                Action::NavUp
+                | Action::NavDown
+                | Action::NavFirst
+                | Action::NavLast
+                | Action::TabNext
+                | Action::TabPrev
+                | Action::Enter
+                | Action::Back => navigation.push(entry),
+                Action::Search
+                | Action::QuickSearch
+                | Action::Help
+                | Action::ToggleCompact
+                | Action::ToggleFullscreen
+                | Action::ToggleVisualizer
+                | Action::ToggleLyrics
+                | Action::ToggleDebug
+                | Action::ScrollUp
+                | Action::ScrollDown => modes.push(entry),
+                Action::AddToQueue
+                | Action::RemoveFromQueue
+                | Action::SortTracks
                 | Action::Quit => actions.push(entry),
             }
         }
 
-        Self { playback, navigation, modes, actions }
+        Self {
+            playback,
+            navigation,
+            modes,
+            actions,
+        }
     }
 }
 
 impl Serialize for KeybindsTomlOutput {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(4))?;
 
-        let serialize_section = |map: &mut <S as serde::Serializer>::SerializeMap, name: &str, entries: &[(String, Vec<String>)]| -> Result<(), S::Error> {
-            if entries.is_empty() { return Ok(()); }
+        let serialize_section = |map: &mut <S as serde::Serializer>::SerializeMap,
+                                 name: &str,
+                                 entries: &[(String, Vec<String>)]|
+         -> Result<(), S::Error> {
+            if entries.is_empty() {
+                return Ok(());
+            }
             let mut section = std::collections::BTreeMap::new();
             for (k, v) in entries {
                 let val = if v.len() == 1 {
@@ -482,44 +587,5 @@ impl Serialize for KeybindsTomlOutput {
         serialize_section(&mut map, "actions", &self.actions)?;
 
         map.end()
-    }
-}
-
-#[allow(dead_code)]
-pub struct KeybindsWatcher {
-    pub rx: mpsc::Receiver<Keybinds>,
-    stop: Arc<AtomicBool>,
-}
-
-impl KeybindsWatcher {
-    pub fn watch() -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let path = keybinds_path();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_clone = Arc::clone(&stop);
-
-        std::thread::spawn(move || {
-            let mut last_content = std::fs::read_to_string(&path).unwrap_or_default();
-            loop {
-                if stop_clone.load(Ordering::Relaxed) { break; }
-                std::thread::sleep(Duration::from_millis(500));
-                if let Ok(current_content) = std::fs::read_to_string(&path) {
-                    if current_content != last_content {
-                        std::thread::sleep(Duration::from_millis(50));
-                        let new = Keybinds::load();
-                        if tx.send(new).is_ok() {
-                            last_content = current_content;
-                        }
-                    }
-                }
-            }
-        });
-
-        Ok(KeybindsWatcher { rx, stop })
-    }
-
-    #[allow(dead_code)]
-    pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
     }
 }

@@ -46,7 +46,11 @@ impl SpotifyAuth {
             ..Default::default()
         };
 
-        Ok(AuthCodePkceSpotify::with_config(creds, oauth, rspotify_config))
+        Ok(AuthCodePkceSpotify::with_config(
+            creds,
+            oauth,
+            rspotify_config,
+        ))
     }
 
     pub async fn run_oauth_flow(authorize_url: &str) -> Result<String> {

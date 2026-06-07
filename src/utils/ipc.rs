@@ -13,10 +13,9 @@ pub async fn send_command(cmd: &str) -> Result<String> {
     use tokio::net::UnixStream;
 
     let path = socket_path();
-    let mut stream = UnixStream::connect(&path).await
-        .map_err(|_| anyhow::anyhow!(
-            "Daemon not running — start with: isi-music --daemon"
-        ))?;
+    let mut stream = UnixStream::connect(&path)
+        .await
+        .map_err(|_| anyhow::anyhow!("Daemon not running — start with: isi-music --daemon"))?;
 
     stream.write_all(format!("{cmd}\n").as_bytes()).await?;
     stream.shutdown().await?;

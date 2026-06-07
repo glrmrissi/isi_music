@@ -1,12 +1,13 @@
 pub mod local;
 pub use local::LocalPlayer;
 
+use crate::audio::audio_sink::{AnalyzerSink, N_BANDS};
+use crate::config;
+use crate::spotify::TrackSummary;
+use crate::ui::PlaybackState;
 use anyhow::{Context, Result};
 use librespot_core::{
-    authentication::Credentials,
-    config::SessionConfig,
-    session::Session,
-    spotify_uri::SpotifyUri,
+    authentication::Credentials, config::SessionConfig, session::Session, spotify_uri::SpotifyUri,
 };
 use librespot_playback::{
     audio_backend,
@@ -14,21 +15,22 @@ use librespot_playback::{
     mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
-use crate::audio::audio_sink::{AnalyzerSink, N_BANDS};
-use crate::spotify::TrackSummary;
-use crate::config;
-use crate::ui::PlaybackState;
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use rand::seq::SliceRandom;
 #[cfg(target_os = "linux")]
 use libc;
+use rand::seq::SliceRandom;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
-pub enum RepeatMode { #[default] Off, Track, Queue }
+pub enum RepeatMode {
+    #[default]
+    Off,
+    Track,
+    Queue,
+}
 
 pub enum PlayerNotification {
     TrackEnded,
@@ -51,11 +53,16 @@ pub struct TrackInfo {
     pub cover_path: Option<PathBuf>,
 }
 
-
-
 pub trait AudioPlayer: Send {
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize);
-    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>);
+    fn add_to_queue(
+        &mut self,
+        uri: String,
+        name: String,
+        artist: String,
+        duration_ms: u64,
+        cover_path: Option<PathBuf>,
+    );
     fn user_queue(&self) -> &[QueuedTrack];
     fn remove_from_user_queue(&mut self, index: usize);
     fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
@@ -90,13 +97,21 @@ pub trait AudioPlayer: Send {
 
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
 
-    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { (vec![], None) }
-    fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> { None }
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
+        (vec![], None)
+    }
+    fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
+        None
+    }
     #[allow(dead_code)]
     fn current_uri(&self) -> Option<String>;
-    fn current_track_info(&self) -> Option<TrackInfo> { None }
+    fn current_track_info(&self) -> Option<TrackInfo> {
+        None
+    }
 
-    fn current_playback_state(&self) -> Option<PlaybackState> { None }
+    fn current_playback_state(&self) -> Option<PlaybackState> {
+        None
+    }
 }
 
 pub struct QueuedTrack {
@@ -148,10 +163,19 @@ impl NativePlayer {
 
         let session_for_player = session.clone();
         let player = LibrespotPlayer::new(
-            PlayerConfig { gapless: false, bitrate, ..PlayerConfig::default() },
+            PlayerConfig {
+                gapless: false,
+                bitrate,
+                ..PlayerConfig::default()
+            },
             session_for_player,
             volume_getter,
-            move || Box::new(AnalyzerSink::new(backend(None, audio_format), Arc::clone(&bands_for_sink))),
+            move || {
+                Box::new(AnalyzerSink::new(
+                    backend(None, audio_format),
+                    Arc::clone(&bands_for_sink),
+                ))
+            },
         );
 
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
@@ -228,8 +252,21 @@ impl NativePlayer {
         self.play_at(start_index);
     }
 
-    pub fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>) {
-        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms, cover_path });
+    pub fn add_to_queue(
+        &mut self,
+        uri: String,
+        name: String,
+        artist: String,
+        duration_ms: u64,
+        cover_path: Option<PathBuf>,
+    ) {
+        self.user_queue.push(QueuedTrack {
+            uri,
+            name,
+            artist,
+            duration_ms,
+            cover_path,
+        });
     }
 
     pub fn user_queue(&self) -> &[QueuedTrack] {
@@ -250,7 +287,9 @@ impl NativePlayer {
                 self.is_playing = true;
                 self.playing_queued = None;
                 #[cfg(target_os = "linux")]
-                unsafe { libc::malloc_trim(0); }
+                unsafe {
+                    libc::malloc_trim(0);
+                }
             }
             Err(e) => error!("Invalid URI '{uri}': {e}"),
         }
@@ -269,7 +308,11 @@ impl NativePlayer {
     }
 
     pub fn toggle(&mut self) {
-        if self.is_playing { self.pause() } else { self.play() }
+        if self.is_playing {
+            self.pause()
+        } else {
+            self.play()
+        }
     }
 
     pub fn next(&mut self) -> bool {
@@ -289,7 +332,9 @@ impl NativePlayer {
                     self.player.load(spotify_uri, true, 0);
                     self.is_playing = true;
                     #[cfg(target_os = "linux")]
-                    unsafe { libc::malloc_trim(0); }
+                    unsafe {
+                        libc::malloc_trim(0);
+                    }
                     self.playing_queued = Some(track);
                     return true;
                 }
@@ -333,7 +378,7 @@ impl NativePlayer {
 
     pub fn cycle_repeat(&mut self) {
         self.repeat = match self.repeat {
-            RepeatMode::Off   => RepeatMode::Queue,
+            RepeatMode::Off => RepeatMode::Queue,
             RepeatMode::Queue => RepeatMode::Track,
             RepeatMode::Track => RepeatMode::Off,
         };
@@ -366,42 +411,97 @@ impl NativePlayer {
 
     #[allow(dead_code)]
     pub fn current_uri(&self) -> Option<String> {
-        self.current_index().and_then(|i| self.queue.get(i)).cloned()
+        self.current_index()
+            .and_then(|i| self.queue.get(i))
+            .cloned()
     }
 }
 
 impl AudioPlayer for NativePlayer {
-    fn set_queue(&mut self, uris: Vec<String>, start_index: usize) { self.set_queue(uris, start_index); }
-    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>) { self.add_to_queue(uri, name, artist, duration_ms, cover_path); }
-    fn user_queue(&self) -> &[QueuedTrack] { self.user_queue() }
-    fn remove_from_user_queue(&mut self, index: usize) { self.user_queue.remove(index); }
-    fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
-    fn current_uri(&self) -> Option<String> { self.current_uri() }
+    fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
+        self.set_queue(uris, start_index);
+    }
+    fn add_to_queue(
+        &mut self,
+        uri: String,
+        name: String,
+        artist: String,
+        duration_ms: u64,
+        cover_path: Option<PathBuf>,
+    ) {
+        self.add_to_queue(uri, name, artist, duration_ms, cover_path);
+    }
+    fn user_queue(&self) -> &[QueuedTrack] {
+        self.user_queue()
+    }
+    fn remove_from_user_queue(&mut self, index: usize) {
+        self.user_queue.remove(index);
+    }
+    fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
+        self.playing_queued.take()
+    }
+    fn current_uri(&self) -> Option<String> {
+        self.current_uri()
+    }
 
-    fn play(&mut self) { self.play(); }
-    fn pause(&mut self) { self.pause(); }
-    fn toggle(&mut self) { self.toggle(); }
-    fn next(&mut self) -> bool { self.next() }
-    fn prev(&mut self) -> bool { self.prev() }
-    fn play_at(&mut self, index: usize) { self.play_at(index); }
-    fn seek(&self, position_ms: u32) { self.seek(position_ms); }
-    fn seek_mut(&mut self, position_ms: u32) { self.seek(position_ms); }
+    fn play(&mut self) {
+        self.play();
+    }
+    fn pause(&mut self) {
+        self.pause();
+    }
+    fn toggle(&mut self) {
+        self.toggle();
+    }
+    fn next(&mut self) -> bool {
+        self.next()
+    }
+    fn prev(&mut self) -> bool {
+        self.prev()
+    }
+    fn play_at(&mut self, index: usize) {
+        self.play_at(index);
+    }
+    fn seek(&self, position_ms: u32) {
+        self.seek(position_ms);
+    }
+    fn seek_mut(&mut self, position_ms: u32) {
+        self.seek(position_ms);
+    }
 
-    fn is_playing(&self) -> bool { self.is_playing }
-    fn volume(&self) -> u8 { self.volume }
-    fn shuffle(&self) -> bool { self.shuffle }
-    fn repeat(&self) -> RepeatMode { self.repeat }
-    fn current_index(&self) -> Option<usize> { self.current_index() }
+    fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+    fn volume(&self) -> u8 {
+        self.volume
+    }
+    fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+    fn repeat(&self) -> RepeatMode {
+        self.repeat
+    }
+    fn current_index(&self) -> Option<usize> {
+        self.current_index()
+    }
 
-    fn volume_up(&mut self) { self.volume_up(); }
-    fn volume_down(&mut self) { self.volume_down(); }
+    fn volume_up(&mut self) {
+        self.volume_up();
+    }
+    fn volume_down(&mut self) {
+        self.volume_down();
+    }
     fn set_volume(&mut self, volume: u8) {
         self.volume = volume.min(100);
         self.apply_volume();
         config::save_volume(self.volume);
     }
-    fn toggle_shuffle(&mut self) { self.toggle_shuffle(); }
-    fn cycle_repeat(&mut self) { self.cycle_repeat(); }
+    fn toggle_shuffle(&mut self) {
+        self.toggle_shuffle();
+    }
+    fn cycle_repeat(&mut self) {
+        self.cycle_repeat();
+    }
 
     fn try_recv_event(&mut self) -> Option<PlayerNotification> {
         self.event_rx.try_recv().ok()
@@ -411,7 +511,9 @@ impl AudioPlayer for NativePlayer {
         Some(Arc::clone(&self.band_energies))
     }
 
-    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) { self.snapshot_queue() }
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
+        self.snapshot_queue()
+    }
 
     fn current_playback_state(&self) -> Option<PlaybackState> {
         Some(PlaybackState {
@@ -419,7 +521,7 @@ impl AudioPlayer for NativePlayer {
             volume: self.volume,
             shuffle: self.shuffle,
             repeat: match self.repeat {
-                RepeatMode::Off   => rspotify::model::RepeatState::Off,
+                RepeatMode::Off => rspotify::model::RepeatState::Off,
                 RepeatMode::Queue => rspotify::model::RepeatState::Context,
                 RepeatMode::Track => rspotify::model::RepeatState::Track,
             },

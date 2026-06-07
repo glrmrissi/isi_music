@@ -6,7 +6,7 @@ pub const DEFAULT_APP_ID: &str = "1489692487541850324";
 /// The app sends updates via an mpsc channel; the thread applies them.
 
 #[cfg(feature = "discord")]
-use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use std::sync::mpsc;
 
 pub struct DiscordRpc {
@@ -14,8 +14,15 @@ pub struct DiscordRpc {
 }
 
 enum RpcUpdate {
-    Playing { title: String, artist: String, art_url: Option<String> },
-    Paused  { title: String, artist: String },
+    Playing {
+        title: String,
+        artist: String,
+        art_url: Option<String>,
+    },
+    Paused {
+        title: String,
+        artist: String,
+    },
     Clear,
 }
 
@@ -37,26 +44,37 @@ impl DiscordRpc {
             std::thread::Builder::new()
                 .name("discord-rpc".into())
                 .spawn(move || {
-                    let Ok(mut client) = DiscordIpcClient::new(&app_id) else { return };
-                    if client.connect().is_err() { return }
+                    let Ok(mut client) = DiscordIpcClient::new(&app_id) else {
+                        return;
+                    };
+                    if client.connect().is_err() {
+                        return;
+                    }
 
                     for update in rx {
                         let result = match update {
-                            RpcUpdate::Playing { title, artist, art_url } => {
+                            RpcUpdate::Playing {
+                                title,
+                                artist,
+                                art_url,
+                            } => {
                                 // ActivityType::Listening but discord only recognize verified apps so... F
                                 let act = activity::Activity::new()
                                     .activity_type(activity::ActivityType::Listening)
                                     .details(&title)
                                     .state(&artist)
-                                    .timestamps(activity::Timestamps::new().start(
-                                        std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs() as i64
-                                    ));
+                                    .timestamps(
+                                        activity::Timestamps::new().start(
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs()
+                                                as i64,
+                                        ),
+                                    );
 
                                 let mut assets = activity::Assets::new().large_text(&title);
-                                
+
                                 if let Some(url) = art_url.as_deref() {
                                     if url.starts_with("http") {
                                         assets = assets.large_image(url);
@@ -69,20 +87,20 @@ impl DiscordRpc {
 
                                 client.set_activity(act.assets(assets))
                             }
-                            RpcUpdate::Paused { title, artist } => {
-                                client.set_activity(
-                                    activity::Activity::new()
-                                        .activity_type(activity::ActivityType::Playing)
-                                        .details(&title)
-                                        .state(&format!("{artist} · Paused")),
-                                )
-                            }
+                            RpcUpdate::Paused { title, artist } => client.set_activity(
+                                activity::Activity::new()
+                                    .activity_type(activity::ActivityType::Playing)
+                                    .details(&title)
+                                    .state(&format!("{artist} · Paused")),
+                            ),
                             RpcUpdate::Clear => client.clear_activity(),
                         };
 
                         if result.is_err() {
                             // Discord closed — try to reconnect once
-                            if client.reconnect().is_err() { break }
+                            if client.reconnect().is_err() {
+                                break;
+                            }
                         }
                     }
                 })

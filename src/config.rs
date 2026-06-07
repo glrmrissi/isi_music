@@ -60,8 +60,7 @@ impl AppConfig {
 
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("Invalid config at {}", path.display()))
+        toml::from_str(&content).with_context(|| format!("Invalid config at {}", path.display()))
     }
 
     pub fn get_client_id(&self) -> Option<String> {

@@ -1,23 +1,23 @@
 use anyhow::Result;
-use ratatui_image::picker::Picker;
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui_image::picker::Picker;
 use std::fs::OpenOptions;
-use std::os::fd::AsRawFd;
-use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
+use std::os::fd::AsRawFd;
 
 mod app;
+mod audio;
 mod config;
-mod keybinds;
-mod spotify;
 mod daemon;
+mod keybinds;
 mod player;
+mod spotify;
 mod ui;
 mod utils;
-mod audio;
 
 use app::App;
 
@@ -29,7 +29,6 @@ fn prompt(label: &str) -> String {
     buf.trim().to_string()
 }
 
-
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
 const RESET: &str = "\x1b[0m";
@@ -39,32 +38,66 @@ const GRAY: &str = "\x1b[90m";
 
 async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
-    println!("{RED}│{RESET}  {BOLD}Last.fm Integration Setup{RESET}                                    {RED}│{RESET}");
+    println!(
+        "{RED}│{RESET}  {BOLD}Last.fm Integration Setup{RESET}                                    {RED}│{RESET}"
+    );
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
-    println!("{RED}│{RESET}  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}             {RED}│{RESET}");
-    println!("{RED}│{RESET}  2. Create an API application                                 {RED}│{RESET}");
-    println!("{RED}│{RESET}  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}                       {RED}│{RESET}");
-    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
-    println!("{RED}│{RESET}  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}              {RED}│{RESET}");
-    println!("{RED}│{RESET}  5. Add the following content:                                {RED}│{RESET}");
-    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
-    println!("{RED}│{RESET}     {GRAY}[lastfm]{RESET}                                                  {RED}│{RESET}");
-    println!("{RED}│{RESET}     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}                                  {RED}│{RESET}");
-    println!("{RED}│{RESET}     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}                            {RED}│{RESET}");
-    println!("{RED}│{RESET}     session_key = \"\"                                          {RED}│{RESET}");
-    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
-    println!("{RED}│{RESET}  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}                 {RED}│{RESET}");
-    println!("{RED}│{RESET}  {YELLOW}Never commit your API Secret to Git.{RESET}                         {RED}│{RESET}");
+    println!(
+        "{RED}│{RESET}  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}             {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}  2. Create an API application                                 {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}                       {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}                                                               {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}              {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}  5. Add the following content:                                {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}                                                               {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}     {GRAY}[lastfm]{RESET}                                                  {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}                                  {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}                            {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}     session_key = \"\"                                          {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}                                                               {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}                 {RED}│{RESET}"
+    );
+    println!(
+        "{RED}│{RESET}  {YELLOW}Never commit your API Secret to Git.{RESET}                         {RED}│{RESET}"
+    );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
-    
+
     let api_key = loop {
         let v = prompt("API Key: ");
-        if !v.is_empty() { break v; }
+        if !v.is_empty() {
+            break v;
+        }
         println!("Cannot be empty.");
     };
     let api_secret = loop {
         let v = prompt("API Secret: ");
-        if !v.is_empty() { break v; }
+        if !v.is_empty() {
+            break v;
+        }
         println!("Cannot be empty.");
     };
 
@@ -84,7 +117,7 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
         println!("URL: {}", auth_url);
     }
     println!("\nAfter authorizing, return here and press ENTER.");
-    
+
     let mut _unused = String::new();
     std::io::stdin().read_line(&mut _unused)?;
 
@@ -113,7 +146,8 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
 }
 
 fn print_help() {
-    println!("\
+    println!(
+        "\
 isi-music — terminal Spotify player
 
 USAGE
@@ -191,7 +225,8 @@ FILES
   Config   ~/.config/isi-music/config.toml
   Log      ~/.local/share/isi-music/isi-music.log
   Socket   $XDG_RUNTIME_DIR/isi-music.sock
-");
+"
+    );
 }
 
 fn main() -> Result<()> {
@@ -209,7 +244,9 @@ fn main() -> Result<()> {
 
     if arg1 == Some("--daemon") {
         let child_pid = unsafe { libc::fork() };
-        if child_pid < 0 { anyhow::bail!("fork() failed"); }
+        if child_pid < 0 {
+            anyhow::bail!("fork() failed");
+        }
         if child_pid > 0 {
             println!("isi-music daemon started (PID {child_pid})");
             return Ok(());
@@ -245,28 +282,34 @@ fn main() -> Result<()> {
     }
 
     let ipc_cmd: Option<String> = match arg1 {
-         Some("setup") => {
+        Some("setup") => {
             return tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
                 .block_on(utils::wizard::run());
         }
 
-        Some(cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-"
-                    | "--status" | "--ls" | "--liked" | "--quit-daemon")) => {
+        Some(
+            cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-" | "--status" | "--ls"
+            | "--liked" | "--quit-daemon"),
+        ) => {
             let c = cmd.trim_start_matches('-');
-            Some(if c == "quit-daemon" { "quit".into() } else { c.into() })
+            Some(if c == "quit-daemon" {
+                "quit".into()
+            } else {
+                c.into()
+            })
         }
         Some("--play") => {
-            let uri = args.get(2).ok_or_else(|| anyhow::anyhow!(
-                "Usage: isi-music --play <spotify:playlist:ID>"
-            ))?;
+            let uri = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --play <spotify:playlist:ID>"))?;
             Some(format!("play {uri}"))
         }
         Some("--play-id") => {
-            let id = args.get(2).ok_or_else(|| anyhow::anyhow!(
-                "Usage: isi-music --play-id <N>  (see: isi-music --ls)"
-            ))?;
+            let id = args.get(2).ok_or_else(|| {
+                anyhow::anyhow!("Usage: isi-music --play-id <N>  (see: isi-music --ls)")
+            })?;
             Some(format!("play-id {id}"))
         }
         _ => None,
@@ -292,13 +335,12 @@ fn main() -> Result<()> {
         .map(|p| !p.exists())
         .unwrap_or(true);
 
-
     if config_missing {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
             .block_on(utils::wizard::run())?;
-     }
+    }
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -306,12 +348,18 @@ fn main() -> Result<()> {
         .build()?
         .block_on(async {
             let log_path = config::log_path()?;
-            let log_file = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
+            let log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)?;
 
             tracing_subscriber::fmt()
                 .with_writer(std::sync::Mutex::new(log_file))
                 .with_ansi(false)
-                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("isi_music=warn".parse()?),)
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("isi_music=warn".parse()?),
+                )
                 .init();
 
             let theme = utils::theme::Theme::load();
@@ -333,7 +381,9 @@ fn main() -> Result<()> {
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             terminal.show_cursor()?;
 
-            if let Err(err) = res { eprintln!("[Error]: {err:?}"); }
+            if let Err(err) = res {
+                eprintln!("[Error]: {err:?}");
+            }
             Ok(())
         })
 }

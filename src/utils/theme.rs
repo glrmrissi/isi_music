@@ -1,17 +1,17 @@
-use serde::{Deserialize, Serialize};
-use ratatui::style::{Color, Style, Modifier};
 use ratatui::layout::{Constraint, Direction};
-use tracing::warn;
+use ratatui::style::{Color, Modifier, Style};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc::{channel, Receiver},
     Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::{Receiver, channel},
 };
 use std::thread;
 use std::time::Duration;
+use tracing::warn;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "snake_case")]
@@ -24,7 +24,7 @@ impl From<SerializableDirection> for Direction {
     fn from(d: SerializableDirection) -> Self {
         match d {
             SerializableDirection::Horizontal => Direction::Horizontal,
-            SerializableDirection::Vertical   => Direction::Vertical,
+            SerializableDirection::Vertical => Direction::Vertical,
         }
     }
 }
@@ -60,21 +60,29 @@ pub enum SerializableConstraint {
 impl From<SerializableConstraint> for Constraint {
     fn from(c: SerializableConstraint) -> Self {
         match c {
-            SerializableConstraint::Length(v)     => Constraint::Length(v),
+            SerializableConstraint::Length(v) => Constraint::Length(v),
             SerializableConstraint::Percentage(v) => Constraint::Percentage(v),
-            SerializableConstraint::Ratio(n, d)   => Constraint::Ratio(n, d),
-            SerializableConstraint::Min(v)        => Constraint::Min(v),
-            SerializableConstraint::Max(v)        => Constraint::Max(v),
-            SerializableConstraint::Fill(v)       => Constraint::Fill(v),
+            SerializableConstraint::Ratio(n, d) => Constraint::Ratio(n, d),
+            SerializableConstraint::Min(v) => Constraint::Min(v),
+            SerializableConstraint::Max(v) => Constraint::Max(v),
+            SerializableConstraint::Fill(v) => Constraint::Fill(v),
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct WidgetStyle {
-    #[serde(default, deserialize_with = "color_serde::deserialize_opt", serialize_with = "color_serde::serialize_opt")]
+    #[serde(
+        default,
+        deserialize_with = "color_serde::deserialize_opt",
+        serialize_with = "color_serde::serialize_opt"
+    )]
     pub fg: Option<Color>,
-    #[serde(default, deserialize_with = "color_serde::deserialize_opt", serialize_with = "color_serde::serialize_opt")]
+    #[serde(
+        default,
+        deserialize_with = "color_serde::deserialize_opt",
+        serialize_with = "color_serde::serialize_opt"
+    )]
     pub bg: Option<Color>,
     #[serde(default)]
     pub bold: bool,
@@ -85,20 +93,28 @@ pub struct WidgetStyle {
 impl From<WidgetStyle> for Style {
     fn from(w: WidgetStyle) -> Self {
         let mut s = Style::default();
-        if let Some(c) = w.fg { s = s.fg(c); }
-        if let Some(c) = w.bg { s = s.bg(c); }
-        if w.bold { s = s.add_modifier(Modifier::BOLD); }
-        if w.italic { s = s.add_modifier(Modifier::ITALIC); }
+        if let Some(c) = w.fg {
+            s = s.fg(c);
+        }
+        if let Some(c) = w.bg {
+            s = s.bg(c);
+        }
+        if w.bold {
+            s = s.add_modifier(Modifier::BOLD);
+        }
+        if w.italic {
+            s = s.add_modifier(Modifier::ITALIC);
+        }
         s
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LayoutNode {
-    pub direction:   Option<SerializableDirection>,
+    pub direction: Option<SerializableDirection>,
     pub constraints: Option<Vec<SerializableConstraint>>,
-    pub children:    Option<Vec<LayoutNode>>,
-    pub widget:      Option<UiWidget>,
+    pub children: Option<Vec<LayoutNode>>,
+    pub widget: Option<UiWidget>,
 }
 
 impl Default for LayoutNode {
@@ -106,15 +122,15 @@ impl Default for LayoutNode {
         use SerializableConstraint::*;
         Self {
             direction: Some(SerializableDirection::Vertical),
-            constraints: Some(vec![
-                Length(3),
-                Fill(1),
-                Length(1),
-                Length(1),
-            ]),
+            constraints: Some(vec![Length(3), Fill(1), Length(1), Length(1)]),
             widget: None,
             children: Some(vec![
-                LayoutNode { widget: Some(UiWidget::Header), direction: None, constraints: None, children: None },
+                LayoutNode {
+                    widget: Some(UiWidget::Header),
+                    direction: None,
+                    constraints: None,
+                    children: None,
+                },
                 LayoutNode {
                     direction: Some(SerializableDirection::Horizontal),
                     constraints: Some(vec![Percentage(25), Fill(1)]),
@@ -125,8 +141,18 @@ impl Default for LayoutNode {
                             constraints: Some(vec![Length(7), Fill(1)]),
                             widget: None,
                             children: Some(vec![
-                                LayoutNode { widget: Some(UiWidget::Library), direction: None, constraints: None, children: None },
-                                LayoutNode { widget: Some(UiWidget::Playlists), direction: None, constraints: None, children: None },
+                                LayoutNode {
+                                    widget: Some(UiWidget::Library),
+                                    direction: None,
+                                    constraints: None,
+                                    children: None,
+                                },
+                                LayoutNode {
+                                    widget: Some(UiWidget::Playlists),
+                                    direction: None,
+                                    constraints: None,
+                                    children: None,
+                                },
                             ]),
                         },
                         LayoutNode {
@@ -134,8 +160,18 @@ impl Default for LayoutNode {
                             constraints: Some(vec![Fill(1), Length(8)]),
                             widget: None,
                             children: Some(vec![
-                                LayoutNode { widget: Some(UiWidget::MainContent), direction: None, constraints: None, children: None },
-                                LayoutNode { widget: Some(UiWidget::Queue), direction: None, constraints: None, children: None },
+                                LayoutNode {
+                                    widget: Some(UiWidget::MainContent),
+                                    direction: None,
+                                    constraints: None,
+                                    children: None,
+                                },
+                                LayoutNode {
+                                    widget: Some(UiWidget::Queue),
+                                    direction: None,
+                                    constraints: None,
+                                    children: None,
+                                },
                             ]),
                         },
                     ]),
@@ -145,11 +181,26 @@ impl Default for LayoutNode {
                     constraints: Some(vec![Percentage(30), Fill(1)]),
                     widget: None,
                     children: Some(vec![
-                        LayoutNode { widget: Some(UiWidget::Marquee), direction: None, constraints: None, children: None },
-                        LayoutNode { widget: Some(UiWidget::Progress), direction: None, constraints: None, children: None },
+                        LayoutNode {
+                            widget: Some(UiWidget::Marquee),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
+                        LayoutNode {
+                            widget: Some(UiWidget::Progress),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
                     ]),
                 },
-                LayoutNode { widget: Some(UiWidget::Help), direction: None, constraints: None, children: None },
+                LayoutNode {
+                    widget: Some(UiWidget::Help),
+                    direction: None,
+                    constraints: None,
+                    children: None,
+                },
             ]),
         }
     }
@@ -179,7 +230,7 @@ pub struct Theme {
 
     #[serde(default)]
     pub ascii_art_inline: Option<Vec<String>>,
-    
+
     #[serde(default)]
     pub ascii_art_path: Option<PathBuf>,
 
@@ -187,21 +238,23 @@ pub struct Theme {
     pub show_ascii_art: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            border_active:   Color::Green,
+            border_active: Color::Green,
             border_inactive: Color::DarkGray,
-            highlight_bg:    Color::Rgb(40, 40, 40),
-            text_primary:    Color::White,
-            accent_color:    Color::Green,
-            widget_styles:   HashMap::new(),
-            layout_tree:     LayoutNode::default(),
+            highlight_bg: Color::Rgb(40, 40, 40),
+            text_primary: Color::White,
+            accent_color: Color::Green,
+            widget_styles: HashMap::new(),
+            layout_tree: LayoutNode::default(),
             ascii_art: None,
             ascii_art_inline: None,
-            ascii_art_path:  None,
+            ascii_art_path: None,
             show_ascii_art: true,
         }
     }
@@ -267,7 +320,9 @@ impl Theme {
             let mut last_content = fs::read_to_string(&path).unwrap_or_default();
 
             loop {
-                if stop_clone.load(Ordering::Relaxed) { break; }
+                if stop_clone.load(Ordering::Relaxed) {
+                    break;
+                }
 
                 if let Ok(current_content) = fs::read_to_string(&path) {
                     if current_content != last_content {
@@ -292,7 +347,9 @@ impl Theme {
 
     pub fn load_ascii_art(&self) -> Option<Vec<String>> {
         if let Some(ref lines) = self.ascii_art_inline {
-            if !lines.is_empty() { return Some(lines.clone()); }
+            if !lines.is_empty() {
+                return Some(lines.clone());
+            }
         }
 
         if let Some(ref path) = self.ascii_art_path {
@@ -309,27 +366,37 @@ mod color_serde {
     use serde::{Deserializer, Serializer};
 
     pub fn deserialize<'de, D>(d: D) -> Result<Color, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(d)?;
         parse_color_from_str(&s).map_err(serde::de::Error::custom)
     }
 
     pub fn serialize<S>(c: &Color, s: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         s.serialize_str(&color_to_string(c))
     }
 
     pub fn deserialize_opt<'de, D>(d: D) -> Result<Option<Color>, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = Option::<String>::deserialize(d)?;
         match s {
-            Some(s) => parse_color_from_str(&s).map(Some).map_err(serde::de::Error::custom),
+            Some(s) => parse_color_from_str(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
             None => Ok(None),
         }
     }
 
     pub fn serialize_opt<S>(c: &Option<Color>, s: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         match c {
             Some(c) => s.serialize_str(&color_to_string(c)),
             None => s.serialize_none(),
@@ -348,27 +415,27 @@ fn parse_color_from_str(s: &str) -> Result<Color, String> {
     }
 
     match s.as_str() {
-        "black"         => Ok(Color::Black),
-        "red"           => Ok(Color::Red),
-        "green"         => Ok(Color::Green),
-        "yellow"        => Ok(Color::Yellow),
-        "blue"          => Ok(Color::Blue),
-        "magenta"       => Ok(Color::Magenta),
-        "cyan"          => Ok(Color::Cyan),
-        "white"         => Ok(Color::White),
-        "gray"          => Ok(Color::Gray),
-        "dark_gray"     => Ok(Color::DarkGray),
-        "light_red"     => Ok(Color::LightRed),
-        "light_green"   => Ok(Color::LightGreen),
-        "light_yellow"  => Ok(Color::LightYellow),
-        "light_blue"    => Ok(Color::LightBlue),
+        "black" => Ok(Color::Black),
+        "red" => Ok(Color::Red),
+        "green" => Ok(Color::Green),
+        "yellow" => Ok(Color::Yellow),
+        "blue" => Ok(Color::Blue),
+        "magenta" => Ok(Color::Magenta),
+        "cyan" => Ok(Color::Cyan),
+        "white" => Ok(Color::White),
+        "gray" => Ok(Color::Gray),
+        "dark_gray" => Ok(Color::DarkGray),
+        "light_red" => Ok(Color::LightRed),
+        "light_green" => Ok(Color::LightGreen),
+        "light_yellow" => Ok(Color::LightYellow),
+        "light_blue" => Ok(Color::LightBlue),
         "light_magenta" => Ok(Color::LightMagenta),
-        "light_cyan"    => Ok(Color::LightCyan),
+        "light_cyan" => Ok(Color::LightCyan),
         "transparent" | "none" | "reset" => Ok(Color::Reset),
         s if s.starts_with("rgb") && s.ends_with(')') => {
-            let is_rgba   = s.starts_with("rgba(");
+            let is_rgba = s.starts_with("rgba(");
             let start_idx = if is_rgba { 5 } else { 4 };
-            let inner     = &s[start_idx..s.len() - 1];
+            let inner = &s[start_idx..s.len() - 1];
             let parts: Vec<&str> = inner.split(',').map(|p| p.trim()).collect();
             if parts.len() < 3 {
                 return Err(format!("Invalid RGB format: {}", s));
@@ -384,23 +451,23 @@ fn parse_color_from_str(s: &str) -> Result<Color, String> {
 
 fn color_to_string(color: &Color) -> String {
     match color {
-        Color::Black        => "black".into(),
-        Color::Red          => "red".into(),
-        Color::Green        => "green".into(),
-        Color::Yellow       => "yellow".into(),
-        Color::Blue         => "blue".into(),
-        Color::Magenta      => "magenta".into(),
-        Color::Cyan         => "cyan".into(),
-        Color::White        => "white".into(),
-        Color::Gray         => "gray".into(),
-        Color::DarkGray     => "dark_gray".into(),
-        Color::LightRed     => "light_red".into(),
-        Color::LightGreen   => "light_green".into(),
-        Color::LightYellow  => "light_yellow".into(),
-        Color::LightBlue    => "light_blue".into(),
+        Color::Black => "black".into(),
+        Color::Red => "red".into(),
+        Color::Green => "green".into(),
+        Color::Yellow => "yellow".into(),
+        Color::Blue => "blue".into(),
+        Color::Magenta => "magenta".into(),
+        Color::Cyan => "cyan".into(),
+        Color::White => "white".into(),
+        Color::Gray => "gray".into(),
+        Color::DarkGray => "dark_gray".into(),
+        Color::LightRed => "light_red".into(),
+        Color::LightGreen => "light_green".into(),
+        Color::LightYellow => "light_yellow".into(),
+        Color::LightBlue => "light_blue".into(),
         Color::LightMagenta => "light_magenta".into(),
-        Color::LightCyan    => "light_cyan".into(),
+        Color::LightCyan => "light_cyan".into(),
         Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
-        _                   => "white".into(),
+        _ => "white".into(),
     }
 }
