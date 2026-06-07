@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "isi-music"
-version = ""
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
