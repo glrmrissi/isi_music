@@ -161,9 +161,23 @@ jobs:
       - name: Generate release notes
         run: |
           git cliff \
-            --tag "${{ github.ref_name }}" \
+            --current \
             --config cliff.toml \
-            -o release-notes.md
+            -o changelog-full.md
+
+          cat > release-notes.md <<- RELEASE
+          ## ${{ github.ref_name }}
+
+          See the full changelog below.
+
+          <details>
+          <summary>View changelog</summary>
+
+          RELEASE
+
+          cat changelog-full.md >> release-notes.md
+
+          echo "</details>" >> release-notes.md
           echo "=== Release Notes ==="
           cat release-notes.md
 
