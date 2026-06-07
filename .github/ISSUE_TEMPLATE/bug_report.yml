@@ -1,0 +1,93 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill in as much as you can.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: When I press X, the player crashes...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: How can this bug be reproduced?
+      placeholder: |
+        1. Run `isi-music`
+        2. Press space
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What version of isi-music are you running? (run `isi-music --help` and check the first line)
+      placeholder: v0.3.5
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Playback mode
+      description: Were you playing Spotify or local files when the bug occurred?
+      options:
+        - Spotify
+        - Local files
+        - Both
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: Which operating system?
+      placeholder: Linux (Arch), macOS 14, etc.
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal emulator
+      description: Which terminal are you using? (important for album art / sixel / kitty)
+      placeholder: kitty, Alacritty, iTerm2, etc.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste any relevant logs. You can find them at `~/.local/share/isi-music/isi-music.log`
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else? Custom keybinds.toml, config.toml, screenshots, etc.

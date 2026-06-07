@@ -1,3 +1,6 @@
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use rusqlite::Connection;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     fs::File,
     io::BufReader,
@@ -5,9 +8,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
-use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
-use rusqlite::Connection;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -17,7 +17,7 @@ use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]
 pub struct LocalTrack {
-    // This id is used but for now i just put allow dead_code, not good pratice. 
+    // This id is used but for now i just put allow dead_code, not good pratice.
     #[allow(dead_code)]
     pub id: i64,
     pub path: PathBuf,
@@ -51,7 +51,7 @@ impl LocalPlayer {
     pub fn new(volume: u8, db_path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
-        
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tracks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,28 +64,22 @@ impl LocalPlayer {
             )",
             [],
         )?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_path ON tracks (path)",
-            [],
-        )?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_path ON tracks (path)", [])?;
 
         let (sync_tx, sync_rx) = std::sync::mpsc::channel();
 
-        std::thread::spawn(move || {
-            match OutputStreamBuilder::open_default_stream() {
-                Ok(stream) => {
-                    let sink = Sink::connect_new(&stream.mixer());
-                    if sync_tx.send(Ok(sink)).is_ok() {
-                        let _keep_alive = stream;
-                        loop {
-                            std::thread::park();
-                        }
+        std::thread::spawn(move || match OutputStreamBuilder::open_default_stream() {
+            Ok(stream) => {
+                let sink = Sink::connect_new(&stream.mixer());
+                if sync_tx.send(Ok(sink)).is_ok() {
+                    let _keep_alive = stream;
+                    loop {
+                        std::thread::park();
                     }
                 }
-                Err(e) => {
-                    let _ = sync_tx
-                        .send(Err(anyhow::anyhow!("Audio output unavailable: {e}")));
-                }
+            }
+            Err(e) => {
+                let _ = sync_tx.send(Err(anyhow::anyhow!("Audio output unavailable: {e}")));
             }
         });
 
@@ -141,15 +135,9 @@ impl LocalPlayer {
                     name: row
                         .get::<_, Option<String>>(2)?
                         .unwrap_or_else(|| "Unknown".to_string()),
-                    artist: row
-                        .get::<_, Option<String>>(3)?
-                        .unwrap_or_default(),
-                    album: row
-                        .get::<_, Option<String>>(4)?
-                        .unwrap_or_default(),
-                    duration_ms: row
-                        .get::<_, Option<i64>>(5)?
-                        .unwrap_or(0) as u64,
+                    artist: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    album: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    duration_ms: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as u64,
                     cover_path: cover_path_str.map(PathBuf::from),
                 })
             })?
@@ -195,14 +183,14 @@ impl LocalPlayer {
 
     fn load_and_play(&mut self, start_idx: usize) {
         let len = self.queue.len();
-        
+
         for attempt in 0..len {
             let idx = (start_idx + attempt) % len;
             if self.try_load_track(idx) {
                 return;
             }
         }
-        
+
         warn!("LocalPlayer: no playable tracks found");
         let _ = self.event_tx.send(PlayerNotification::TrackUnavailable);
     }
@@ -216,19 +204,20 @@ impl LocalPlayer {
             let is_seeking = Arc::clone(&self.is_seeking);
 
             is_seeking.store(true, Ordering::SeqCst);
-            sink.stop(); 
+            sink.stop();
 
             std::thread::spawn(move || {
                 let file = File::open(&path).ok();
                 let decoder = file.and_then(|f| Decoder::new(BufReader::new(f)).ok());
 
                 if let Some(d) = decoder {
-                    let skipped = d.skip_duration(std::time::Duration::from_millis(position_ms as u64));
+                    let skipped =
+                        d.skip_duration(std::time::Duration::from_millis(position_ms as u64));
                     let analyzing = AnalyzingSource::new(skipped, energies);
-                    
+
                     sink.append(analyzing);
                     sink.play();
-                    
+
                     is_seeking.store(false, Ordering::SeqCst);
                     let _ = event_tx.send(PlayerNotification::Playing);
                 } else {
@@ -351,48 +340,97 @@ impl AudioPlayer for LocalPlayer {
         }
     }
 
-    fn add_to_queue(&mut self, uri: String, name: String, artist: String, duration_ms: u64, cover_path: Option<PathBuf>) {
-        self.user_queue.push(QueuedTrack { uri, name, artist, duration_ms, cover_path });
+    fn add_to_queue(
+        &mut self,
+        uri: String,
+        name: String,
+        artist: String,
+        duration_ms: u64,
+        cover_path: Option<PathBuf>,
+    ) {
+        self.user_queue.push(QueuedTrack {
+            uri,
+            name,
+            artist,
+            duration_ms,
+            cover_path,
+        });
     }
 
-    fn user_queue(&self) -> &[QueuedTrack] { &self.user_queue }
+    fn user_queue(&self) -> &[QueuedTrack] {
+        &self.user_queue
+    }
 
     fn remove_from_user_queue(&mut self, index: usize) {
-        if index < self.user_queue.len() { self.user_queue.remove(index); }
+        if index < self.user_queue.len() {
+            self.user_queue.remove(index);
+        }
     }
 
-    fn take_playing_queued(&mut self) -> Option<QueuedTrack> { self.playing_queued.take() }
+    fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
+        self.playing_queued.take()
+    }
 
-    fn play(&mut self) { self.sink.play(); self.is_playing = true; }
+    fn play(&mut self) {
+        self.sink.play();
+        self.is_playing = true;
+    }
 
-    fn pause(&mut self) { self.sink.pause(); self.is_playing = false; }
+    fn pause(&mut self) {
+        self.sink.pause();
+        self.is_playing = false;
+    }
 
     fn toggle(&mut self) {
-        if self.sink.is_paused() { self.play(); } else { self.pause(); }
+        if self.sink.is_paused() {
+            self.play();
+        } else {
+            self.pause();
+        }
     }
 
-    fn next(&mut self) -> bool { self.next_inner() }
+    fn next(&mut self) -> bool {
+        self.next_inner()
+    }
 
-    fn prev(&mut self) -> bool { self.prev_inner() }
+    fn prev(&mut self) -> bool {
+        self.prev_inner()
+    }
 
-    fn play_at(&mut self, index: usize) { self.load_and_play(index); }
+    fn play_at(&mut self, index: usize) {
+        self.load_and_play(index);
+    }
 
     fn seek(&self, _position_ms: u32) {}
 
-    fn seek_mut(&mut self, position_ms: u32) { self.seek_by_reload(position_ms); }
+    fn seek_mut(&mut self, position_ms: u32) {
+        self.seek_by_reload(position_ms);
+    }
 
-    fn is_playing(&self) -> bool { self.is_playing }
+    fn is_playing(&self) -> bool {
+        self.is_playing
+    }
 
-    fn volume(&self) -> u8 { self.volume }
+    fn volume(&self) -> u8 {
+        self.volume
+    }
 
-    fn shuffle(&self) -> bool { self.shuffle }
+    fn shuffle(&self) -> bool {
+        self.shuffle
+    }
 
-    fn repeat(&self) -> RepeatMode { self.repeat.clone() }
+    fn repeat(&self) -> RepeatMode {
+        self.repeat.clone()
+    }
 
-    fn current_index(&self) -> Option<usize> { self.current_idx }
+    fn current_index(&self) -> Option<usize> {
+        self.current_idx
+    }
 
     fn current_uri(&self) -> Option<String> {
-        self.current_idx.and_then(|i| self.queue.get(i)).map(|t| t.uri.clone())
+        self.current_idx
+            .and_then(|i| self.queue.get(i))
+            .map(|t| t.uri.clone())
     }
 
     fn current_track_info(&self) -> Option<TrackInfo> {
@@ -423,7 +461,9 @@ impl AudioPlayer for LocalPlayer {
         self.apply_volume();
     }
 
-    fn toggle_shuffle(&mut self) { self.shuffle = !self.shuffle; }
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+    }
 
     fn cycle_repeat(&mut self) {
         self.repeat = match self.repeat {
@@ -466,13 +506,17 @@ impl AudioPlayer for LocalPlayer {
                 t.album.clone()
             },
             path: t.path.to_str().map(|s| s.to_string()),
-            cover_path: t.cover_path.as_ref().and_then(|p| p.to_str()).map(|s| s.to_string()),
+            cover_path: t
+                .cover_path
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .map(|s| s.to_string()),
             duration_ms: t.duration_ms,
             is_playing: self.is_playing,
             volume: self.volume,
             shuffle: self.shuffle,
             repeat: match self.repeat {
-                super::RepeatMode::Off   => rspotify::model::RepeatState::Off,
+                super::RepeatMode::Off => rspotify::model::RepeatState::Off,
                 super::RepeatMode::Queue => rspotify::model::RepeatState::Context,
                 super::RepeatMode::Track => rspotify::model::RepeatState::Track,
             },

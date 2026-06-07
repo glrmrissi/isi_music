@@ -1,11 +1,11 @@
+use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
-use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use tracing::{info, warn};
 
 const LYRICS_CACHE_EXPIRY_DAYS: i64 = 60;
@@ -108,8 +108,7 @@ impl LyricsCache {
 }
 
 fn normalize_search_query(text: &str) -> String {
-    text
-        .split(&['(', '[', '-', '|'][..])
+    text.split(&['(', '[', '-', '|'][..])
         .next()
         .unwrap_or(text)
         .trim()
@@ -190,7 +189,11 @@ fn parse_timestamp(s: &str) -> Option<u64> {
             let min: u64 = parts[0].parse().ok()?;
             let sec: u64 = parts[1].parse().ok()?;
             let cs: u64 = parts[2].parse().ok()?;
-            let ms = if parts[2].len() == 1 { cs * 100 } else { cs * 10 };
+            let ms = if parts[2].len() == 1 {
+                cs * 100
+            } else {
+                cs * 10
+            };
             Some(min * 60_000 + sec * 1_000 + ms)
         }
         _ => None,
@@ -223,12 +226,22 @@ async fn fetch_lyrics(
     let normalized_title = normalize_search_query(title);
     let normalized_artist = normalize_search_query(artist);
 
-    if let Some(lyrics) = fetch_from_lrclib(http, &normalized_title, &normalized_artist, debug_overlay).await {
+    if let Some(lyrics) =
+        fetch_from_lrclib(http, &normalized_title, &normalized_artist, debug_overlay).await
+    {
         return Some(lyrics);
     }
 
     if let Some(key) = musixmatch_api_key {
-        if let Some(lyrics) = fetch_from_musixmatch(http, &normalized_title, &normalized_artist, debug_overlay, &key).await {
+        if let Some(lyrics) = fetch_from_musixmatch(
+            http,
+            &normalized_title,
+            &normalized_artist,
+            debug_overlay,
+            &key,
+        )
+        .await
+        {
             return Some(lyrics);
         }
     }
@@ -263,7 +276,10 @@ async fn fetch_from_lrclib(
         let resp = match tokio::time::timeout(
             Duration::from_secs(10),
             http.get(&url)
-                .header("User-Agent", "isi-music/0.1[](https://github.com/glrmrissi/isi-music)")
+                .header(
+                    "User-Agent",
+                    "isi-music/0.1[](https://github.com/glrmrissi/isi-music)",
+                )
                 .send(),
         )
         .await
@@ -280,7 +296,10 @@ async fn fetch_from_lrclib(
             }
             Ok(Err(e)) => {
                 if attempt == 2 {
-                    debug_overlay.log(LogLevel::Warn, format!("lyrics: lrclib request failed: {e}"));
+                    debug_overlay.log(
+                        LogLevel::Warn,
+                        format!("lyrics: lrclib request failed: {e}"),
+                    );
                 }
                 continue;
             }
@@ -296,7 +315,10 @@ async fn fetch_from_lrclib(
             Ok(j) => j,
             Err(e) => {
                 if attempt == 2 {
-                    debug_overlay.log(LogLevel::Warn, format!("lyrics: json parse error from lrclib: {e}"));
+                    debug_overlay.log(
+                        LogLevel::Warn,
+                        format!("lyrics: json parse error from lrclib: {e}"),
+                    );
                 }
                 continue;
             }
@@ -307,7 +329,10 @@ async fn fetch_from_lrclib(
             if !parsed.is_empty() {
                 debug_overlay.log(
                     LogLevel::Info,
-                    format!("lyrics: synced lyrics found from lrclib ({} lines)", parsed.lines.len()),
+                    format!(
+                        "lyrics: synced lyrics found from lrclib ({} lines)",
+                        parsed.lines.len()
+                    ),
                 );
                 info!("lyrics: synced lyrics found ({} lines)", parsed.lines.len());
                 return Some(parsed);
@@ -360,6 +385,7 @@ struct MusixmatchTrack {
 struct TrackData {
     track_id: i32,
     track_name: String,
+    #[allow(dead_code)]
     artist_name: String,
     has_lyrics: bool,
 }
@@ -383,33 +409,46 @@ async fn fetch_from_musixmatch(
         api_key
     );
 
-    let search_resp = match tokio::time::timeout(Duration::from_secs(5), http.get(&search_url).send()).await {
-        Ok(Ok(r)) => {
-            if r.status() == reqwest::StatusCode::UNAUTHORIZED {
-                debug_overlay.log(LogLevel::Error, "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string());
-                return None;
+    let search_resp =
+        match tokio::time::timeout(Duration::from_secs(5), http.get(&search_url).send()).await {
+            Ok(Ok(r)) => {
+                if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+                    debug_overlay.log(
+                        LogLevel::Error,
+                        "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string(),
+                    );
+                    return None;
+                }
+                r
             }
-            r
-        }
-        _ => return None,
-    };
+            _ => return None,
+        };
 
     let search_json: MusixmatchResponse = match search_resp.json().await {
         Ok(j) => j,
         Err(e) => {
-            debug_overlay.log(LogLevel::Warn, format!("lyrics: musixmatch json parse error: {e}"));
+            debug_overlay.log(
+                LogLevel::Warn,
+                format!("lyrics: musixmatch json parse error: {e}"),
+            );
             return None;
         }
     };
 
     match search_json.message.header.status_code {
         401 => {
-            debug_overlay.log(LogLevel::Error, "lyrics: Musixmatch API Key invalid (Internal 401)".to_string());
+            debug_overlay.log(
+                LogLevel::Error,
+                "lyrics: Musixmatch API Key invalid (Internal 401)".to_string(),
+            );
             return None;
         }
         200 => {}
         code => {
-            debug_overlay.log(LogLevel::Warn, format!("lyrics: Musixmatch returned internal code {}", code));
+            debug_overlay.log(
+                LogLevel::Warn,
+                format!("lyrics: Musixmatch returned internal code {}", code),
+            );
             return None;
         }
     }
@@ -417,27 +456,33 @@ async fn fetch_from_musixmatch(
     let track = match search_json.message.body.track_list.first() {
         Some(t) => t,
         None => {
-            debug_overlay.log(LogLevel::Info, "lyrics: no tracks found on musixmatch".to_string());
+            debug_overlay.log(
+                LogLevel::Info,
+                "lyrics: no tracks found on musixmatch".to_string(),
+            );
             return None;
         }
     };
 
     if !track.track.has_lyrics {
-        debug_overlay.log(LogLevel::Warn, format!("lyrics: track '{}' has no lyrics", track.track.track_name));
+        debug_overlay.log(
+            LogLevel::Warn,
+            format!("lyrics: track '{}' has no lyrics", track.track.track_name),
+        );
         return None;
     }
 
     let track_id = track.track.track_id;
     let lyrics_url = format!(
         "https://api.musixmatch.com/ws/1.1/track.lyrics.get?track_id={}&apikey={}",
-        track_id,
-        api_key
+        track_id, api_key
     );
 
-    let lyrics_resp = match tokio::time::timeout(Duration::from_secs(5), http.get(&lyrics_url).send()).await {
-        Ok(Ok(r)) => r,
-        _ => return None,
-    };
+    let lyrics_resp =
+        match tokio::time::timeout(Duration::from_secs(5), http.get(&lyrics_url).send()).await {
+            Ok(Ok(r)) => r,
+            _ => return None,
+        };
 
     let lyrics_json: serde_json::Value = match lyrics_resp.json().await {
         Ok(j) => j,
@@ -453,7 +498,13 @@ async fn fetch_from_musixmatch(
 
         if !cleaned.is_empty() {
             let parsed = parse_plain(&cleaned);
-            debug_overlay.log(LogLevel::Info, format!("lyrics: found from musixmatch ({} lines)", parsed.lines.len()));
+            debug_overlay.log(
+                LogLevel::Info,
+                format!(
+                    "lyrics: found from musixmatch ({} lines)",
+                    parsed.lines.len()
+                ),
+            );
             return Some(parsed);
         }
     }
@@ -504,7 +555,10 @@ async fn fetch_from_ovh(
     let json: serde_json::Value = match resp.json().await {
         Ok(j) => j,
         Err(e) => {
-            debug_overlay.log(LogLevel::Warn, format!("lyrics: json parse error from lyrics.ovh: {e}"));
+            debug_overlay.log(
+                LogLevel::Warn,
+                format!("lyrics: json parse error from lyrics.ovh: {e}"),
+            );
             return None;
         }
     };
@@ -559,11 +613,19 @@ pub struct LyricsHandle {
 }
 
 impl LyricsHandle {
-    pub fn new(db_path: PathBuf, http: reqwest::Client, debug_overlay: Arc<DebugOverlay>) -> Result<Self> {
+    pub fn new(
+        db_path: PathBuf,
+        http: reqwest::Client,
+        debug_overlay: Arc<DebugOverlay>,
+    ) -> Result<Self> {
         Self::with_shared_client(db_path, Arc::new(http), debug_overlay)
     }
 
-    pub fn with_shared_client(db_path: PathBuf, http: Arc<reqwest::Client>, debug_overlay: Arc<DebugOverlay>) -> Result<Self> {
+    pub fn with_shared_client(
+        db_path: PathBuf,
+        http: Arc<reqwest::Client>,
+        debug_overlay: Arc<DebugOverlay>,
+    ) -> Result<Self> {
         let cache = LyricsCache::open(&db_path)?;
         let musixmatch_api_key = crate::config::AppConfig::load()
             .ok()
@@ -572,7 +634,9 @@ impl LyricsHandle {
         if musixmatch_api_key.is_none() {
             debug_overlay.log(
                 LogLevel::Warn,
-                format!("lyrics: no musixmatch API key found, using fallback (may have low rate limits)"),
+                format!(
+                    "lyrics: no musixmatch API key found, using fallback (may have low rate limits)"
+                ),
             );
         }
 
@@ -601,10 +665,8 @@ impl LyricsHandle {
 
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached) = cache.get(uri) {
-                self.debug_overlay.log(
-                    LogLevel::Info,
-                    format!("lyrics: found in cache -> {}", uri),
-                );
+                self.debug_overlay
+                    .log(LogLevel::Info, format!("lyrics: found in cache -> {}", uri));
                 let (tx, rx) = oneshot::channel();
                 let _ = tx.send(Some(cached));
                 inner.pending = Some(rx);
@@ -624,7 +686,8 @@ impl LyricsHandle {
         let musixmatch_api_key = self.musixmatch_api_key.clone();
 
         tokio::spawn(async move {
-            let result = fetch_lyrics(&http, &title, &artist, &debug_overlay, musixmatch_api_key).await;
+            let result =
+                fetch_lyrics(&http, &title, &artist, &debug_overlay, musixmatch_api_key).await;
             if let Some(ref data) = result {
                 if let Ok(c) = cache.lock() {
                     c.save(&uri, data, &debug_overlay);

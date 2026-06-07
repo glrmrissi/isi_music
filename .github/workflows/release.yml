@@ -17,6 +17,8 @@ jobs:
   validate:
     name: Validate Tag Format
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
     steps:
       - name: Validate semantic version
         run: |
@@ -25,6 +27,10 @@ jobs:
             exit 1
           fi
           echo "Tag format valid: ${{ github.ref_name }}"
+
+      - name: Extract version from tag
+        id: extract
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.label }})
@@ -58,6 +64,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync Cargo.toml version with tag
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          sed "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
+          echo "Cargo.toml version updated to $VERSION"
+          grep '^version =' Cargo.toml
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -95,14 +111,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p release-artifacts
-          
+
           BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
-          
+
           if [ -f "$BINARY_PATH" ]; then
             cp "$BINARY_PATH" "release-artifacts/${{ matrix.asset_name }}"
             echo "Artifact ready: ${{ matrix.asset_name }}"
-            
-            # Exibir informações do binário
+
             if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
               ls -lh "release-artifacts/${{ matrix.asset_name }}"
               file "release-artifacts/${{ matrix.asset_name }}"
@@ -130,6 +145,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate release notes
+        run: |
+          git cliff \
+            --tag "${{ github.ref_name }}" \
+            --config cliff.toml \
+            -o release-notes.md
+          echo "=== Release Notes ==="
+          cat release-notes.md
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -141,7 +172,7 @@ jobs:
         run: |
           echo "Artifacts downloaded:"
           ls -lh artifacts/
-          
+
           if [ -z "$(ls -A artifacts/)" ]; then
             echo "No artifacts found"
             exit 1
@@ -152,20 +183,7 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          body: |
-            ## Release ${{ github.ref_name }}
-            
-            ### ✨ What's New
-            - See commits and PRs merged in this release
-            
-            ### 📥 Downloads
-            Precompiled binaries are available for:
-            - **Linux** (x86_64)
-            - **macOS** (Intel & Apple Silicon)
-            
-            ### 📝 Installation
-            Extract the binary and add it to your PATH.
-          generate_release_notes: true
+          body_path: release-notes.md
           files: artifacts/*
           draft: false
           prerelease: false

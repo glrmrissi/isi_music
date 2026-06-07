@@ -6,12 +6,12 @@ use tokio::net::UnixListener;
 use tracing::{info, warn};
 
 use crate::config::AppConfig;
+use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
+use crate::spotify::SpotifyClient;
 use crate::utils::ipc::socket_path;
 use crate::utils::lastfm::LastfmClient;
 #[cfg(feature = "mpris")]
 use crate::utils::mpris::{MprisCmd, MprisState};
-use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
-use crate::spotify::SpotifyClient;
 
 struct TrackInfo {
     name: String,
@@ -22,7 +22,11 @@ struct TrackInfo {
 pub async fn run(cfg: AppConfig) -> Result<()> {
     // stdout/stderr are redirected to /dev/null after fork — log to file instead
     if let Ok(log_path) = crate::config::log_path() {
-        if let Ok(log_file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        if let Ok(log_file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
             let _ = tracing_subscriber::fmt()
                 .with_writer(std::sync::Mutex::new(log_file))
                 .with_ansi(false)
@@ -35,10 +39,16 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     }
     info!("daemon starting");
 
-    let lastfm = match (&cfg.lastfm.api_key, &cfg.lastfm.api_secret, &cfg.lastfm.session_key) {
-        (Some(k), Some(s), Some(sk)) => {
-            Some(Arc::new(LastfmClient::new(k.clone(), s.clone(), sk.clone())))
-        }
+    let lastfm = match (
+        &cfg.lastfm.api_key,
+        &cfg.lastfm.api_secret,
+        &cfg.lastfm.session_key,
+    ) {
+        (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(
+            k.clone(),
+            s.clone(),
+            sk.clone(),
+        ))),
         _ => None,
     };
 
@@ -52,8 +62,14 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // MPRIS D-Bus (optional — gracefully degrades if D-Bus unavailable)
     #[cfg(feature = "mpris")]
     let mut mpris = match crate::utils::mpris::spawn().await {
-        Ok(h) => { info!("MPRIS D-Bus server started"); Some(h) }
-        Err(e) => { warn!("MPRIS unavailable: {e}"); None }
+        Ok(h) => {
+            info!("MPRIS D-Bus server started");
+            Some(h)
+        }
+        Err(e) => {
+            warn!("MPRIS unavailable: {e}");
+            None
+        }
     };
 
     // IPC socket
@@ -264,7 +280,9 @@ async fn load_playlist(
     loop {
         let (batch, total) = spotify.fetch_playlist_tracks(id, offset).await?;
         let n = batch.len();
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         for t in batch {
             uris.push(t.uri.clone());
             track_list.push(TrackInfo {
@@ -274,7 +292,9 @@ async fn load_playlist(
             });
         }
         offset += n as u32;
-        if offset >= total { break; }
+        if offset >= total {
+            break;
+        }
     }
 
     let total = uris.len();
@@ -296,13 +316,21 @@ async fn load_liked(
     loop {
         let (batch, total) = spotify.fetch_liked_tracks(offset).await?;
         let n = batch.len();
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         for t in batch {
             uris.push(t.uri.clone());
-            track_list.push(TrackInfo { name: t.name, artist: t.artist, duration_ms: t.duration_ms });
+            track_list.push(TrackInfo {
+                name: t.name,
+                artist: t.artist,
+                duration_ms: t.duration_ms,
+            });
         }
         offset += n as u32;
-        if offset >= total { break; }
+        if offset >= total {
+            break;
+        }
     }
 
     let total = uris.len();
@@ -318,12 +346,19 @@ fn ls_string(player: &dyn AudioPlayer, tracks: &[TrackInfo]) -> String {
         return "no playlist loaded — use: isi-music --play <spotify:playlist:ID>".into();
     }
     let current = player.current_index();
-    tracks.iter().enumerate().map(|(i, t)| {
-        let marker = if current == Some(i) {
-            if player.is_playing() { "▶" } else { "⏸" }
-        } else { " " };
-        format!("{marker} {:>4}  {} — {}", i, t.name, t.artist)
-    }).collect::<Vec<_>>().join("\n")
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let marker = if current == Some(i) {
+                if player.is_playing() { "▶" } else { "⏸" }
+            } else {
+                " "
+            };
+            format!("{marker} {:>4}  {} — {}", i, t.name, t.artist)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Build a human-readable status line.
@@ -335,7 +370,8 @@ fn status_string(player: &dyn AudioPlayer, tracks: &[TrackInfo], progress_ms: u6
     match tracks.get(idx) {
         Some(t) => format!(
             "{state}  {} — {}  |  {} / {}  |  vol {}%",
-            t.name, t.artist,
+            t.name,
+            t.artist,
             fmt_duration(progress_ms),
             fmt_duration(t.duration_ms),
             player.volume(),
