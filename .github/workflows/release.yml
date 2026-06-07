@@ -177,6 +177,8 @@ jobs:
             mv Cargo.lock.tmp Cargo.lock
 
             git add Cargo.toml Cargo.lock
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
             git commit -m "chore: v$OLD_VERSION -> v$VERSION"
             git push origin "$BRANCH"
           fi
