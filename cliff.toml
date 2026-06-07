@@ -33,8 +33,6 @@ commit_parsers = [
   { message = "^revert", group = "Revert" },
 ]
 filter_commits = false
-# match merge commits (they'll be filtered by skip_commits)
-skip_tags = []
 topo_order = false
 # sort by type
 sort_commits = "newest"
