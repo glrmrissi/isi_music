@@ -160,7 +160,8 @@ jobs:
           BRANCH=$(git branch -r --contains "${{ github.sha }}" \
             | grep -v 'origin/HEAD' \
             | head -1 \
-            | sed 's|origin/||')
+            | sed 's|.*origin/||' \
+            | xargs)
           echo "Detected branch: $BRANCH"
           git checkout "$BRANCH"
 
