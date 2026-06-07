@@ -1,4 +1,5 @@
 /target
 /patches/librespot-core/target
+/patches/*/Cargo.lock
 .env
 .spotify_token_cache.json
