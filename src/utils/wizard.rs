@@ -159,6 +159,66 @@ fn detect_music_dir() -> Option<String> {
         .and_then(|p| p.to_str().map(|s| s.to_string()))
 }
 
+fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
+    println!();
+    println!("  {}", style("Configure Spotify (optional but recommended)").bold());
+    println!();
+    println!(
+        "  {}",
+        style("Create a Spotify App to get your own Client ID:").dim()
+    );
+    println!(
+        "  {}  {}",
+        style("1.").cyan(),
+        style("Go to https://developer.spotify.com/dashboard").cyan().underlined()
+    );
+    println!(
+        "  {}  {}",
+        style("2.").cyan(),
+        style("Click \"Create app\", give it any name & description").dim()
+    );
+    println!(
+        "  {}  {}",
+        style("3.").cyan(),
+        style("Add Redirect URI:").dim()
+    );
+    println!(
+        "  {}       {}",
+        "",
+        style("http://127.0.0.1:8888/callback").yellow()
+    );
+    println!(
+        "  {}  {}",
+        style("4.").cyan(),
+        style("Copy the Client ID and paste it below").dim()
+    );
+    println!(
+        "  {}  {}",
+        style("5.").cyan(),
+        style("Leave blank to skip (local-only mode)").dim()
+    );
+    println!();
+
+    let client_id: String = Input::with_theme(&theme())
+        .with_prompt("Spotify Client ID")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let trimmed = client_id.trim().to_string();
+    if !trimmed.is_empty() {
+        if trimmed.len() < 10 {
+            println!(
+                "  {}  {}",
+                style("⚠").yellow(),
+                style("That doesn't look like a valid Client ID. It will be saved but may not work.").dim()
+            );
+        }
+        cfg.spotify.client_id = Some(trimmed);
+    }
+
+    Ok(())
+}
+
 fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     header(term, "— Quick Start");
 
@@ -184,6 +244,20 @@ fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         println!(
             "      {}",
             style("Set [local] music_dir in ~/.config/isi-music/config.toml later.").dim()
+        );
+    }
+
+    let configure_now = Confirm::with_theme(&theme())
+        .with_prompt("Configure Spotify? (needed for streaming)")
+        .default(true)
+        .interact()?;
+
+    if configure_now {
+        configure_spotify(&mut cfg)?;
+    } else {
+        println!(
+            "  {}",
+            style("Skipping Spotify — you can run `isi-music setup-spotify` later.").dim()
         );
     }
 
@@ -226,7 +300,25 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         Some(music_dir)
     };
 
-    header(term, "— Step 2 / 4 · Discord Rich Presence");
+    header(term, "— Step 2 / 5 · Spotify");
+
+    println!("  Configure Spotify to stream music from your account.\n");
+
+    let configure_now = Confirm::with_theme(&theme())
+        .with_prompt("Configure Spotify now?")
+        .default(true)
+        .interact()?;
+
+    if configure_now {
+        configure_spotify(&mut cfg)?;
+    } else {
+        println!(
+            "  {}",
+            style("Skipping — run `isi-music setup-spotify` later.").dim()
+        );
+    }
+
+    header(term, "— Step 3 / 5 · Discord Rich Presence");
 
     println!("  Show the currently playing track in your Discord status.\n");
 
@@ -246,7 +338,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         cfg.discord.app_id = optional_input("Custom Discord App ID (optional)")?;
     }
 
-    header(term, "— Step 3 / 4 · Last.fm Scrobbling");
+    header(term, "— Step 4 / 5 · Last.fm Scrobbling");
 
     println!("  Scrobble tracks you listen to on Last.fm.\n");
     println!(
@@ -316,7 +408,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         }
     }
 
-    header(term, "— Step 4 / 4 · Colour Theme");
+    header(term, "— Step 5 / 5 · Colour Theme");
 
     let theme_choice = Confirm::with_theme(&theme())
         .with_prompt("Choose a colour preset now?")

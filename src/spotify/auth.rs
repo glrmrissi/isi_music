@@ -33,6 +33,7 @@ impl SpotifyAuth {
                 "user-read-currently-playing",
                 "user-library-read",
                 "user-library-modify",
+                "user-follow-read",
                 "playlist-read-private",
                 "playlist-modify-private",
                 "playlist-modify-public"
