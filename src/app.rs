@@ -714,8 +714,8 @@ impl App {
                             if self.state.playback.is_playing {
                                 self.playing_started_at = Some(Instant::now());
                             }
-                            if let Some(p) = &self.player {
-                                p.seek(ms as u32);
+                            if let Some(p) = &mut self.player {
+                                p.seek_mut(ms as u32);
                             }
                         }
                         MprisCmd::SetVolume(v) => {
