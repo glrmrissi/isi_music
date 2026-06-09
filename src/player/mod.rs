@@ -528,7 +528,13 @@ impl AudioPlayer for NativePlayer {
     }
 
     fn try_recv_event(&mut self) -> Option<PlayerNotification> {
-        self.event_rx.try_recv().ok()
+        let notif = self.event_rx.try_recv().ok()?;
+        match &notif {
+            PlayerNotification::Playing => self.is_playing = true,
+            PlayerNotification::Paused => self.is_playing = false,
+            _ => {}
+        }
+        Some(notif)
     }
 
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
