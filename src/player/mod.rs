@@ -457,7 +457,9 @@ impl AudioPlayer for NativePlayer {
         self.user_queue()
     }
     fn remove_from_user_queue(&mut self, index: usize) {
-        self.user_queue.remove(index);
+        if index < self.user_queue.len() {
+            self.user_queue.remove(index);
+        }
     }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
         self.playing_queued.take()
