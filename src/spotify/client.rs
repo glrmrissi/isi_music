@@ -1576,9 +1576,9 @@ impl SpotifyClient {
         let mut results: Vec<(String, u16, String)> = Vec::new();
 
         macro_rules! try_format {
-            ($label:expr, $req:expr) => {
-                match $req {
-                    Ok(resp) => {
+            ($label:expr, $req_fut:expr) => {
+                match tokio::time::timeout(Duration::from_secs(10), $req_fut).await {
+                    Ok(Ok(resp)) => {
                         let status = resp.status();
                         let code = status.as_u16();
                         let body = resp.text().await.unwrap_or_default();
@@ -1589,8 +1589,11 @@ impl SpotifyClient {
                         }
                         tracing::warn!("Like track: {} failed ({}): {}", $label, code, body);
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::error!("Like track: {} request error: {}", $label, e);
+                    }
+                    Err(_) => {
+                        tracing::error!("Like track: {} timed out (10s)", $label);
                     }
                 }
             };
@@ -1603,7 +1606,7 @@ impl SpotifyClient {
             let req = self.http.put(url).bearer_auth(&token)
                 .header("Content-Type", "application/json")
                 .body(body_str);
-            try_format!("library JSON uris", req.send().await);
+            try_format!("library JSON uris", req.send());
             spotify_rate_limit().await;
         }
 
@@ -1614,7 +1617,7 @@ impl SpotifyClient {
             let req = self.http.put(url).bearer_auth(&token)
                 .query(&[("uris", &uri_str)])
                 .header("Content-Length", "0");
-            try_format!("library?uris=", req.send().await);
+            try_format!("library?uris=", req.send());
             spotify_rate_limit().await;
         }
 
@@ -1624,7 +1627,7 @@ impl SpotifyClient {
             let req = self.http.put(url).bearer_auth(&token)
                 .query(&[("ids", &track_id)])
                 .header("Content-Length", "0");
-            try_format!("tracks?ids=ID", req.send().await);
+            try_format!("tracks?ids=ID", req.send());
             spotify_rate_limit().await;
         }
 
@@ -1635,7 +1638,7 @@ impl SpotifyClient {
             let req = self.http.put(url).bearer_auth(&token)
                 .header("Content-Type", "application/json")
                 .body(body_str);
-            try_format!("library JSON ids", req.send().await);
+            try_format!("library JSON ids", req.send());
             spotify_rate_limit().await;
         }
 
@@ -1645,10 +1648,13 @@ impl SpotifyClient {
             let req = self.http.put(url).bearer_auth(&token)
                 .query(&[("ids", &track_id)])
                 .header("Content-Length", "0");
-            try_format!("library?ids=", req.send().await);
+            try_format!("library?ids=", req.send());
             spotify_rate_limit().await;
         }
 
+        if results.is_empty() {
+            anyhow::bail!("All 5 API formats failed (all requests errored/timed out)");
+        }
         let detail: String = results.iter().map(|(label, code, body)| {
             format!("{} ({}): {}", label, code, body)
         }).collect::<Vec<_>>().join("; ");
