@@ -528,13 +528,6 @@ impl Ui {
             height: root[2].height,
         };
 
-        let footer_area = Rect {
-            x: area.x,
-            y: area.y.saturating_add(area.height.saturating_sub(1)),
-            width: area.width,
-            height: 1,
-        };
-
         let art_size = top_area.height.min(18).min(top_area.width / 4).max(12);
 
         let top_cols = Layout::default()
@@ -641,15 +634,6 @@ impl Ui {
         }
 
         self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area, state);
-
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "[N/P] Skip  [PageDown/Up] Move Lyrics  [V] Vizualizer  [Y] Lyrics  [S] Shuffle  [R] Repeat  [/] Search  [L] Like  [+/-] Vol",
-                Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)
-            )))
-            .alignment(ratatui::layout::Alignment::Center),
-            footer_area,
-        );
     }
 
     pub fn render_welcome(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
