@@ -8,6 +8,12 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square)](LICENSE)
 
+> **⚠️ Spotify Web API Changes (February 2026)**  
+> Spotify deprecated the old `/v1/me/tracks` and `/v1/me/albums` endpoints — they now return `403 Forbidden`.  
+> The new unified API requires a **Client ID** and a **Redirect URI** set to `http://127.0.0.1:8888/callback`  
+> in your [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).  
+> See [issue #41](https://github.com/glrmrissi/isi_music/issues/41).
+
 isi-music is a high-performance terminal audio player built in Rust for direct, efficient music playback. It serves as a lightweight alternative to resource-heavy desktop clients, eliminating the overhead of Electron and web-based wrappers. The engine integrates natively with Spotify through librespot and provides robust support for local audio files, ensuring high-fidelity playback across your entire library.
 
 The application is engineered for speed, utilizing an SQLite-backed cache for persistent metadata and lyrics management. It features an automated multi-source lyrics fetcher that prioritizes synced data from LRCLIB and Musixmatch, falling back to lyrics.ovh when necessary. By focusing on native binaries and a specialized terminal user interface, isi-music delivers a fast, low-latency audio experience that maximizes system resources while maintaining a comprehensive feature set for power users.
@@ -30,7 +36,8 @@ The application is engineered for speed, utilizing an SQLite-backed cache for pe
 - **Daemon mode** — keep playback running after closing the terminal, control via CLI
 - **Seek support** for all audio formats
 
-Note: Spotify Premium is required for streaming. Local file playback works without any Spotify account.
+> **Note:** Spotify Premium is required for streaming. Local file playback works without any Spotify account.  
+> See the [Spotify Setup](#spotify-setup) section below for configuration.
 
 ---
 
@@ -172,6 +179,46 @@ cargo build --release
 
 ---
 
+## Spotify Setup
+
+isi-music now requires a Spotify **Client ID** due to the [February 2026 Web API changes](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide) (deprecated endpoints now return 403).
+
+### 1. Create a Spotify App
+
+Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and click **"Create app"**:
+
+| Field | Value |
+|-------|-------|
+| App name | Any name (e.g. "isi-music") |
+| App description | Any description |
+| Redirect URI | **`http://127.0.0.1:8888/callback`** |
+| APIs used | Web API |
+
+### 2. Configure isi-music
+
+Run the interactive setup wizard:
+
+```bash
+isi-music setup-spotify
+```
+
+Or manually add to your config (`~/.config/isi-music/config.toml`):
+
+```toml
+[spotify]
+client_id = "your_client_id_here"
+```
+
+### 3. Authenticate
+
+During `setup-spotify`, your browser will open for Spotify authorization. Uses **PKCE** — no `client_secret` needed.
+
+If you see `403 Forbidden` errors in the app, verify your Client ID is set and the redirect URI matches exactly: `http://127.0.0.1:8888/callback`
+
+Local file playback works without any Spotify account.
+
+---
+
 ## Configuration
 
 ### First-time setup:
@@ -188,12 +235,15 @@ isi-music setup
 | Windows | `%APPDATA%\isi-music\config.toml` |
 
 ```toml
-# If you want to use Spotify, just remove the client_id, like this:
-# [spotify]
-# (leave empty)
+# Spotify is now required for streaming (Feb 2026 API changes).
+# See the "Spotify Setup" section above for instructions.
 
 [spotify]
-client_id = "" # For local mode
+client_id = "your_client_id_here"
+
+# For local-only mode, just omit or leave empty:
+# [spotify]
+# client_id = ""
 
 # Optional: local audio files (MP3, FLAC, OGG, WAV, AIFF)
 # Automatic metadata extraction and embedded cover art support
