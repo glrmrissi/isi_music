@@ -389,7 +389,9 @@ impl App {
                         if pb.is_playing {
                             self.state.playback.progress_ms = pb.progress_ms;
                         }
-                        self.progress_at_play_start = pb.progress_ms;
+                        if self.playing_started_at.is_none() {
+                            self.progress_at_play_start = pb.progress_ms;
+                        }
                     }
                 }
             }
