@@ -155,7 +155,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!(
         "{RED}│{RESET}  To stream from Spotify you need your own Client ID:          {RED}│{RESET}"
     );
-    println!("{RED}│{RESET}                                                      {RED}│{RESET}");
+    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
     println!(
         "{RED}│{RESET}  {BOLD}1.{RESET} Go to: {GREEN}https://developer.spotify.com/dashboard{RESET}             {RED}│{RESET}"
     );
@@ -169,7 +169,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         "{RED}│{RESET}  {BOLD}4.{RESET} Add this Redirect URI:                                      {RED}│{RESET}"
     );
     println!(
-        "{RED}│{RESET}       {YELLOW}http://127.0.0.1:8888/callback{RESET}                      {RED}│{RESET}"
+        "{RED}│{RESET}       {YELLOW}http://127.0.0.1:8888/callback{RESET}                          {RED}│{RESET}"
     );
     println!(
         "{RED}│{RESET}  {BOLD}5.{RESET} Click {BOLD}\"Save\"{RESET}                                               {RED}│{RESET}"
@@ -178,7 +178,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         "{RED}│{RESET}  {BOLD}6.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below                      {RED}│{RESET}"
     );
     println!(
-        "{RED}│{RESET}                                                              {RED}│{RESET}"
+        "{RED}│{RESET}                                                               {RED}│{RESET}"
     );
     println!(
         "{RED}│{RESET}  {YELLOW}Uses PKCE — no client_secret needed!{RESET}                         {RED}│{RESET}"
