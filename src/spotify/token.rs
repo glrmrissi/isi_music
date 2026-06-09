@@ -56,8 +56,8 @@ impl TokenManager {
             match self.do_refresh().await {
                 Ok(new_token) => Some(new_token),
                 Err(e) => {
-                    warn!("Token refresh failed: {e}");
-                    Some(token)
+                    warn!("Token refresh failed: {e}, forcing re-auth");
+                    None
                 }
             }
         } else {
