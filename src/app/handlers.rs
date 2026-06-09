@@ -5,6 +5,7 @@ use tracing::warn;
 
 use crate::App;
 use crate::player::RepeatMode;
+use crate::utils::debug_overlay::LogLevel;
 use crate::ui::{ActiveContent, Focus, LIBRARY_ITEMS, SearchPanel, SearchResults};
 
 impl App {
@@ -108,6 +109,10 @@ impl App {
                 };
 
                 self.state.playback.progress_ms = new_pos;
+                self.progress_at_play_start = new_pos;
+                if self.state.playback.is_playing {
+                    self.playing_started_at = Some(Instant::now());
+                }
                 let _ = self.seek_tx.send(new_pos as u32);
                 return Ok(());
             }
@@ -144,7 +149,19 @@ impl App {
                 if let Some(player) = &mut self.player {
                     player.toggle();
                 } else if self.spotify.authenticated {
-                    let _ = self.spotify.toggle_playback().await;
+                    if self.spotify.toggle_playback().await.is_ok() {
+                        self.state.playback.is_playing = !self.state.playback.is_playing;
+                        if self.state.playback.is_playing {
+                            self.playing_started_at = Some(Instant::now());
+                            self.progress_at_play_start = self.state.playback.progress_ms;
+                        } else {
+                            if let Some(started) = self.playing_started_at {
+                                let elapsed = started.elapsed().as_millis() as u64;
+                                self.progress_at_play_start += elapsed;
+                            }
+                            self.playing_started_at = None;
+                        }
+                    }
                 }
             }
             A::NextTrack => {
@@ -205,10 +222,21 @@ impl App {
             A::LikeTrack => {
                 if !self.spotify.authenticated {
                     self.state.status_msg = Some("Spotify not connected".to_string());
+                } else if self.current_track_uri.is_empty() {
+                    self.debug_overlay.log(LogLevel::Warn, "LikeTrack: no current track URI".to_string());
+                    self.state.status_msg = Some("No track to like".to_string());
                 } else {
-                    match self.spotify.save_current_track().await {
-                        Ok(_) => self.state.status_msg = Some("♥ Liked!".to_string()),
-                        Err(e) => self.state.status_msg = Some(format!("Error liking track: {e}")),
+                    self.debug_overlay.log(LogLevel::Info, format!("LikeTrack: saving {}", self.current_track_uri));
+                    let uri = self.current_track_uri.clone();
+                    match self.spotify.save_current_track(Some(&uri)).await {
+                        Ok(_) => {
+                            self.debug_overlay.log(LogLevel::Info, "LikeTrack: saved successfully".to_string());
+                            self.state.status_msg = Some("♥ Liked!".to_string());
+                        }
+                        Err(e) => {
+                            self.debug_overlay.log(LogLevel::Error, format!("LikeTrack failed: {e}"));
+                            self.state.status_msg = Some(format!("Error liking track: {e}"));
+                        }
                     }
                 }
             }
@@ -859,23 +887,26 @@ impl App {
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_playlist_tracks(&id, 0).await {
                                 Ok((tracks, total)) => {
-                                    self.state.tracks = tracks;
-                                    self.state.tracks_total = total;
-                                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                                    self.state.active_playlist_uri = Some(uri);
-                                    self.state.active_playlist_id = Some(id);
-                                    self.state
-                                        .track_list
-                                        .select(if self.state.tracks.is_empty() {
-                                            None
-                                        } else {
-                                            Some(0)
-                                        });
-                                    self.state.active_content = ActiveContent::Tracks;
-                                    self.state.rebuild_sort_indices();
-                                    self.state.previous_search = self.state.search_results.take();
-                                    self.state.status_msg = None;
-                                    self.state.focus = Focus::Tracks;
+                                    if tracks.is_empty() {
+                                        self.state.status_msg = Some(
+                                            "⚠ Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
+                                        );
+                                    } else {
+                                        self.state.tracks = tracks;
+                                        self.state.tracks_total = total;
+                                        self.state.tracks_offset = self.state.tracks.len() as u32;
+                                        self.state.active_playlist_uri = Some(uri);
+                                        self.state.active_playlist_id = Some(id);
+                                        self.state
+                                            .track_list
+                                            .select(Some(0));
+                                        self.state.active_content = ActiveContent::Tracks;
+                                        self.state.rebuild_sort_indices();
+                                        self.state.previous_search =
+                                            self.state.search_results.take();
+                                        self.state.status_msg = None;
+                                        self.state.focus = Focus::Tracks;
+                                    }
                                 }
                                 Err(e) => {
                                     let err_str = e.to_string();
@@ -886,6 +917,11 @@ impl App {
                                         needs_reconnect = true;
                                         self.state.status_msg = Some(
                                             "Authorization expired, reconnecting...".to_string(),
+                                        );
+                                    } else if err_str.contains("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE")
+                                    {
+                                        self.state.status_msg = Some(
+                                            "⚠ Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
                                         );
                                     } else {
                                         self.state.status_msg = Some(format!("Error: {e}"));
