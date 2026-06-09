@@ -21,6 +21,7 @@ use libc;
 use rand::seq::SliceRandom;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -136,6 +137,7 @@ pub struct NativePlayer {
     pub repeat: RepeatMode,
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
     pub band_energies: Arc<Mutex<Vec<f32>>>,
+    server_position: Arc<Mutex<(u64, Instant)>>,
 }
 
 impl NativePlayer {
@@ -162,10 +164,14 @@ impl NativePlayer {
         let bands_for_sink = Arc::clone(&bands);
 
         let session_for_player = session.clone();
+        let server_position: Arc<Mutex<(u64, Instant)>> =
+            Arc::new(Mutex::new((0, Instant::now())));
+
         let player = LibrespotPlayer::new(
             PlayerConfig {
                 gapless: false,
                 bitrate,
+                position_update_interval: Some(std::time::Duration::from_millis(250)),
                 ..PlayerConfig::default()
             },
             session_for_player,
@@ -182,13 +188,17 @@ impl NativePlayer {
 
         let mut event_channel = player.get_player_event_channel();
         let session_for_monitor = session.clone();
+        let sp = Arc::clone(&server_position);
         tokio::spawn(async move {
             let mut unavailable_count = 0u32;
             while let Some(event) = event_channel.recv().await {
                 match event {
-                    PlayerEvent::Playing { track_id, .. } => {
-                        info!("Playing: {}", track_id);
+                    PlayerEvent::Playing { track_id, position_ms, .. } => {
+                        info!("Playing: {} at {}ms", track_id, position_ms);
                         unavailable_count = 0;
+                        if let Ok(mut pos) = sp.lock() {
+                            *pos = (position_ms as u64, Instant::now());
+                        }
                         let _ = notif_tx.send(PlayerNotification::Playing);
                     }
                     PlayerEvent::Paused { track_id, .. } => {
@@ -215,6 +225,17 @@ impl NativePlayer {
                     PlayerEvent::Loading { track_id, .. } => {
                         info!("Loading: {}", track_id);
                     }
+                    PlayerEvent::PositionChanged { position_ms, .. } => {
+                        if let Ok(mut pos) = sp.lock() {
+                            *pos = (position_ms as u64, Instant::now());
+                        }
+                    }
+                    PlayerEvent::Seeked { position_ms, .. }
+                    | PlayerEvent::PositionCorrection { position_ms, .. } => {
+                        if let Ok(mut pos) = sp.lock() {
+                            *pos = (position_ms as u64, Instant::now());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -238,6 +259,7 @@ impl NativePlayer {
             repeat: RepeatMode::Off,
             event_rx: notif_rx,
             band_energies: bands,
+            server_position,
         };
         instance.apply_volume();
         Ok(instance)
@@ -516,6 +538,8 @@ impl AudioPlayer for NativePlayer {
     }
 
     fn current_playback_state(&self) -> Option<PlaybackState> {
+        let (base, time) = *self.server_position.lock().unwrap();
+        let progress_ms = base + time.elapsed().as_millis() as u64;
         Some(PlaybackState {
             is_playing: self.is_playing,
             volume: self.volume,
@@ -526,6 +550,7 @@ impl AudioPlayer for NativePlayer {
                 RepeatMode::Track => rspotify::model::RepeatState::Track,
             },
             is_local: false,
+            progress_ms,
             ..PlaybackState::default()
         })
     }
