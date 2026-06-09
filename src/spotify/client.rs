@@ -454,6 +454,14 @@ impl LibraryCache {
         )
     }
 
+    pub fn delete_key_pattern(&self, pattern: &str) {
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute(
+            "DELETE FROM library_cache WHERE key LIKE ?1",
+            params![pattern],
+        );
+    }
+
     pub fn save_artists(&self, artists: &[ArtistSummary]) {
         let rows: Vec<CachedArtist> = artists
             .iter()

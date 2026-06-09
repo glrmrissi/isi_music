@@ -230,7 +230,8 @@ impl App {
                     let uri = self.current_track_uri.clone();
                     match self.spotify.save_current_track(Some(&uri)).await {
                         Ok(_) => {
-                            self.debug_overlay.log(LogLevel::Info, "LikeTrack: saved successfully".to_string());
+                            self.spotify.library_cache.delete_key_pattern("liked:%");
+                            self.debug_overlay.log(LogLevel::Info, "LikeTrack: saved successfully — liked cache cleared".to_string());
                             self.state.status_msg = Some("♥ Liked!".to_string());
                         }
                         Err(e) => {
