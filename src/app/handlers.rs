@@ -226,19 +226,27 @@ impl App {
                     self.debug_overlay.log(LogLevel::Warn, "LikeTrack: no current track URI".to_string());
                     self.state.status_msg = Some("No track to like".to_string());
                 } else {
-                    self.debug_overlay.log(LogLevel::Info, format!("LikeTrack: saving {}", self.current_track_uri));
-                    let uri = self.current_track_uri.clone();
-                    match self.spotify.save_current_track(Some(&uri)).await {
-                        Ok(_) => {
-                            self.spotify.library_cache.delete_key_pattern("liked:%");
-                            self.debug_overlay.log(LogLevel::Info, "LikeTrack: saved successfully — liked cache cleared".to_string());
-                            self.state.status_msg = Some("♥ Liked!".to_string());
+                    self.state.status_msg = Some("♥ Liking...".to_string());
+                    let Some(token) = self.spotify.get_access_token().await else { return };
+                    let http = self.spotify.http.clone();
+                    let cache = self.spotify.library_cache.clone();
+                    let track_id = self.current_track_uri
+                        .split(':')
+                        .last()
+                        .unwrap_or("")
+                        .to_string();
+                    if track_id.is_empty() { return; }
+                    tokio::spawn(async move {
+                        match crate::spotify::save_track_http(&http, &token, &track_id).await {
+                            Ok(_) => {
+                                cache.delete_key_pattern("liked:%");
+                                tracing::info!("LikeTrack: saved successfully — liked cache cleared");
+                            }
+                            Err(e) => {
+                                tracing::error!("LikeTrack failed: {e}");
+                            }
                         }
-                        Err(e) => {
-                            self.debug_overlay.log(LogLevel::Error, format!("LikeTrack failed: {e}"));
-                            self.state.status_msg = Some(format!("Error liking track: {e}"));
-                        }
-                    }
+                    });
                 }
             }
             A::AddToQueue => {

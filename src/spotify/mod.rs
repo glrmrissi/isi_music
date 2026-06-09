@@ -3,7 +3,7 @@ mod client;
 mod token;
 
 pub use client::{
-    AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, SpotifyClient,
-    TrackSummary,
+    AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary,
+    SpotifyClient, TrackSummary, save_track_http,
 };
 
