@@ -37,54 +37,53 @@ const BOLD: &str = "\x1b[1m";
 const GREEN: &str = "\x1b[32m";
 const GRAY: &str = "\x1b[90m";
 
+const BOX_W: usize = 63;
+
+fn visible_len(s: &str) -> usize {
+    let mut count = 0;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            while let Some(c) = chars.next() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn box_line(content: &str) -> String {
+    let padding_len = BOX_W.saturating_sub(visible_len(content));
+    let padding: String = " ".repeat(padding_len);
+    format!("{RED}│{RESET}{content}{padding}{RED}│{RESET}")
+}
+
+macro_rules! bl {
+    ($str:expr) => { box_line(&$str) };
+}
+
 async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
-    println!(
-        "{RED}│{RESET}  {BOLD}Last.fm Integration Setup{RESET}                                    {RED}│{RESET}"
-    );
+    println!("{}", bl!(format!("  {BOLD}Last.fm Integration Setup{RESET}")));
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
-    println!(
-        "{RED}│{RESET}  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}             {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  2. Create an API application                                 {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}                       {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}              {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  5. Add the following content:                                {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     {GRAY}[lastfm]{RESET}                                                  {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}                                  {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}                            {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     session_key = \"\"                                          {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}                 {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {YELLOW}Never commit your API Secret to Git.{RESET}                         {RED}│{RESET}"
-    );
+    println!("{}", bl!(format!("  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}")));
+    println!("{}", bl!("  2. Create an API application"));
+    println!("{}", bl!(format!("  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}")));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}")));
+    println!("{}", bl!("  5. Add the following content:"));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("     {GRAY}[lastfm]{RESET}")));
+    println!("{}", bl!(format!("     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}")));
+    println!("{}", bl!(format!("     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}")));
+    println!("{}", bl!("     session_key = \"\""));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}")));
+    println!("{}", bl!(format!("  {YELLOW}Never commit your API Secret to Git.{RESET}")));
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
     let api_key = loop {
@@ -148,41 +147,19 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
 
 async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
-    println!(
-        "{RED}│{RESET}  {BOLD}Spotify Setup{RESET}                                                {RED}│{RESET}"
-    );
+    println!("{}", bl!(format!("  {BOLD}Spotify Setup{RESET}")));
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
-    println!(
-        "{RED}│{RESET}  To stream from Spotify you need your own Client ID:          {RED}│{RESET}"
-    );
-    println!("{RED}│{RESET}                                                               {RED}│{RESET}");
-    println!(
-        "{RED}│{RESET}  {BOLD}1.{RESET} Go to: {GREEN}https://developer.spotify.com/dashboard{RESET}             {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {BOLD}2.{RESET} Click {BOLD}\"Create app\"{RESET}                                        {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {BOLD}3.{RESET} Give it any name & description                             {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {BOLD}4.{RESET} Add this Redirect URI:                                      {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}       {YELLOW}http://127.0.0.1:8888/callback{RESET}                          {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {BOLD}5.{RESET} Click {BOLD}\"Save\"{RESET}                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {BOLD}6.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below                      {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {YELLOW}Uses PKCE — no client_secret needed!{RESET}                         {RED}│{RESET}"
-    );
+    println!("{}", bl!("  To stream from Spotify you need your own Client ID:"));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  {BOLD}1.{RESET} Go to: {GREEN}https://developer.spotify.com/dashboard{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}2.{RESET} Click {BOLD}\"Create app\"{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}3.{RESET} Give it any name & description")));
+    println!("{}", bl!(format!("  {BOLD}4.{RESET} Add this Redirect URI:")));
+    println!("{}", bl!(format!("       {YELLOW}http://127.0.0.1:8888/callback{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}5.{RESET} Click {BOLD}\"Save\"{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}6.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below")));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  {YELLOW}Uses PKCE - no client_secret needed!{RESET}")));
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
     let client_id = loop {
