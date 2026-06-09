@@ -546,7 +546,8 @@ impl AudioPlayer for NativePlayer {
     }
 
     fn current_playback_state(&self) -> Option<PlaybackState> {
-        let (base, time) = *self.server_position.lock().unwrap();
+        let guard = self.server_position.lock().ok()?;
+        let (base, time) = *guard;
         let progress_ms = base + time.elapsed().as_millis() as u64;
         Some(PlaybackState {
             is_playing: self.is_playing,
