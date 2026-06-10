@@ -446,7 +446,7 @@ impl App {
             A::ScrollUp => {
                 if self.state.show_help {
                     self.state.help_scroll = self.state.help_scroll.saturating_sub(4);
-                } else if self.state.fullscreen_player
+                } else if (self.state.fullscreen_player || self.state.show_lyrics)
                     && self
                         .state
                         .playback
@@ -462,7 +462,7 @@ impl App {
             A::ScrollDown => {
                 if self.state.show_help {
                     self.state.help_scroll = self.state.help_scroll.saturating_add(4);
-                } else if self.state.fullscreen_player
+                } else if (self.state.fullscreen_player || self.state.show_lyrics)
                     && self
                         .state
                         .playback

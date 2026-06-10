@@ -822,6 +822,43 @@ impl Ui {
         }
     }
 
+    pub fn render_lyrics_compact(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let pb = &state.playback;
+        if area.width < 4 || area.height < 1 {
+            return;
+        }
+
+        let Some(lyrics) = &pb.lyrics else { return };
+        if !lyrics.is_synced { return; }
+
+        let active = lyrics.active_idx(pb.progress_ms).unwrap_or(0);
+
+        let current = lyrics.lines.get(active).map(|l| l.text.clone());
+        let next = lyrics.lines.get(active + 1).map(|l| l.text.clone());
+
+        let lines: Vec<Line> = std::iter::once(Line::from(""))
+            .chain(
+                current
+                    .map(|t| {
+                        Line::from(Span::styled(t, Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)))
+                            .alignment(Alignment::Center)
+                    })
+                    .into_iter(),
+            )
+            .chain(
+                next
+                    .map(|t| {
+                        Line::from(Span::styled(t, Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)))
+                            .alignment(Alignment::Center)
+                    })
+                    .into_iter(),
+            )
+            .collect();
+
+        if lines.len() <= 1 { return; }
+        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), area);
+    }
+
     pub fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.compact_effective {
             let items: Vec<ListItem> = state

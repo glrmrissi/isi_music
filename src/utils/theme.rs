@@ -44,6 +44,7 @@ pub enum UiWidget {
     Help,
     AsciiArt,
     Spacer,
+    Lyrics,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy)]
