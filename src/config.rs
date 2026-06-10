@@ -67,14 +67,12 @@ impl AppConfig {
         std::env::var("SPOTIFY_CLIENT_ID")
             .ok()
             .or_else(|| self.spotify.client_id.clone())
-            .or_else(|| Some("518a78a470a1453cb0daf2d1e12b3ccf".to_string()))
     }
 
     pub fn get_musixmatch_api_key(&self) -> Option<String> {
         std::env::var("MUSIXMATCH_API_KEY")
             .ok()
             .or_else(|| self.musixmatch.musixmatch_api_key.clone())
-            .or_else(|| Some("c38d4b3f87bd1dac158c1537cf3e5e28".to_string())) // String random. This not work, u need configure this on config.toml 
     }
 
     pub fn save(&self) -> Result<()> {

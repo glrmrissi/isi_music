@@ -71,6 +71,9 @@ pub struct App {
     reconnect_attempts: u32,
     last_reconnect_attempt: Option<Instant>,
     last_playback_health_check: Instant,
+    playing_started_at: Option<Instant>,
+    progress_at_play_start: u64,
+    initial_sync_done: bool,
 }
 
 impl App {
@@ -100,21 +103,33 @@ impl App {
 
         debug_overlay.log(LogLevel::Info, "isi-music starting up");
 
+        let mut startup_warning: Option<String> = None;
+
         let mut spotify = match SpotifyClient::new().await {
             Ok(s) => s,
             Err(e) => {
-                debug_overlay.log(
-                    LogLevel::Warn,
-                    format!("Spotify unavailable ({e:#}), starting in local-only mode"),
-                );
+                let msg = e.to_string();
+                if msg.contains("SPOTIFY_FORBIDDEN") {
+                    warn!("Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit");
+                    debug_overlay.log(
+                        LogLevel::Warn,
+                        "Spotify 403 — create your own app: isi-music setup-spotify",
+                    );
+                    startup_warning = Some(
+                        "⚠ Spotify 403: seu Client ID atingiu o limite do Development Mode. Crie seu próprio app: isi-music setup-spotify".to_string(),
+                    );
+                } else {
+                    debug_overlay.log(
+                        LogLevel::Warn,
+                        format!("Spotify unavailable ({e:#}), starting in local-only mode"),
+                    );
+                }
 
                 SpotifyClient::new_unauthenticated().await
             }
         };
 
         let volume = crate::config::load_volume();
-
-        let mut startup_warning: Option<String> = None;
 
         let spotify_player: Option<Box<dyn AudioPlayer>> = if spotify.authenticated {
             match spotify.get_access_token().await {
@@ -163,7 +178,7 @@ impl App {
             }
         };
 
-        let (player, parked_player, local_active) = match (spotify_player, local_player) {
+        let (mut player, parked_player, local_active) = match (spotify_player, local_player) {
             (Some(sp), local) => (Some(sp), local, false),
             (None, Some(lp)) => (Some(lp), None, true),
             (None, None) => (None, None, false),
@@ -206,13 +221,23 @@ impl App {
                 })
                 .unwrap_or_default()
         } else {
-            spotify.fetch_playback().await.unwrap_or_default()
+            let mut pb = spotify.fetch_playback().await.unwrap_or_default();
+            pb.is_playing = false;
+            pb
         };
 
         let initial_art = initial_playback.art_url.clone();
 
         state.playback = initial_playback;
         state.art_url = initial_art.clone();
+
+        if !state.playback.is_playing {
+            if let Some(p) = &mut player {
+                if !local_active {
+                    p.pause();
+                }
+            }
+        }
 
         #[cfg(feature = "mpris")]
         let mpris = match crate::utils::mpris::spawn().await {
@@ -282,6 +307,9 @@ impl App {
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
             last_playback_health_check: Instant::now(),
+            playing_started_at: None,
+            progress_at_play_start: 0,
+            initial_sync_done: false,
         })
     }
 
@@ -355,10 +383,15 @@ impl App {
                             self.state.playback.lyrics_loading = true;
                         }
                     } else {
-                        self.state.playback.is_playing = pb.is_playing;
                         self.state.playback.volume = pb.volume;
                         self.state.playback.shuffle = pb.shuffle;
                         self.state.playback.repeat = pb.repeat;
+                        if pb.is_playing {
+                            self.state.playback.progress_ms = pb.progress_ms;
+                        }
+                        if self.playing_started_at.is_none() {
+                            self.progress_at_play_start = pb.progress_ms;
+                        }
                     }
                 }
             }
@@ -382,6 +415,12 @@ impl App {
 
             if let Some(target_pos) = latest_seek {
                 self.state.viz_bands.fill(0.0);
+                let target_pos_u64 = target_pos as u64;
+                self.state.playback.progress_ms = target_pos_u64;
+                self.progress_at_play_start = target_pos_u64;
+                if self.state.playback.is_playing {
+                    self.playing_started_at = Some(Instant::now());
+                }
 
                 if let Some(player) = &mut self.player {
                     if self.local_active {
@@ -427,6 +466,10 @@ impl App {
                         PlayerNotification::Playing => {
                             self.consecutive_unavailable = 0;
                             self.state.playback.is_playing = true;
+                            if self.local_active && self.playing_started_at.is_none() {
+                                self.playing_started_at = Some(Instant::now());
+                                self.progress_at_play_start = self.state.playback.progress_ms;
+                            }
                         }
                         PlayerNotification::Paused => self.state.playback.is_playing = false,
                         PlayerNotification::TrackUnavailable => {
@@ -531,11 +574,25 @@ impl App {
                         let saved_lyrics = self.state.playback.lyrics.take();
                         let saved_lyrics_loading = self.state.playback.lyrics_loading;
                         let saved_lyrics_scroll = self.state.playback.lyrics_scroll;
+                        let pb_playing = current_pb.is_playing;
+                        let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
                         self.state.playback = current_pb;
                         self.state.playback.lyrics = saved_lyrics;
                         self.state.playback.lyrics_loading = saved_lyrics_loading;
                         self.state.playback.lyrics_scroll = saved_lyrics_scroll;
+                        if self.playing_started_at.is_none() {
+                            self.state.playback.is_playing = false;
+                        }
+                        if pb_playing {
+                            if self.playing_started_at.is_some() {
+                                self.playing_started_at = Some(Instant::now());
+                                self.progress_at_play_start = pb_progress;
+                            }
+                        } else {
+                            self.playing_started_at = None;
+                            self.progress_at_play_start = pb_progress;
+                        }
                     }
                 }
             }
@@ -546,11 +603,45 @@ impl App {
             }
 
             if !self.spotify_streaming_disabled
-                && self.last_playback_health_check.elapsed() > Duration::from_secs(45)
+                && self.last_playback_health_check.elapsed()
+                    > if self.initial_sync_done {
+                        Duration::from_secs(45)
+                    } else {
+                        Duration::from_secs(5)
+                    }
             {
                 self.last_playback_health_check = Instant::now();
 
                 if let Some(_token) = self.spotify.get_access_token().await {}
+
+                if self.player.is_none() {
+                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                        let saved_lyrics = self.state.playback.lyrics.take();
+                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
+                        let saved_lyrics_scroll = self.state.playback.lyrics_scroll;
+                        let pb_playing = current_pb.is_playing;
+                        let pb_progress = current_pb.progress_ms;
+                        self.art_url = current_pb.art_url.clone();
+                        self.state.playback = current_pb;
+                        self.state.playback.lyrics = saved_lyrics;
+                        self.state.playback.lyrics_loading = saved_lyrics_loading;
+                        self.state.playback.lyrics_scroll = saved_lyrics_scroll;
+                        if self.playing_started_at.is_none() {
+                            self.state.playback.is_playing = false;
+                        }
+                        if pb_playing {
+                            if self.playing_started_at.is_some() {
+                                self.playing_started_at = Some(Instant::now());
+                                self.progress_at_play_start = pb_progress;
+                            }
+                        } else {
+                            self.playing_started_at = None;
+                            self.progress_at_play_start = pb_progress;
+                        }
+                    }
+                }
+
+                self.initial_sync_done = true;
             }
 
             if self.session_reconnecting
@@ -621,8 +712,12 @@ impl App {
                         MprisCmd::Seek(us) => {
                             let ms = (us / 1000) as u64;
                             self.state.playback.progress_ms = ms;
-                            if let Some(p) = &self.player {
-                                p.seek(ms as u32);
+                            self.progress_at_play_start = ms;
+                            if self.state.playback.is_playing {
+                                self.playing_started_at = Some(Instant::now());
+                            }
+                            if let Some(p) = &mut self.player {
+                                p.seek_mut(ms as u32);
                             }
                         }
                         MprisCmd::SetVolume(v) => {
@@ -707,14 +802,37 @@ impl App {
             }
 
             if self.state.playback.is_playing {
-                let new_progress = self.state.playback.progress_ms + delta_ms;
-                if new_progress < self.state.playback.duration_ms {
-                    self.state.playback.progress_ms = new_progress;
-                } else if self.player.is_none() {
-                    self.state.playback.is_playing = false;
-                    self.state.playback.progress_ms = self.state.playback.duration_ms;
+                if self.player.is_some() && !self.local_active {
+                    // NativePlayer: progress from current_playback_state
+                } else {
+                    if self.playing_started_at.is_none() {
+                        self.playing_started_at = Some(Instant::now());
+                        self.progress_at_play_start = self.state.playback.progress_ms;
+                    }
+                    let elapsed = self
+                        .playing_started_at
+                        .map(|t| t.elapsed().as_millis() as u64)
+                        .unwrap_or(0);
+                    self.state.playback.progress_ms = self.progress_at_play_start + elapsed;
                 }
+                if self.state.playback.progress_ms >= self.state.playback.duration_ms {
+                    if self.player.is_none() {
+                        self.state.playback.is_playing = false;
+                        self.state.playback.progress_ms = self.state.playback.duration_ms;
+                        self.playing_started_at = None;
+                        self.progress_at_play_start = self.state.playback.duration_ms;
+                    }
+                }
+            } else if self.playing_started_at.is_some() {
+                let elapsed = self
+                    .playing_started_at
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                self.progress_at_play_start = self.progress_at_play_start + elapsed;
+                self.playing_started_at = None;
+            }
 
+            if self.state.playback.is_playing {
                 self.state.spin_angle += delta_ms as f64 * 0.003;
                 self.state.marquee_ms += delta_ms;
                 if self.state.marquee_ms >= 120 {

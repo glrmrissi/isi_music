@@ -20,6 +20,7 @@ mod ui;
 mod utils;
 
 use app::App;
+use rspotify::clients::OAuthClient;
 
 fn prompt(label: &str) -> String {
     print!("{}", label);
@@ -36,54 +37,53 @@ const BOLD: &str = "\x1b[1m";
 const GREEN: &str = "\x1b[32m";
 const GRAY: &str = "\x1b[90m";
 
+const BOX_W: usize = 63;
+
+fn visible_len(s: &str) -> usize {
+    let mut count = 0;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            while let Some(c) = chars.next() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn box_line(content: &str) -> String {
+    let padding_len = BOX_W.saturating_sub(visible_len(content));
+    let padding: String = " ".repeat(padding_len);
+    format!("{RED}│{RESET}{content}{padding}{RED}│{RESET}")
+}
+
+macro_rules! bl {
+    ($str:expr) => { box_line(&$str) };
+}
+
 async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
-    println!(
-        "{RED}│{RESET}  {BOLD}Last.fm Integration Setup{RESET}                                    {RED}│{RESET}"
-    );
+    println!("{}", bl!(format!("  {BOLD}Last.fm Integration Setup{RESET}")));
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
-    println!(
-        "{RED}│{RESET}  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}             {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  2. Create an API application                                 {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}                       {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}              {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  5. Add the following content:                                {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     {GRAY}[lastfm]{RESET}                                                  {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}                                  {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}                            {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}     session_key = \"\"                                          {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}                                                               {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}                 {RED}│{RESET}"
-    );
-    println!(
-        "{RED}│{RESET}  {YELLOW}Never commit your API Secret to Git.{RESET}                         {RED}│{RESET}"
-    );
+    println!("{}", bl!(format!("  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}")));
+    println!("{}", bl!("  2. Create an API application"));
+    println!("{}", bl!(format!("  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}")));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}")));
+    println!("{}", bl!("  5. Add the following content:"));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("     {GRAY}[lastfm]{RESET}")));
+    println!("{}", bl!(format!("     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}")));
+    println!("{}", bl!(format!("     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}")));
+    println!("{}", bl!("     session_key = \"\""));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}")));
+    println!("{}", bl!(format!("  {YELLOW}Never commit your API Secret to Git.{RESET}")));
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
     let api_key = loop {
@@ -145,15 +145,105 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     Ok(())
 }
 
+async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
+    println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
+    println!("{}", bl!(format!("  {BOLD}Spotify Setup{RESET}")));
+    println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
+    println!("{}", bl!("  To stream from Spotify you need your own Client ID:"));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  {BOLD}1.{RESET} Go to: {GREEN}https://developer.spotify.com/dashboard{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}2.{RESET} Click {BOLD}\"Create app\"{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}3.{RESET} Give it any name & description")));
+    println!("{}", bl!(format!("  {BOLD}4.{RESET} Add this Redirect URI:")));
+    println!("{}", bl!(format!("       {YELLOW}http://127.0.0.1:8888/callback{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}5.{RESET} Click {BOLD}\"Save\"{RESET}")));
+    println!("{}", bl!(format!("  {BOLD}6.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below")));
+    println!("{}", bl!(""));
+    println!("{}", bl!(format!("  {YELLOW}Uses PKCE - no client_secret needed!{RESET}")));
+    println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
+
+    let client_id = loop {
+        let v = prompt("Client ID: ");
+        if !v.is_empty() {
+            if v.len() < 10 {
+                println!(
+                    "  {YELLOW}That doesn't look like a valid Client ID, but I'll save it anyway.{RESET}"
+                );
+            }
+            break v;
+        }
+        println!("  {YELLOW}Client ID cannot be empty.{RESET}");
+    };
+
+    cfg.spotify.client_id = Some(client_id);
+    cfg.save()?;
+    println!("  {GREEN}✓{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+
+    let authenticate = loop {
+        let v = prompt("Authenticate with Spotify now? (Y/n): ");
+        let v = v.trim().to_lowercase();
+        if v.is_empty() || v == "y" || v == "yes" {
+            break true;
+        }
+        if v == "n" || v == "no" {
+            break false;
+        }
+    };
+
+    if authenticate {
+        let client_id = cfg.get_client_id().unwrap_or_default();
+        if !client_id.is_empty() {
+            match crate::spotify::auth::SpotifyAuth::build_client() {
+                Ok(mut rspotify_client) => match rspotify_client.get_authorize_url(None) {
+                    Ok(url) => {
+                        let code = crate::spotify::auth::SpotifyAuth::run_oauth_flow(&url).await?;
+                        match rspotify_client.request_token(&code).await {
+                            Ok(_) => {
+                                if let Ok(guard) = rspotify_client.token.lock().await {
+                                    if let Some(token) = guard.as_ref() {
+                                        let rt = token.refresh_token.as_deref().unwrap_or("");
+                                        crate::config::save_refresh_token(rt);
+                                        println!(
+                                            "  {GREEN}✓{RESET}  Authenticated successfully!\n"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("  {YELLOW}Authentication failed: {e}{RESET}");
+                                println!(
+                                    "  You can authenticate later by launching isi-music normally.\n"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  {YELLOW}Failed to generate auth URL: {e}{RESET}");
+                    }
+                },
+                Err(e) => {
+                    println!("  {YELLOW}Failed to build Spotify client: {e}{RESET}");
+                }
+            }
+        }
+    } else {
+        println!("  You can authenticate later by launching isi-music normally.\n");
+    }
+
+    Ok(())
+}
+
 fn print_help() {
-    println!("\
+    println!(
+        "\
 isi-music — terminal Spotify player
 
 USAGE
   isi-music               Launch the TUI player
   isi-music [COMMAND]
 
-TUI KEYBINDINGS");
+TUI KEYBINDINGS"
+    );
 
     let kb = keybinds::Keybinds::load();
     for (category, entries) in kb.format_help_text() {
@@ -163,7 +253,8 @@ TUI KEYBINDINGS");
         }
     }
 
-    println!("\
+    println!(
+        "\
 DAEMON MODE
   isi-music --daemon                 Start daemon in background
   isi-music --quit-daemon            Stop the daemon
@@ -183,9 +274,20 @@ QUEUE MANAGEMENT
   isi-music --play-id <N>            Play track by ID (from --ls)
 
 SETUP
-  isi-music setup                    First config
+  isi-music setup                    First config (wizard)
+  isi-music setup-spotify            Configure Spotify streaming
   isi-music setup-lastfm             Configure Last.fm scrobbling
   isi-music --clear-logs             Clear the log file
+
+SPOTIFY STREAMING
+  Run `isi-music setup-spotify` to configure Spotify.
+  The setup will:
+    1. Guide you to create a Spotify app at developer.spotify.com
+    2. Ask for your Client ID (no secret needed — uses PKCE)
+    3. Authenticate with Spotify in your browser
+    4. Save credentials to ~/.config/isi-music/config.toml
+  Each user needs their own Client ID (5-user limit in Dev Mode).
+  Set redirect URI to: http://127.0.0.1:8888/callback
 
 LAST.FM SCROBBLING
   Run `isi-music setup-lastfm` to enable scrobbling.
@@ -199,16 +301,12 @@ LAST.FM SCROBBLING
     - Send \"now playing\" updates when a track starts
     - Scrobble tracks after 50% of the song has been played
 
-AUTH
-  Uses PKCE — only client_id is needed (no client_secret)
-  Register at https://developer.spotify.com/dashboard
-  Set redirect URI to http://127.0.0.1:8888/callback
-
 FILES
   Config   ~/.config/isi-music/config.toml
   Log      ~/.local/share/isi-music/isi-music.log
   Socket   $XDG_RUNTIME_DIR/isi-music.sock
-");
+"
+    );
 }
 
 fn main() -> Result<()> {
@@ -306,6 +404,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if arg1 == Some("setup-spotify") {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(run_spotify_setup(&mut cfg));
+    }
+
     if arg1 == Some("setup-lastfm") {
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -322,6 +427,30 @@ fn main() -> Result<()> {
             .enable_all()
             .build()?
             .block_on(utils::wizard::run())?;
+        // Re-load config after wizard writes it
+        cfg = config::AppConfig::load()?;
+    }
+
+    if cfg.spotify.client_id.is_none() && std::env::var("SPOTIFY_CLIENT_ID").is_err() {
+        println!();
+        println!("  {YELLOW}Spotify not configured.{RESET} You can still use local files.");
+        println!("  Run {BOLD}isi-music setup-spotify{RESET} to enable Spotify streaming.\n");
+        let setup_now = loop {
+            let v = prompt("Configure Spotify now? (Y/n): ");
+            let v = v.trim().to_lowercase();
+            if v.is_empty() || v == "y" || v == "yes" {
+                break true;
+            }
+            if v == "n" || v == "no" {
+                break false;
+            }
+        };
+        if setup_now {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(run_spotify_setup(&mut cfg))?;
+        }
     }
 
     tokio::runtime::Builder::new_multi_thread()

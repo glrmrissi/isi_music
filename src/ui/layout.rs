@@ -8,7 +8,7 @@ use ratatui::{
 use super::{ActiveContent, Ui, UiState};
 
 impl Ui {
-    pub fn build_compact_layout(&self, _state: &UiState) -> LayoutNode {
+    pub fn build_compact_layout(&self, state: &UiState) -> LayoutNode {
         let leaf = |w: UiWidget| LayoutNode {
             widget: Some(w),
             direction: None,
@@ -31,32 +31,41 @@ impl Ui {
             )
         };
 
-        LayoutNode {
-            direction: Some(SerializableDirection::Vertical),
+        let mut constraints = vec![
+            SerializableConstraint::Length(1),
+            SerializableConstraint::Fill(1),
+        ];
+        let mut children: Vec<LayoutNode> = vec![
+            leaf(UiWidget::Header),
+            LayoutNode {
+                direction: Some(SerializableDirection::Horizontal),
+                constraints: Some(main_constraints),
+                widget: None,
+                children: Some(main_children),
+            },
+        ];
+
+        if state.show_lyrics {
+            constraints.push(SerializableConstraint::Length(5));
+            children.push(leaf(UiWidget::Lyrics));
+        }
+
+        constraints.push(SerializableConstraint::Length(1));
+        children.push(LayoutNode {
+            direction: Some(SerializableDirection::Horizontal),
             constraints: Some(vec![
-                SerializableConstraint::Length(1),
+                SerializableConstraint::Percentage(30),
                 SerializableConstraint::Fill(1),
-                SerializableConstraint::Length(1),
             ]),
             widget: None,
-            children: Some(vec![
-                leaf(UiWidget::Header),
-                LayoutNode {
-                    direction: Some(SerializableDirection::Horizontal),
-                    constraints: Some(main_constraints),
-                    widget: None,
-                    children: Some(main_children),
-                },
-                LayoutNode {
-                    direction: Some(SerializableDirection::Horizontal),
-                    constraints: Some(vec![
-                        SerializableConstraint::Percentage(30),
-                        SerializableConstraint::Fill(1),
-                    ]),
-                    widget: None,
-                    children: Some(vec![leaf(UiWidget::Marquee), leaf(UiWidget::Progress)]),
-                },
-            ]),
+            children: Some(vec![leaf(UiWidget::Marquee), leaf(UiWidget::Progress)]),
+        });
+
+        LayoutNode {
+            direction: Some(SerializableDirection::Vertical),
+            constraints: Some(constraints),
+            widget: None,
+            children: Some(children),
         }
     }
 
@@ -91,6 +100,7 @@ impl Ui {
                 UiWidget::Help => {}
                 UiWidget::AsciiArt => self.render_ascii_art(frame, area),
                 UiWidget::Spacer => {}
+                UiWidget::Lyrics => self.render_lyrics_compact(frame, state, area),
             }
             return;
         }

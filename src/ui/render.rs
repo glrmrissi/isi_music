@@ -528,13 +528,6 @@ impl Ui {
             height: root[2].height,
         };
 
-        let footer_area = Rect {
-            x: area.x,
-            y: area.y.saturating_add(area.height.saturating_sub(1)),
-            width: area.width,
-            height: 1,
-        };
-
         let art_size = top_area.height.min(18).min(top_area.width / 4).max(12);
 
         let top_cols = Layout::default()
@@ -641,15 +634,6 @@ impl Ui {
         }
 
         self.render_visualizer(frame, &state.playback, &state.viz_bands, viz_area, state);
-
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "[N/P] Skip  [PageDown/Up] Move Lyrics  [V] Vizualizer  [Y] Lyrics  [S] Shuffle  [R] Repeat  [/] Search  [L] Like  [+/-] Vol",
-                Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)
-            )))
-            .alignment(ratatui::layout::Alignment::Center),
-            footer_area,
-        );
     }
 
     pub fn render_welcome(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -836,6 +820,43 @@ impl Ui {
                 inner,
             );
         }
+    }
+
+    pub fn render_lyrics_compact(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let pb = &state.playback;
+        if area.width < 4 || area.height < 1 {
+            return;
+        }
+
+        let Some(lyrics) = &pb.lyrics else { return };
+        if !lyrics.is_synced { return; }
+
+        let active = lyrics.active_idx(pb.progress_ms).unwrap_or(0);
+
+        let current = lyrics.lines.get(active).map(|l| l.text.clone());
+        let next = lyrics.lines.get(active + 1).map(|l| l.text.clone());
+
+        let lines: Vec<Line> = std::iter::once(Line::from(""))
+            .chain(
+                current
+                    .map(|t| {
+                        Line::from(Span::styled(t, Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)))
+                            .alignment(Alignment::Center)
+                    })
+                    .into_iter(),
+            )
+            .chain(
+                next
+                    .map(|t| {
+                        Line::from(Span::styled(t, Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)))
+                            .alignment(Alignment::Center)
+                    })
+                    .into_iter(),
+            )
+            .collect();
+
+        if lines.len() <= 1 { return; }
+        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), area);
     }
 
     pub fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {

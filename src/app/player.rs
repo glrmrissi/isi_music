@@ -12,6 +12,8 @@ impl App {
         self.track_start_unix = crate::app::metadata::unix_now();
 
         self.state.playback.progress_ms = 0;
+        self.playing_started_at = None;
+        self.progress_at_play_start = 0;
         self.state.playback.radio_mode = self.radio_mode;
 
         if self.current_track_uri.starts_with("spotify:track:") {
