@@ -251,6 +251,83 @@ impl App {
         })
     }
 
+    #[cfg(test)]
+    pub async fn new_for_test() -> Self {
+        let (seek_tx, seek_rx) = mpsc::channel();
+        let spotify = crate::spotify::SpotifyClient::new_unauthenticated().await;
+        let debug_overlay = Arc::new(DebugOverlay::new());
+        let lyrics = crate::utils::lyrics::LyricsHandle::new(
+            std::env::temp_dir().join("isi-music-test-lyrics.db"),
+            reqwest::Client::new(),
+            debug_overlay.clone(),
+        )
+        .expect("Failed to create test lyrics handle");
+        let cache_manager = crate::utils::cache::CacheManager::new();
+        let mut state = crate::ui::UiState::new();
+
+        if spotify.authenticated {
+            if let Ok(playlists) = spotify.fetch_playlists().await {
+                state.playlists = playlists;
+                if !state.playlists.is_empty() {
+                    state.playlist_list.select(Some(0));
+                }
+            }
+        }
+
+        Self {
+            seek_tx,
+            seek_rx,
+            spotify,
+            player: None,
+            parked_player: None,
+            local_active: false,
+            saved_volume: 50,
+            local_db_path: String::new(),
+            lastfm: None,
+            ui: crate::ui::Ui::new(Default::default(), debug_overlay.clone()),
+            state,
+            last_tick: Instant::now(),
+            should_quit: false,
+            last_seek_time: None,
+            seek_hold_count: 0,
+            scrobble_sent: false,
+            track_start_unix: 0,
+            current_track_uri: String::new(),
+            last_art_uri: String::new(),
+            album_art_pending: None,
+            picker: ratatui_image::picker::Picker::halfblocks(),
+            #[cfg(feature = "mpris")]
+            mpris: None,
+            discord: None,
+            discord_last_title: String::new(),
+            discord_last_playing: false,
+            discord_pending_since: None,
+            band_energies: None,
+            art_url: None,
+            session_reconnecting: false,
+            radio_mode: false,
+            recent_track_uris: std::collections::VecDeque::new(),
+            playing_tracks: Vec::new(),
+            theme: Default::default(),
+            theme_rx: crate::utils::theme::ThemeWatcher::noop(),
+            keybinds: crate::keybinds::Keybinds::defaults(),
+            keybinds_rx: crate::keybinds::KeybindsWatcher::noop(),
+            consecutive_unavailable: 0,
+            spotify_streaming_disabled: false,
+            local_scan_rx: None,
+            local_scan_total: 0,
+            lyrics,
+            debug_overlay,
+            reconnect_attempts: 0,
+            last_reconnect_attempt: None,
+            last_playback_health_check: Instant::now(),
+            playing_started_at: None,
+            progress_at_play_start: 0,
+            initial_sync_done: false,
+            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
+        }
+    }
+
     async fn ensure_spotify_player(&mut self) -> bool {
         if self.player.is_some() && !self.local_active {
             return true;

@@ -46,3 +46,14 @@ impl KeybindsWatcher {
         self.stop.store(true, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+impl KeybindsWatcher {
+    pub fn noop() -> Self {
+        let (_, rx) = std::sync::mpsc::channel();
+        Self {
+            rx,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
