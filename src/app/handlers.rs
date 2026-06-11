@@ -81,6 +81,96 @@ impl App {
             return self.handle_search_key(code).await;
         }
 
+        if let Some(ref mut panel) = self.options_panel {
+            if panel.visible {
+                use crate::ui::options::{PanelAction, OptionsSection};
+                match panel.handle_key(code) {
+                    PanelAction::Close => {
+                        panel.visible = false;
+                        self.state.status_msg = Some("Options panel closed".to_string());
+                    }
+                    PanelAction::ToggleItem => {
+                        match panel.focused_section {
+                            OptionsSection::Features => match panel.selected_item {
+                                0 => {
+                                    self.state.show_album_art = !self.state.show_album_art;
+                                    panel.config.show_cover_images = Some(self.state.show_album_art);
+                                    self.state.status_msg = Some(if self.state.show_album_art {
+                                        "Cover images enabled".to_string()
+                                    } else {
+                                        "Cover images disabled".to_string()
+                                    });
+                                }
+                                1 => {
+                                    let v = !panel.config.enable_lyrics.unwrap_or(true);
+                                    panel.config.enable_lyrics = Some(v);
+                                    self.state.status_msg = Some(if v {
+                                        "Lyrics fetching enabled".to_string()
+                                    } else {
+                                        "Lyrics fetching disabled".to_string()
+                                    });
+                                }
+                                2 => {
+                                    self.state.show_visualizer = !self.state.show_visualizer;
+                                    panel.config.show_visualizer = Some(self.state.show_visualizer);
+                                    self.state.status_msg = Some(if self.state.show_visualizer {
+                                        "Visualizer enabled".to_string()
+                                    } else {
+                                        "Visualizer disabled".to_string()
+                                    });
+                                }
+                                3 => {
+                                    self.state.compact_mode = !self.state.compact_mode;
+                                    panel.config.compact_mode_default = Some(self.state.compact_mode);
+                                    self.state.status_msg = Some(if self.state.compact_mode {
+                                        "Compact mode on".to_string()
+                                    } else {
+                                        "Compact mode off".to_string()
+                                    });
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    }
+                    PanelAction::ClearAllCache => {
+                        let _ = panel.cache_manager.clear_all().await;
+                        panel.cache_stats = Some(panel.cache_manager.get_stats().await);
+                        self.state.status_msg = Some("All caches cleared".to_string());
+                    }
+                    PanelAction::CleanupExpired => {
+                        let _ = panel.cache_manager.cleanup_expired().await;
+                        panel.cache_stats = Some(panel.cache_manager.get_stats().await);
+                        self.state.status_msg = Some("Expired cache entries cleaned up".to_string());
+                    }
+                    PanelAction::RefreshStats => {
+                        panel.load_cache_stats().await;
+                        self.state.status_msg = Some("Cache stats refreshed".to_string());
+                    }
+                    PanelAction::RefreshPlaylists => {
+                        if self.spotify.authenticated {
+                            match self.spotify.fetch_playlists().await {
+                                Ok(playlists) => {
+                                    self.state.playlists = playlists;
+                                    if !self.state.playlists.is_empty() {
+                                        self.state.playlist_list.select(Some(0));
+                                    }
+                                    self.state.status_msg = Some("Playlists refreshed".to_string());
+                                }
+                                Err(e) => {
+                                    self.state.status_msg = Some(format!("Failed to refresh playlists: {e}"));
+                                }
+                            }
+                        } else {
+                            self.state.status_msg = Some("Not authenticated with Spotify".to_string());
+                        }
+                    }
+                    PanelAction::None => {}
+                }
+                return Ok(());
+            }
+        }
+
         match code {
             KeyCode::Left | KeyCode::Right => {
                 let now = Instant::now();
@@ -119,22 +209,6 @@ impl App {
             _ => {}
         }
 
-        if self.state.show_help {
-            if let Some(action) = self.keybinds.lookup(code, modifiers) {
-                use crate::keybinds::Action as A;
-                match action {
-                    A::NavUp | A::NavDown | A::ScrollUp | A::ScrollDown | A::Help | A::Back => {
-                        self.dispatch(action).await;
-                    }
-                    _ => {
-                        self.state.show_help = false;
-                        self.state.help_scroll = 0;
-                    }
-                }
-            }
-            return Ok(());
-        }
-
         if let Some(action) = self.keybinds.lookup(code, modifiers) {
             self.dispatch(action).await;
         }
@@ -146,25 +220,32 @@ impl App {
         use crate::keybinds::Action as A;
         match action {
             A::PlayPause => {
-                if let Some(player) = &mut self.player {
-                    player.toggle();
-                } else if self.spotify.authenticated {
-                    if self.spotify.toggle_playback().await.is_ok() {
-                        self.state.playback.is_playing = !self.state.playback.is_playing;
-                        if self.state.playback.is_playing {
-                            self.playing_started_at = Some(Instant::now());
-                            self.progress_at_play_start = self.state.playback.progress_ms;
-                        } else {
-                            if let Some(started) = self.playing_started_at {
-                                let elapsed = started.elapsed().as_millis() as u64;
-                                self.progress_at_play_start += elapsed;
-                            }
-                            self.playing_started_at = None;
+                if self.state.playback.is_playing {
+                    if let Some(player) = &mut self.player {
+                        player.pause();
+                    }
+                    self.state.playback.is_playing = false;
+                } else if let Some(player) = &mut self.player {
+                    player.play();
+                    self.state.playback.is_playing = true;
+                } else {
+                    if !self.ensure_spotify_player().await {
+                        self.ensure_local_player().await;
+                    }
+                    if let Some(player) = &mut self.player {
+                        if !player.is_playing() {
+                            player.play();
                         }
+                        self.state.playback.is_playing = true;
+                    } else if self.spotify.authenticated {
+                        let _ = self.spotify.toggle_playback().await;
                     }
                 }
             }
             A::NextTrack => {
+                if self.player.is_none() {
+                    self.ensure_spotify_player().await;
+                }
                 if let Some(player) = &mut self.player {
                     player.next();
                 } else if self.spotify.authenticated {
@@ -172,6 +253,9 @@ impl App {
                 }
             }
             A::PrevTrack => {
+                if self.player.is_none() {
+                    self.ensure_spotify_player().await;
+                }
                 if let Some(player) = &mut self.player {
                     player.prev();
                 } else if self.spotify.authenticated {
@@ -183,22 +267,30 @@ impl App {
                     player.volume_up();
                     self.state.playback.volume = player.volume();
                 }
+                self.saved_volume = self.state.playback.volume;
             }
             A::VolumeDown => {
                 if let Some(player) = &mut self.player {
                     player.volume_down();
                     self.state.playback.volume = player.volume();
                 }
+                self.saved_volume = self.state.playback.volume;
             }
             A::SeekForward => {}
             A::SeekBackward => {}
             A::ToggleShuffle => {
+                if self.player.is_none() {
+                    self.ensure_spotify_player().await;
+                }
                 if let Some(player) = &mut self.player {
                     player.toggle_shuffle();
                     self.state.playback.shuffle = player.shuffle();
                 }
             }
             A::CycleRepeat => {
+                if self.player.is_none() {
+                    self.ensure_spotify_player().await;
+                }
                 if let Some(player) = &mut self.player {
                     player.cycle_repeat();
                     self.state.playback.repeat = match player.repeat() {
@@ -334,19 +426,11 @@ impl App {
                 }
             }
             A::NavUp => {
-                if self.state.show_help {
-                    self.state.help_scroll = self.state.help_scroll.saturating_sub(1);
-                } else {
-                    self.state.nav_up();
-                }
+                self.state.nav_up();
             }
             A::NavDown => {
-                if self.state.show_help {
-                    self.state.help_scroll = self.state.help_scroll.saturating_add(1);
-                } else {
-                    self.state.nav_down();
-                    self.maybe_load_more().await;
-                }
+                self.state.nav_down();
+                self.maybe_load_more().await;
             }
             A::NavFirst => self.state.nav_first(),
             A::NavLast => {
@@ -363,10 +447,7 @@ impl App {
             A::TabPrev => self.state.switch_focus_prev(),
             A::Enter => self.handle_enter().await,
             A::Back => {
-                if self.state.show_help {
-                    self.state.show_help = false;
-                    self.state.help_scroll = 0;
-                } else if self.state.quick_search_active {
+                if self.state.quick_search_active {
                     self.state.cancel_quick_search();
                 } else if self.state.fullscreen_player {
                     self.state.fullscreen_player = false;
@@ -382,30 +463,28 @@ impl App {
                 }
             }
             A::Search => self.state.start_search(),
-            A::QuickSearch => match self.state.active_content {
-                ActiveContent::Tracks | ActiveContent::None | ActiveContent::LocalFiles => {
-                    self.state.start_quick_search();
-                    self.state.apply_quick_filter();
-                }
-                _ => {
-                    self.state.status_msg =
-                        Some("Quick search only works with Tracks or Local Files".to_string());
-                }
-            },
+            A::QuickSearch => {
+                self.state.start_quick_search();
+                self.state.apply_quick_filter();
+            }
             A::Help => {
-                self.state.show_help = !self.state.show_help;
-                self.state.help_scroll = 0;
-                if self.state.show_help {
-                    let raw = self.keybinds.format_help_text();
-                    let mut lines = Vec::new();
-                    for (cat, entries) in &raw {
-                        lines.push(format!("#{}", cat));
-                        for entry in entries {
-                            lines.push(format!("  {}", entry));
-                        }
-                        lines.push(String::new());
+                let raw = self.keybinds.format_help_text();
+                let mut lines = Vec::new();
+                for (cat, entries) in &raw {
+                    lines.push(format!("#{}", cat));
+                    for entry in entries {
+                        lines.push(format!("  {}", entry));
                     }
-                    self.state.help_text = lines;
+                    lines.push(String::new());
+                }
+                if let Some(ref mut panel) = self.options_panel {
+                    panel.set_help_text(lines);
+                    panel.focused_section = crate::ui::options::OptionsSection::Help;
+                    panel.selected_item = 0;
+                    if !panel.visible {
+                        panel.visible = true;
+                        self.state.status_msg = Some("Help — Options panel".to_string());
+                    }
                 }
             }
             A::ToggleCompact => {
@@ -440,13 +519,21 @@ impl App {
                     "Lyrics panel off".to_string()
                 });
             }
+            A::OptionsPanel => {
+                if let Some(ref mut panel) = self.options_panel {
+                    panel.toggle().await;
+                    self.state.status_msg = Some(if panel.visible {
+                        "Options panel opened".to_string()
+                    } else {
+                        "Options panel closed".to_string()
+                    });
+                }
+            }
             A::ToggleDebug => {
                 self.debug_overlay.toggle_visible();
             }
             A::ScrollUp => {
-                if self.state.show_help {
-                    self.state.help_scroll = self.state.help_scroll.saturating_sub(4);
-                } else if (self.state.fullscreen_player || self.state.show_lyrics)
+                if (self.state.fullscreen_player || self.state.show_lyrics)
                     && self
                         .state
                         .playback
@@ -460,9 +547,7 @@ impl App {
                 }
             }
             A::ScrollDown => {
-                if self.state.show_help {
-                    self.state.help_scroll = self.state.help_scroll.saturating_add(4);
-                } else if (self.state.fullscreen_player || self.state.show_lyrics)
+                if (self.state.fullscreen_player || self.state.show_lyrics)
                     && self
                         .state
                         .playback
@@ -720,6 +805,7 @@ impl App {
                             return;
                         }
                         self.activate_spotify_player();
+                        self.ensure_spotify_player().await;
                         if self
                             .state
                             .tracks
@@ -805,6 +891,7 @@ impl App {
                                 return;
                             }
                             self.activate_spotify_player();
+                            self.ensure_spotify_player().await;
                             if let Some(player) = &mut self.player {
                                 self.current_track_uri = track_uri.clone();
                                 tokio::time::sleep(Duration::from_millis(100)).await;

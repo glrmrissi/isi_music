@@ -122,9 +122,6 @@ pub struct UiState {
     pub show_lyrics: bool,
     pub compact_mode: bool,
     pub compact_effective: bool,
-    pub show_help: bool,
-    pub help_text: Vec<String>,
-    pub help_scroll: usize,
 }
 
 impl UiState {
@@ -181,9 +178,6 @@ impl UiState {
             show_lyrics: false,
             compact_mode: false,
             compact_effective: false,
-            show_help: false,
-            help_text: Vec::new(),
-            help_scroll: 0,
         }
     }
 

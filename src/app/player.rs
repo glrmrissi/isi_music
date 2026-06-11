@@ -112,9 +112,15 @@ impl App {
                 p.pause();
             }
         }
-        std::mem::swap(&mut self.player, &mut self.parked_player);
-        self.local_active = true;
-        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        self.player = None;
+        self.band_energies = None;
+        if self.parked_player.is_some() {
+            std::mem::swap(&mut self.player, &mut self.parked_player);
+            self.local_active = true;
+            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        } else {
+            self.local_active = true;
+        }
     }
 
     pub fn activate_spotify_player(&mut self) {
@@ -126,9 +132,15 @@ impl App {
                 p.pause();
             }
         }
-        std::mem::swap(&mut self.player, &mut self.parked_player);
-        self.local_active = false;
-        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        self.player = None;
+        self.band_energies = None;
+        if self.parked_player.is_some() {
+            std::mem::swap(&mut self.player, &mut self.parked_player);
+            self.local_active = false;
+            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        } else {
+            self.local_active = false;
+        }
     }
 
     pub fn sync_queue_display(&mut self) {
