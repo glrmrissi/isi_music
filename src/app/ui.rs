@@ -174,9 +174,7 @@ impl App {
     }
 
     pub async fn maybe_fetch_album_art(&mut self) {
-        let need_art_for_now_playing = !self.state.playback.title.is_empty();
-
-        if (!self.state.show_album_art && !need_art_for_now_playing) && self.discord.is_none() {
+        if !self.state.show_album_art && self.discord.is_none() {
             return;
         }
 

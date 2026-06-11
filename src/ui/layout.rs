@@ -46,7 +46,7 @@ impl Ui {
         ];
 
         if state.show_lyrics {
-            constraints.push(SerializableConstraint::Length(5));
+            constraints.push(SerializableConstraint::Length(3));
             children.push(leaf(UiWidget::Lyrics));
         }
 
@@ -101,6 +101,12 @@ impl Ui {
                 UiWidget::AsciiArt => self.render_ascii_art(frame, area),
                 UiWidget::Spacer => {}
                 UiWidget::Lyrics => self.render_lyrics_compact(frame, state, area),
+                UiWidget::NowPlaying => self.render_now_playing_widget(frame, state, area),
+                UiWidget::FullscreenLyrics => {
+                    if state.show_lyrics {
+                        self.render_lyrics(frame, state, area);
+                    }
+                }
             }
             return;
         }
@@ -131,13 +137,6 @@ impl Ui {
     }
 
     pub fn render_main_area_logic(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        if state.show_help {
-            let visible = (area.height.saturating_sub(4)).max(1) as usize;
-            let max_scroll = state.help_text.len().saturating_sub(visible);
-            state.help_scroll = state.help_scroll.min(max_scroll);
-            self.render_help_panel(frame, state, area);
-            return;
-        }
         if state.search_results.is_some() {
             self.render_search_panels(frame, state, area);
         } else {
@@ -155,6 +154,9 @@ impl Ui {
     }
 
     pub fn render_ascii_art(&self, frame: &mut Frame, area: Rect) {
+        if !self.theme.show_ascii_art {
+            return;
+        }
         let Some(lines) = self.theme.load_ascii_art() else {
             return;
         };
