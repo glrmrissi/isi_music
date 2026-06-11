@@ -8,12 +8,6 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square)](LICENSE)
 
-> **⚠️ Spotify Web API Changes (February 2026)**  
-> Spotify deprecated the old `/v1/me/tracks` and `/v1/me/albums` endpoints — they now return `403 Forbidden`.  
-> The new unified API requires a **Client ID** and a **Redirect URI** set to `http://127.0.0.1:8888/callback`  
-> in your [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).  
-> See [issue #41](https://github.com/glrmrissi/isi_music/issues/41).
-
 isi-music is a high-performance terminal audio player built in Rust for direct, efficient music playback. It serves as a lightweight alternative to resource-heavy desktop clients, eliminating the overhead of Electron and web-based wrappers. The engine integrates natively with Spotify through librespot and provides robust support for local audio files, ensuring high-fidelity playback across your entire library.
 
 The application is engineered for speed, utilizing an SQLite-backed cache for persistent metadata and lyrics management. It features an automated multi-source lyrics fetcher that prioritizes synced data from LRCLIB and Musixmatch, falling back to lyrics.ovh when necessary. By focusing on native binaries and a specialized terminal user interface, isi-music delivers a fast, low-latency audio experience that maximizes system resources while maintaining a comprehensive feature set for power users.
@@ -110,22 +104,6 @@ isi-music
 
 ---
 
-### Windows
-
-**1. Download `isi-music-windows.exe`** from the [Releases page](https://github.com/glrmrissi/isi_music/releases/latest).
-
-**2.** No extra dependencies — audio uses WASAPI, which is built into Windows.
-
-**3. Run** (Windows Terminal recommended):
-
-```powershell
-.\isi-music-windows.exe
-```
-
-For best experience, ensure Windows Terminal has a Nerd Font configured.
-
----
-
 ### macOS
 
 **1. Download the binary**
@@ -159,14 +137,6 @@ git clone https://github.com/glrmrissi/isi_music.git
 cd isi_music
 cargo build --release
 ./target/release/isi-music
-```
-
-**Windows (MSVC):**
-```powershell
-git clone https://github.com/glrmrissi/isi_music.git
-cd isi_music
-cargo build --release
-.\target\release\isi-music.exe
 ```
 
 **macOS:**
@@ -294,9 +264,9 @@ musixmatch_api_key = "TEST_API_KEY"
 | `Esc` | Close search / exit fullscreen |
 | `y` | Lyrics |
 | `v` | Hidden/Show vizualizer |
-| `c` | Hidden/Show cover art |
 | `PgDown` / `PgUp` | Scroll Lyrics |
 | `o` | Order by |
+| `t` / `?` | Options panel (Settings / Help) |
 | `Ctrl+F` | Quick Search |
 | `q` / `Ctrl+C` | Quit |
 
@@ -308,15 +278,17 @@ Themes are fully customizable. Create `~/.config/isi-music/theme.toml` to overri
 
 ```toml
 # --- Persona 3 Theme ---
-border_active = "#00d4ff"    
-border_inactive = "#002b4d"  
-highlight_bg = "#004b7a"      
+border_active = "#00d4ff"
+border_inactive = "#002b4d"
+highlight_bg = "#004b7a"
 text_primary = "#ffffff"
-accent_color = "#ffeb3b"    
+accent_color = "#ffeb3b"
+background = "#141414"
+text_secondary = "#808080"
+status_bar = "#1e1e1e"
 
 # --- ASCII Art Settings ---
-show_ascii_art = true # Only affect compact mode
-
+show_ascii_art = true
 ascii_art_inline = [
     "      .---.         ",
     "     /|66_\\        ",
@@ -333,82 +305,63 @@ ascii_art_inline = [
     "  |________|/      "
 ]
 
-# --- UI Layout Tree ---
-[layout_tree]
+# --- Compact Mode Layout ---
+[compact_layout]
 direction = "vertical"
 constraints = [
-    { length = 3 },    # Header/Visualizer
-    { fill = 1 },      # Main Body
-    { length = 1 },    # Marquee/Progress
-    { length = 1 }     # Help/Status
+    { length = 1 },    # Header
+    { fill = 1 },      # Body
+    { length = 1 }     # Playback
 ]
 
-# 1. Header Row
-[[layout_tree.children]]
+[[compact_layout.children]]
+widget = "header"
+
+[[compact_layout.children]]
 direction = "horizontal"
 constraints = [
-    { fill = 1 },      
-    { length = 40 }   
-]
-    [[layout_tree.children.children]]
-    widget = "header"
-
-    [[layout_tree.children.children]]
-    widget = "visualizer"
-
-# 2. Main Body Row
-[[layout_tree.children]]
-direction = "horizontal"
-constraints = [
-    { percentage = 25 },
+    { percentage = 35 },
     { fill = 1 }
 ]
-    # Sidebar (Library + Playlists + ASCII Art)
-    [[layout_tree.children.children]]
-    direction = "vertical"
-    constraints = [
-        { length = 7 },  # Library
-        { length = 15 }, # Playlists
-        { fill = 1 }     # ASCII Art (takes remaining space)
-    ]
-        [[layout_tree.children.children.children]]
-        widget = "library"
+    [[compact_layout.children.children]]
+    widget = "ascii_art"
 
-        [[layout_tree.children.children.children]]
-        widget = "playlists"
+    [[compact_layout.children.children]]
+    widget = "main_content"
 
-        [[layout_tree.children.children.children]]
-        widget = "ascii_art"
-
-    # Main Content Area
-    [[layout_tree.children.children]]
-    direction = "vertical"
-    constraints = [
-        { fill = 1 },
-        { length = 8 }
-    ]
-        [[layout_tree.children.children.children]]
-        widget = "main_content"
-
-        [[layout_tree.children.children.children]]
-        widget = "queue"
-
-# 3. Playback Row
-[[layout_tree.children]]
+[[compact_layout.children]]
 direction = "horizontal"
 constraints = [
     { percentage = 30 },
     { fill = 1 }
 ]
-    [[layout_tree.children.children]]
+    [[compact_layout.children.children]]
     widget = "marquee"
 
-    [[layout_tree.children.children]]
+    [[compact_layout.children.children]]
     widget = "progress"
 
-# 4. Status Bar
-[[layout_tree.children]]
-widget = "help"
+# --- Fullscreen Mode Layout ---
+[fullscreen_layout]
+direction = "vertical"
+constraints = [
+    { length = 18 },  # Now Playing
+    { length = 8 },   # Lyrics
+    { min = 0 }       # Visualizer
+]
+
+[[fullscreen_layout.children]]
+widget = "now_playing"
+
+[[fullscreen_layout.children]]
+widget = "fullscreen_lyrics"
+
+[[fullscreen_layout.children]]
+widget = "visualizer"
+
+# --- Normal Mode Layout (optional override) ---
+# [layout_tree]
+# ... same tree structure as compact/fullscreen
 ```
 
 ### Available Colors
@@ -424,6 +377,9 @@ Custom RGB: `rgb(r, g, b)` where r, g, b are 0-255
 - `highlight_bg`: Selected list items background
 - `text_primary`: Titles, artists, primary text
 - `accent_color`: Progress bars, icons, seek bar
+- `background`: Root background fill
+- `text_secondary`: Subtle text, timestamps, metadata
+- `status_bar`: Bottom status bar background
 
 ---
 
@@ -625,6 +581,23 @@ UI Render
     ├─ metadata display
     └─ embedded cover art
 ```
+
+---
+
+## Development
+
+```bash
+# Build
+cargo build --release
+
+# Run with debug logging
+RUST_LOG=isi_music=debug cargo run
+
+# Run tests (162 tests)
+cargo test
+```
+
+Test files live in `tests/` mirroring `src/` structure, referenced via `#[path]` attributes.
 
 ---
 
