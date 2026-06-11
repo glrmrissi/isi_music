@@ -247,7 +247,10 @@ impl App {
                     self.ensure_spotify_player().await;
                 }
                 if let Some(player) = &mut self.player {
-                    player.next();
+                    if player.next() {
+                        self.sync_track_selection();
+                        self.sync_queue_display();
+                    }
                 } else if self.spotify.authenticated {
                     let _ = self.spotify.next_track().await;
                 }
