@@ -158,10 +158,14 @@ struct LyricsCache {
 impl CacheManager {
     pub fn new() -> Self {
         let db_path = config::get_local_db_path();
+        Self::new_with_path(&db_path)
+    }
+
+    pub fn new_with_path(db_path: &str) -> Self {
         let options = CacheOptions::default();
         
-        let manager = Self {
-            db_path,
+        Self {
+            db_path: db_path.to_string(),
             search_cache: Arc::new(RwLock::new(SearchCache { store: HashMap::new() })),
             library_cache: Arc::new(Mutex::new(LibraryCache {
                 liked: Vec::new(),
@@ -172,9 +176,7 @@ impl CacheManager {
             })),
             lyrics_cache: Arc::new(RwLock::new(LyricsCache { store: HashMap::new() })),
             options,
-        };
-        
-        manager
+        }
     }
     
     fn unix_now() -> u64 {
@@ -404,3 +406,7 @@ impl CacheManager {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/utils/cache.rs"]
+mod tests;

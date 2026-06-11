@@ -13,7 +13,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::warn;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SerializableDirection {
     Horizontal,
@@ -49,7 +49,7 @@ pub enum UiWidget {
     FullscreenLyrics,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SerializableConstraint {
     Length(u16),
@@ -391,6 +391,17 @@ impl std::ops::Deref for ThemeWatcher {
     }
 }
 
+#[cfg(test)]
+impl ThemeWatcher {
+    pub fn noop() -> Self {
+        let (_, rx) = std::sync::mpsc::channel();
+        Self {
+            rx,
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
 impl Theme {
     pub fn get_path() -> Option<PathBuf> {
         dirs::config_dir().map(|mut p| {
@@ -566,6 +577,10 @@ fn parse_color_from_str(s: &str) -> Result<Color, String> {
         _ => Err(format!("Unknown color: {}", s)),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/utils/theme.rs"]
+mod tests;
 
 fn color_to_string(color: &Color) -> String {
     match color {

@@ -593,3 +593,7 @@ impl Serialize for KeybindsTomlOutput {
         map.end()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/keybinds/mod.rs"]
+mod tests;
