@@ -257,3 +257,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/app/ui.rs"]
+mod tests;

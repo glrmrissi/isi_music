@@ -391,3 +391,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/app/player.rs"]
+mod tests;

@@ -1093,3 +1093,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/app/handlers.rs"]
+mod tests;
