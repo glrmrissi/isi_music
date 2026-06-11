@@ -7,3 +7,4 @@ pub mod lyrics;
 pub mod mpris;
 pub mod theme;
 pub mod wizard;
+pub mod cache;
