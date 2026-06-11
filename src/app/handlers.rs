@@ -260,7 +260,10 @@ impl App {
                     self.ensure_spotify_player().await;
                 }
                 if let Some(player) = &mut self.player {
-                    player.prev();
+                    if player.prev() {
+                        self.sync_track_selection();
+                        self.sync_queue_display();
+                    }
                 } else if self.spotify.authenticated {
                     let _ = self.spotify.prev_track().await;
                 }
