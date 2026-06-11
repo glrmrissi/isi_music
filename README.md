@@ -277,22 +277,19 @@ musixmatch_api_key = "TEST_API_KEY"
 Themes are fully customizable. Create `~/.config/isi-music/theme.toml` to override the default theme.
 
 ```toml
-# --- Persona 3 Theme ---
 border_active = "#00d4ff"
-border_inactive = "#002b4d"
+border_inactive = "#ffffff"
 highlight_bg = "#004b7a"
 text_primary = "#ffffff"
 accent_color = "#ffeb3b"
 background = "#141414"
-text_secondary = "#808080"
+text_secondary = "#888888"
 status_bar = "#1e1e1e"
 
-# --- ASCII Art Settings ---
-show_ascii_art = true
 ascii_art_inline = [
     "      .---.         ",
-    "     /|66_\\        ",
-    "     \\| ^ /---.    ",
+    '     /|66_\        ',
+    '     \| ^ /---.    ',
     "      |'-'| UI |   ",
     "      |   |____|   ",
     "      |   |        ",
@@ -302,53 +299,161 @@ ascii_art_inline = [
     "  /________/ |     ",
     "  |        | |     ",
     "  |  ISI   | /     ",
-    "  |________|/      "
+    "  |________|/      ",
 ]
+show_ascii_art = true
 
-# --- Compact Mode Layout ---
+[widget_styles]
+
+[layout_tree]
+direction = "vertical"
+
+[[layout_tree.constraints]]
+length = 3
+
+[[layout_tree.constraints]]
+fill = 1
+
+[[layout_tree.constraints]]
+length = 1
+
+[[layout_tree.constraints]]
+length = 1
+
+[[layout_tree.children]]
+direction = "horizontal"
+
+[[layout_tree.children.constraints]]
+fill = 1
+
+[[layout_tree.children.constraints]]
+length = 40
+
+[[layout_tree.children.children]]
+widget = "header"
+
+[[layout_tree.children.children]]
+widget = "visualizer"
+
+[[layout_tree.children]]
+direction = "horizontal"
+
+[[layout_tree.children.constraints]]
+percentage = 20
+
+[[layout_tree.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children]]
+direction = "vertical"
+
+[[layout_tree.children.children.constraints]]
+length = 7
+
+[[layout_tree.children.children.constraints]]
+length = 15
+
+[[layout_tree.children.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children.children]]
+widget = "library"
+
+[[layout_tree.children.children.children]]
+widget = "playlists"
+
+[[layout_tree.children.children.children]]
+widget = "ascii_art"
+
+[[layout_tree.children.children]]
+direction = "vertical"
+
+[[layout_tree.children.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children.constraints]]
+length = 8
+
+[[layout_tree.children.children.children]]
+widget = "main_content"
+
+[[layout_tree.children.children.children]]
+widget = "queue"
+
+[[layout_tree.children]]
+direction = "horizontal"
+
+[[layout_tree.children.constraints]]
+percentage = 30
+
+[[layout_tree.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children]]
+widget = "marquee"
+
+[[layout_tree.children.children]]
+widget = "progress"
+
+[[layout_tree.children]]
+widget = "help"
+
 [compact_layout]
 direction = "vertical"
-constraints = [
-    { length = 1 },    # Header
-    { fill = 1 },      # Body
-    { length = 1 }     # Playback
-]
+
+[[compact_layout.constraints]]
+length = 1
+
+[[compact_layout.constraints]]
+fill = 1
+
+[[compact_layout.constraints]]
+length = 1
 
 [[compact_layout.children]]
 widget = "header"
 
 [[compact_layout.children]]
 direction = "horizontal"
-constraints = [
-    { percentage = 35 },
-    { fill = 1 }
-]
-    [[compact_layout.children.children]]
-    widget = "ascii_art"
 
-    [[compact_layout.children.children]]
-    widget = "main_content"
+[[compact_layout.children.constraints]]
+percentage = 35
+
+[[compact_layout.children.constraints]]
+fill = 1
+
+[[compact_layout.children.children]]
+widget = "ascii_art"
+
+[[compact_layout.children.children]]
+widget = "main_content"
 
 [[compact_layout.children]]
 direction = "horizontal"
-constraints = [
-    { percentage = 30 },
-    { fill = 1 }
-]
-    [[compact_layout.children.children]]
-    widget = "marquee"
 
-    [[compact_layout.children.children]]
-    widget = "progress"
+[[compact_layout.children.constraints]]
+percentage = 30
 
-# --- Fullscreen Mode Layout ---
+[[compact_layout.children.constraints]]
+fill = 1
+
+[[compact_layout.children.children]]
+widget = "marquee"
+
+[[compact_layout.children.children]]
+widget = "progress"
+
 [fullscreen_layout]
 direction = "vertical"
-constraints = [
-    { length = 18 },  # Now Playing
-    { length = 8 },   # Lyrics
-    { min = 0 }       # Visualizer
-]
+
+[[fullscreen_layout.constraints]]
+length = 18
+
+[[fullscreen_layout.constraints]]
+length = 8
+
+[[fullscreen_layout.constraints]]
+min = 0
 
 [[fullscreen_layout.children]]
 widget = "now_playing"
@@ -358,10 +463,6 @@ widget = "fullscreen_lyrics"
 
 [[fullscreen_layout.children]]
 widget = "visualizer"
-
-# --- Normal Mode Layout (optional override) ---
-# [layout_tree]
-# ... same tree structure as compact/fullscreen
 ```
 
 ### Available Colors
