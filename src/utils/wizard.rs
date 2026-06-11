@@ -465,12 +465,12 @@ fn template_gallery(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     println!("  Choose a colour preset for your theme:\n");
 
     let chosen_theme = pick_preset(term)?;
-    let cfg = {
+    let cfg = AppConfig::load().unwrap_or_else(|_| {
         let mut c = AppConfig::default();
         c.discord.enabled = Some(false);
         c.local.music_dir = detect_music_dir();
         c
-    };
+    });
 
     Ok((cfg, Some(chosen_theme)))
 }
@@ -580,48 +580,73 @@ pub async fn run() -> Result<()> {
     let theme_path = Theme::get_path().context("Could not determine theme path")?;
 
     println!();
-    println!("  {} Will write:", style("→").cyan());
-    println!("      {}", style(config_path.display()).cyan());
-    if chosen_theme.is_some() {
+    if path_idx == 2 {
+        println!("  {} Will write:", style("→").cyan());
         println!("      {}", style(theme_path.display()).cyan());
-    }
-    println!();
+        println!();
 
-    let write_config = if config_path.exists() {
-        confirm_overwrite(&config_path)?
-    } else {
-        true
-    };
-
-    let write_theme = chosen_theme.is_some()
-        && if theme_path.exists() {
+        let write_theme = if theme_path.exists() {
             confirm_overwrite(&theme_path)?
         } else {
             true
         };
 
-    if write_config {
-        save_config(&cfg)?;
-        println!(
-            "  {}  config saved → {}",
-            style("✓").green(),
-            style(config_path.display()).dim()
-        );
-    } else {
-        println!("  {}  config skipped.", style("–").dim());
-    }
-
-    if write_theme {
-        if let Some(ref t) = chosen_theme {
-            save_theme(t)?;
-            println!(
-                "  {}  theme  saved → {}",
-                style("✓").green(),
-                style(theme_path.display()).dim()
-            );
+        if write_theme {
+            if let Some(ref t) = chosen_theme {
+                save_theme(t)?;
+                println!(
+                    "  {}  theme  saved → {}",
+                    style("✓").green(),
+                    style(theme_path.display()).dim()
+                );
+            }
+        } else {
+            println!("  {}  theme  skipped.", style("–").dim());
         }
-    } else if chosen_theme.is_some() {
-        println!("  {}  theme  skipped.", style("–").dim());
+    } else {
+        println!("  {} Will write:", style("→").cyan());
+        println!("      {}", style(config_path.display()).cyan());
+        if chosen_theme.is_some() {
+            println!("      {}", style(theme_path.display()).cyan());
+        }
+        println!();
+
+        let write_config = if config_path.exists() {
+            confirm_overwrite(&config_path)?
+        } else {
+            true
+        };
+
+        let write_theme = chosen_theme.is_some()
+            && if theme_path.exists() {
+                confirm_overwrite(&theme_path)?
+            } else {
+                true
+            };
+
+        if write_config {
+            save_config(&cfg)?;
+            println!(
+                "  {}  config saved → {}",
+                style("✓").green(),
+                style(config_path.display()).dim()
+            );
+        } else {
+            println!("  {}  config skipped.", style("–").dim());
+        }
+
+        if write_theme {
+            if let Some(ref t) = chosen_theme {
+                save_theme(t)?;
+                println!(
+                    "  {}  theme  saved → {}",
+                    style("✓").green(),
+                    style(theme_path.display()).dim()
+                );
+            }
+        } else if chosen_theme.is_some() {
+            println!("  {}  theme  skipped.", style("–").dim());
+        }
     }
 
     println!();
