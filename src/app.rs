@@ -100,7 +100,7 @@ impl App {
             ))),
             _ => None,
         };
-        
+
         let debug_overlay = Arc::new(DebugOverlay::new());
 
         debug_overlay.log(LogLevel::Info, "isi-music starting up");
@@ -112,7 +112,9 @@ impl App {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("SPOTIFY_FORBIDDEN") {
-                    warn!("Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit");
+                    warn!(
+                        "Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit"
+                    );
                     debug_overlay.log(
                         LogLevel::Warn,
                         "Spotify 403 — create your own app: isi-music setup-spotify",
@@ -182,7 +184,7 @@ impl App {
                 None
             }
         };
-        
+
         let discord = if cfg.discord.enabled == Some(true) {
             let app_id = cfg
                 .discord
@@ -354,8 +356,10 @@ impl App {
                 if msg.contains("free") || msg.contains("premium") {
                     self.spotify_streaming_disabled = true;
                 }
-                self.debug_overlay
-                    .log(LogLevel::Warn, format!("Failed to create Spotify player: {e:#}"));
+                self.debug_overlay.log(
+                    LogLevel::Warn,
+                    format!("Failed to create Spotify player: {e:#}"),
+                );
                 false
             }
         }
@@ -379,8 +383,10 @@ impl App {
                 true
             }
             Err(e) => {
-                self.debug_overlay
-                    .log(LogLevel::Error, format!("Failed to create local player: {e}"));
+                self.debug_overlay.log(
+                    LogLevel::Error,
+                    format!("Failed to create local player: {e}"),
+                );
                 false
             }
         }

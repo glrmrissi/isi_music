@@ -161,7 +161,10 @@ fn detect_music_dir() -> Option<String> {
 
 fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
     println!();
-    println!("  {}", style("Configure Spotify (optional but recommended)").bold());
+    println!(
+        "  {}",
+        style("Configure Spotify (optional but recommended)").bold()
+    );
     println!();
     println!(
         "  {}",
@@ -170,7 +173,9 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
     println!(
         "  {}  {}",
         style("1.").cyan(),
-        style("Go to https://developer.spotify.com/dashboard").cyan().underlined()
+        style("Go to https://developer.spotify.com/dashboard")
+            .cyan()
+            .underlined()
     );
     println!(
         "  {}  {}",
@@ -210,7 +215,10 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
             println!(
                 "  {}  {}",
                 style("⚠").yellow(),
-                style("That doesn't look like a valid Client ID. It will be saved but may not work.").dim()
+                style(
+                    "That doesn't look like a valid Client ID. It will be saved but may not work."
+                )
+                .dim()
             );
         }
         cfg.spotify.client_id = Some(trimmed);

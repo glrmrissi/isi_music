@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod debug_overlay;
 pub mod discord;
 pub mod ipc;
@@ -7,4 +8,3 @@ pub mod lyrics;
 pub mod mpris;
 pub mod theme;
 pub mod wizard;
-pub mod cache;

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 use crate::player::{AudioPlayer, QueuedTrack, RepeatMode};

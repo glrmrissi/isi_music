@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::player::QueuedTrack;
 use super::super::App;
+use crate::player::QueuedTrack;
 
 #[path = "mock_player.rs"]
 mod mock_player;
@@ -47,8 +47,14 @@ async fn sync_queue_display_shows_player_queue() {
     app.sync_queue_display();
 
     assert_eq!(app.state.queue_items.len(), 2);
-    assert_eq!(app.state.queue_items[0], ("Track A".into(), "Artist A".into()));
-    assert_eq!(app.state.queue_items[1], ("Track B".into(), "Artist B".into()));
+    assert_eq!(
+        app.state.queue_items[0],
+        ("Track A".into(), "Artist A".into())
+    );
+    assert_eq!(
+        app.state.queue_items[1],
+        ("Track B".into(), "Artist B".into())
+    );
 }
 
 #[tokio::test]
@@ -75,7 +81,10 @@ async fn sync_queue_display_shows_parked_with_prefix_when_spotify_active() {
     app.sync_queue_display();
 
     assert_eq!(app.state.queue_items.len(), 2);
-    assert_eq!(app.state.queue_items[0], ("Track A".into(), "Artist A".into()));
+    assert_eq!(
+        app.state.queue_items[0],
+        ("Track A".into(), "Artist A".into())
+    );
     assert!(app.state.queue_items[1].0.contains("Track B"));
 }
 

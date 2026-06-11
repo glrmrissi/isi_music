@@ -1,13 +1,13 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
+use super::super::App;
 use crate::keybinds::Action;
 use crate::player::{AudioPlayer, QueuedTrack, RepeatMode};
 use crate::spotify::TrackSummary;
 use crate::ui::Focus;
-use super::super::App;
 
 #[path = "mock_player.rs"]
 mod mock_player;
@@ -353,10 +353,16 @@ async fn dispatch_cycle_repeat_cycles_through_modes() {
     app.player = Some(mock);
 
     app.dispatch(Action::CycleRepeat).await;
-    assert_eq!(app.state.playback.repeat, rspotify::model::RepeatState::Track);
+    assert_eq!(
+        app.state.playback.repeat,
+        rspotify::model::RepeatState::Track
+    );
 
     app.dispatch(Action::CycleRepeat).await;
-    assert_eq!(app.state.playback.repeat, rspotify::model::RepeatState::Context);
+    assert_eq!(
+        app.state.playback.repeat,
+        rspotify::model::RepeatState::Context
+    );
 
     app.dispatch(Action::CycleRepeat).await;
     assert_eq!(app.state.playback.repeat, rspotify::model::RepeatState::Off);

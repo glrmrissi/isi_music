@@ -10,7 +10,11 @@ fn unix_now_returns_recent_timestamp() {
     let result = crate::app::metadata::unix_now();
 
     // Should be within 2 seconds of our reference
-    let diff = if result > now { result - now } else { now - result };
+    let diff = if result > now {
+        result - now
+    } else {
+        now - result
+    };
     assert!(diff < 2, "unix_now() off by {diff}s");
 }
 

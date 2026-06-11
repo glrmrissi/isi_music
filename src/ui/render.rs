@@ -671,7 +671,9 @@ impl Ui {
         }
 
         let Some(lyrics) = &pb.lyrics else { return };
-        if !lyrics.is_synced { return; }
+        if !lyrics.is_synced {
+            return;
+        }
 
         let active = lyrics.active_idx(pb.progress_ms).unwrap_or(0);
 
@@ -682,22 +684,33 @@ impl Ui {
             .chain(
                 current
                     .map(|t| {
-                        Line::from(Span::styled(t, Style::default().fg(self.theme.border_active).add_modifier(Modifier::BOLD)))
-                            .alignment(Alignment::Center)
+                        Line::from(Span::styled(
+                            t,
+                            Style::default()
+                                .fg(self.theme.border_active)
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                        .alignment(Alignment::Center)
                     })
                     .into_iter(),
             )
             .chain(
-                next
-                    .map(|t| {
-                        Line::from(Span::styled(t, Style::default().fg(self.theme.border_inactive).add_modifier(Modifier::DIM)))
-                            .alignment(Alignment::Center)
-                    })
-                    .into_iter(),
+                next.map(|t| {
+                    Line::from(Span::styled(
+                        t,
+                        Style::default()
+                            .fg(self.theme.border_inactive)
+                            .add_modifier(Modifier::DIM),
+                    ))
+                    .alignment(Alignment::Center)
+                })
+                .into_iter(),
             )
             .collect();
 
-        if lines.len() <= 1 { return; }
+        if lines.len() <= 1 {
+            return;
+        }
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), area);
     }
 

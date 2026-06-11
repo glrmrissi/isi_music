@@ -163,10 +163,12 @@ impl CacheManager {
 
     pub fn new_with_path(db_path: &str) -> Self {
         let options = CacheOptions::default();
-        
+
         Self {
             db_path: db_path.to_string(),
-            search_cache: Arc::new(RwLock::new(SearchCache { store: HashMap::new() })),
+            search_cache: Arc::new(RwLock::new(SearchCache {
+                store: HashMap::new(),
+            })),
             library_cache: Arc::new(Mutex::new(LibraryCache {
                 liked: Vec::new(),
                 playlists: HashMap::new(),
@@ -174,22 +176,24 @@ impl CacheManager {
                 artists: HashMap::new(),
                 shows: HashMap::new(),
             })),
-            lyrics_cache: Arc::new(RwLock::new(LyricsCache { store: HashMap::new() })),
+            lyrics_cache: Arc::new(RwLock::new(LyricsCache {
+                store: HashMap::new(),
+            })),
             options,
         }
     }
-    
+
     fn unix_now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
     }
-    
+
     pub async fn clear_search(&self) -> Result<()> {
         let mut search_guard = self.search_cache.write().await;
         search_guard.store.clear();
-        
+
         let db_path = self.db_path.clone();
         spawn_blocking(move || {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -199,11 +203,11 @@ impl CacheManager {
                     0
                 });
         });
-        
+
         info!("Search cache cleared");
         Ok(())
     }
-    
+
     pub async fn clear_library(&self) -> Result<()> {
         let mut lib_guard = self.library_cache.lock().unwrap();
         lib_guard.liked.clear();
@@ -211,7 +215,7 @@ impl CacheManager {
         lib_guard.albums.clear();
         lib_guard.artists.clear();
         lib_guard.shows.clear();
-        
+
         let db_path = self.db_path.clone();
         spawn_blocking(move || {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -221,15 +225,15 @@ impl CacheManager {
                     0
                 });
         });
-        
+
         info!("Library cache cleared");
         Ok(())
     }
-    
+
     pub async fn clear_lyrics(&self) -> Result<()> {
         let mut lyrics_guard = self.lyrics_cache.write().await;
         lyrics_guard.store.clear();
-        
+
         let db_path = self.db_path.clone();
         spawn_blocking(move || {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -239,42 +243,46 @@ impl CacheManager {
                     0
                 });
         });
-        
+
         info!("Lyrics cache cleared");
         Ok(())
     }
-    
+
     pub async fn clear_all(&self) -> Result<()> {
         self.clear_search().await?;
         self.clear_library().await?;
         self.clear_lyrics().await?;
-        
+
         info!("All caches cleared");
         Ok(())
     }
-    
+
     pub async fn get_stats(&self) -> CacheStats {
         let search_guard = self.search_cache.read().await;
         let lyrics_guard = self.lyrics_cache.read().await;
         let lib_guard = self.library_cache.lock().unwrap();
-        
+
         let now = Self::unix_now();
         let keep_seconds = self.options.keep_days * 24 * 3600;
-        
-        let search_entries = search_guard.store.values()
+
+        let search_entries = search_guard
+            .store
+            .values()
             .filter(|(ts, _)| now - (*ts as u64) < keep_seconds.into())
             .count();
-            
-        let lyrics_entries = lyrics_guard.store.values()
+
+        let lyrics_entries = lyrics_guard
+            .store
+            .values()
             .filter(|l| now - l.saved_at < keep_seconds.into())
             .count();
-        
-        let library_entries = lib_guard.liked.len() + 
-            lib_guard.playlists.values().map(|v| v.len()).sum::<usize>() +
-            lib_guard.albums.values().map(|v| v.len()).sum::<usize>() +
-            lib_guard.artists.values().map(|v| v.len()).sum::<usize>() +
-            lib_guard.shows.values().map(|v| v.len()).sum::<usize>();
-        
+
+        let library_entries = lib_guard.liked.len()
+            + lib_guard.playlists.values().map(|v| v.len()).sum::<usize>()
+            + lib_guard.albums.values().map(|v| v.len()).sum::<usize>()
+            + lib_guard.artists.values().map(|v| v.len()).sum::<usize>()
+            + lib_guard.shows.values().map(|v| v.len()).sum::<usize>();
+
         CacheStats {
             search_cache_entries: search_entries,
             library_cache_entries: library_entries,
@@ -285,27 +293,31 @@ impl CacheManager {
             last_cleanup: None,
         }
     }
-    
+
     pub async fn cleanup_expired(&self) -> Result<()> {
         let now = Self::unix_now();
         let keep_seconds = self.options.keep_days * 24 * 3600;
-        
+
         // Clean search cache
         {
             let mut search_guard = self.search_cache.write().await;
-            search_guard.store.retain(|_, (ts, _)| now - (*ts as u64) < keep_seconds.into());
+            search_guard
+                .store
+                .retain(|_, (ts, _)| now - (*ts as u64) < keep_seconds.into());
         }
-        
+
         // Clean lyrics cache
         {
             let mut lyrics_guard = self.lyrics_cache.write().await;
-            lyrics_guard.store.retain(|_, l| now - l.saved_at < keep_seconds.into());
+            lyrics_guard
+                .store
+                .retain(|_, l| now - l.saved_at < keep_seconds.into());
         }
-        
+
         info!("Cache cleanup completed");
         Ok(())
     }
-    
+
     #[allow(dead_code)]
     pub async fn update_library_cache(&self, key: &str, data: impl Serialize) {
         let data_json = match serde_json::to_string(&data) {
@@ -315,7 +327,7 @@ impl CacheManager {
                 return;
             }
         };
-        
+
         let key = key.to_string();
         let db_path = self.db_path.clone();
         let now = Self::unix_now();
@@ -327,7 +339,7 @@ impl CacheManager {
                     return;
                 }
             };
-            
+
             if let Err(e) = conn.execute(
                 "INSERT OR REPLACE INTO library_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
                 params![key, data_json, now],
@@ -336,14 +348,14 @@ impl CacheManager {
             }
         });
     }
-    
+
     #[allow(dead_code)]
     pub async fn add_lyrics(&self, key: String, lyrics: CachedLyrics) {
         {
             let mut lyrics_guard = self.lyrics_cache.write().await;
             lyrics_guard.store.insert(key.clone(), lyrics.clone());
         }
-        
+
         let db_path = self.db_path.clone();
         spawn_blocking(move || {
             let conn = match rusqlite::Connection::open(&db_path) {
@@ -353,7 +365,7 @@ impl CacheManager {
                     return;
                 }
             };
-            
+
             let json = match serde_json::to_string(&lyrics) {
                 Ok(json) => json,
                 Err(e) => {
@@ -361,7 +373,7 @@ impl CacheManager {
                     return;
                 }
             };
-            
+
             if let Err(e) = conn.execute(
                 "INSERT OR REPLACE INTO lyrics_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
                 params![key, json, lyrics.saved_at],
@@ -370,14 +382,16 @@ impl CacheManager {
             }
         });
     }
-    
+
     #[allow(dead_code)]
     pub async fn update_search_cache(&self, key: String, results: CachedSearch) {
         {
             let mut search_guard = self.search_cache.write().await;
-            search_guard.store.insert(key.clone(), (Self::unix_now(), results.clone()));
+            search_guard
+                .store
+                .insert(key.clone(), (Self::unix_now(), results.clone()));
         }
-        
+
         let db_path = self.db_path.clone();
         let now = Self::unix_now();
         let json = match serde_json::to_string(&results) {
@@ -387,7 +401,7 @@ impl CacheManager {
                 return;
             }
         };
-        
+
         spawn_blocking(move || {
             let conn = match rusqlite::Connection::open(&db_path) {
                 Ok(conn) => conn,
@@ -396,7 +410,7 @@ impl CacheManager {
                     return;
                 }
             };
-            
+
             if let Err(e) = conn.execute(
                 "INSERT OR REPLACE INTO search_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
                 params![key, json, now],

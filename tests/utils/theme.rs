@@ -75,7 +75,10 @@ fn serializable_direction_roundtrip() {
 fn serializable_constraint_roundtrip() {
     let pairs = [
         (SerializableConstraint::Length(10), Constraint::Length(10)),
-        (SerializableConstraint::Percentage(50), Constraint::Percentage(50)),
+        (
+            SerializableConstraint::Percentage(50),
+            Constraint::Percentage(50),
+        ),
         (SerializableConstraint::Ratio(1, 3), Constraint::Ratio(1, 3)),
         (SerializableConstraint::Min(5), Constraint::Min(5)),
         (SerializableConstraint::Max(100), Constraint::Max(100)),
@@ -96,10 +99,7 @@ fn parse_color_named() {
     assert_eq!(parse_color_from_str("white").unwrap(), Color::White);
     assert_eq!(parse_color_from_str("gray").unwrap(), Color::Gray);
     assert_eq!(parse_color_from_str("dark_gray").unwrap(), Color::DarkGray);
-    assert_eq!(
-        parse_color_from_str("transparent").unwrap(),
-        Color::Reset
-    );
+    assert_eq!(parse_color_from_str("transparent").unwrap(), Color::Reset);
     assert_eq!(parse_color_from_str("none").unwrap(), Color::Reset);
 }
 
@@ -142,7 +142,12 @@ fn theme_toml_roundtrip() {
     assert_eq!(t.text_secondary, deserialized.text_secondary);
     assert_eq!(
         t.fullscreen_layout.children.as_ref().unwrap().len(),
-        deserialized.fullscreen_layout.children.as_ref().unwrap().len()
+        deserialized
+            .fullscreen_layout
+            .children
+            .as_ref()
+            .unwrap()
+            .len()
     );
 }
 

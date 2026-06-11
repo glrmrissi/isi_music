@@ -468,8 +468,8 @@ impl Theme {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("Failed to create theme dir: {e}"))?;
         }
-        let toml_str = toml::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize theme: {e}"))?;
+        let toml_str =
+            toml::to_string_pretty(self).map_err(|e| format!("Failed to serialize theme: {e}"))?;
         fs::write(&path, toml_str).map_err(|e| format!("Failed to write theme: {e}"))?;
         Ok(())
     }

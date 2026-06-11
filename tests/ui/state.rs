@@ -101,10 +101,7 @@ fn nav_last_selects_last() {
     let mut s = UiState::new();
     s.focus = Focus::Library;
     s.nav_last();
-    assert_eq!(
-        s.library_list.selected(),
-        Some(LIBRARY_ITEMS.len() - 1)
-    );
+    assert_eq!(s.library_list.selected(), Some(LIBRARY_ITEMS.len() - 1));
 }
 
 #[test]

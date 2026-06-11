@@ -29,7 +29,10 @@ fn parse_key_combo_simple_char() {
 fn parse_key_combo_uppercase_normalized_to_lowercase() {
     let kc = parse_key_combo("A").unwrap();
     assert_eq!(kc.key, KeyId::Char('a'));
-    assert!(!kc.shift, "input is lowercased before processing, shift not inferred");
+    assert!(
+        !kc.shift,
+        "input is lowercased before processing, shift not inferred"
+    );
 }
 
 #[test]
@@ -147,16 +150,39 @@ fn name_to_action_not_found() {
 
 #[test]
 fn key_combo_to_string_roundtrip() {
-    let cases = &["a", "A", "space", "enter", "tab", "backtab", "esc",
-                  "backspace", "delete", "up", "down", "left", "right",
-                  "home", "end", "pageup", "pagedown", "f1", "f12",
-                  "ctrl+x", "alt+space", "ctrl+alt+delete"];
+    let cases = &[
+        "a",
+        "A",
+        "space",
+        "enter",
+        "tab",
+        "backtab",
+        "esc",
+        "backspace",
+        "delete",
+        "up",
+        "down",
+        "left",
+        "right",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+        "f1",
+        "f12",
+        "ctrl+x",
+        "alt+space",
+        "ctrl+alt+delete",
+    ];
     for s in cases {
         if let Some(kc) = parse_key_combo(s) {
             let rendered = key_combo_to_string(&kc);
             if *s != "backtab" {
                 let parsed_back = parse_key_combo(&rendered.to_lowercase());
-                assert!(parsed_back.is_some(), "failed to roundtrip '{s}' → '{rendered}'");
+                assert!(
+                    parsed_back.is_some(),
+                    "failed to roundtrip '{s}' → '{rendered}'"
+                );
             }
         }
     }
@@ -251,10 +277,7 @@ fn lookup_y_is_toggle_lyrics() {
 fn lookup_unmapped_returns_none() {
     let k = Keybinds::defaults();
     assert_eq!(k.lookup(KeyCode::F(24), KeyModifiers::empty()), None);
-    assert_eq!(
-        k.lookup(KeyCode::Char(' '), KeyModifiers::ALT),
-        None
-    );
+    assert_eq!(k.lookup(KeyCode::Char(' '), KeyModifiers::ALT), None);
 }
 
 #[test]

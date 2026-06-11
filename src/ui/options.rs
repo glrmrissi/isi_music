@@ -4,9 +4,9 @@ use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style, Color},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap, Padding},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
 };
 
 use super::UiState;
@@ -44,12 +44,12 @@ pub enum OptionsSection {
     Help,
 }
 
-    const SECTIONS: &[OptionsSection] = &[
-        OptionsSection::Features,
-        OptionsSection::Cache,
-        OptionsSection::QuickAccess,
-        OptionsSection::Help,
-    ];
+const SECTIONS: &[OptionsSection] = &[
+    OptionsSection::Features,
+    OptionsSection::Cache,
+    OptionsSection::QuickAccess,
+    OptionsSection::Help,
+];
 
 fn bg_style() -> Style {
     Style::default().bg(Color::Rgb(20, 20, 20))
@@ -155,22 +155,24 @@ impl OptionsPanel {
                 self.selected_item = 0;
                 PanelAction::None
             }
-            KeyCode::Enter => {
-                match self.focused_section {
-                    OptionsSection::Cache => match self.selected_item {
-                        4 => PanelAction::ClearAllCache,
-                        5 => PanelAction::CleanupExpired,
-                        6 => PanelAction::RefreshStats,
-                        7 => PanelAction::RefreshPlaylists,
-                        _ => PanelAction::None,
-                    },
-                    _ => PanelAction::ToggleItem,
-                }
-            }
-            KeyCode::Char('c') | KeyCode::Char('C') if self.focused_section == OptionsSection::Cache => {
+            KeyCode::Enter => match self.focused_section {
+                OptionsSection::Cache => match self.selected_item {
+                    4 => PanelAction::ClearAllCache,
+                    5 => PanelAction::CleanupExpired,
+                    6 => PanelAction::RefreshStats,
+                    7 => PanelAction::RefreshPlaylists,
+                    _ => PanelAction::None,
+                },
+                _ => PanelAction::ToggleItem,
+            },
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if self.focused_section == OptionsSection::Cache =>
+            {
                 PanelAction::ClearAllCache
             }
-            KeyCode::Char('r') | KeyCode::Char('R') if self.focused_section == OptionsSection::Cache => {
+            KeyCode::Char('r') | KeyCode::Char('R')
+                if self.focused_section == OptionsSection::Cache =>
+            {
                 PanelAction::RefreshStats
             }
             _ => PanelAction::None,
@@ -180,10 +182,16 @@ impl OptionsPanel {
     pub fn navigate_sections(&mut self, up: bool, down: bool) {
         if let Some(current) = SECTIONS.iter().position(|s| *s == self.focused_section) {
             let mut new = current;
-            if up && new == 0 { new = SECTIONS.len() - 1; }
-            else if up { new -= 1; }
-            if down && new == SECTIONS.len() - 1 { new = 0; }
-            else if down { new += 1; }
+            if up && new == 0 {
+                new = SECTIONS.len() - 1;
+            } else if up {
+                new -= 1;
+            }
+            if down && new == SECTIONS.len() - 1 {
+                new = 0;
+            } else if down {
+                new += 1;
+            }
             self.focused_section = SECTIONS[new];
         }
     }
@@ -210,10 +218,7 @@ impl OptionsPanel {
 
         // Opaque backdrop for the full popup
         frame.render_widget(Clear, content_area);
-        frame.render_widget(
-            Paragraph::new("").style(bg),
-            content_area,
-        );
+        frame.render_widget(Paragraph::new("").style(bg), content_area);
 
         let block = Block::default()
             .title(" Options Panel ")
@@ -228,10 +233,7 @@ impl OptionsPanel {
 
         let sections_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(28),
-                Constraint::Min(0),
-            ])
+            .constraints([Constraint::Length(28), Constraint::Min(0)])
             .split(inner_area);
 
         let sections_area = sections_layout[0];
@@ -251,8 +253,14 @@ impl OptionsPanel {
         frame.render_widget(Paragraph::new("").style(bg), footer_area);
 
         let footer_text = Line::from(vec![
-            Span::styled(" [\u{2191}\u{2193}] Items ", Style::default().fg(Color::Gray)),
-            Span::styled(" [\u{2190}\u{2192}/Tab] Sections ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                " [\u{2191}\u{2193}] Items ",
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                " [\u{2190}\u{2192}/Tab] Sections ",
+                Style::default().fg(Color::Gray),
+            ),
             Span::styled(" [Enter] Select ", Style::default().fg(Color::Yellow)),
             Span::styled(" [Esc] Close ", Style::default().fg(Color::Gray)),
         ]);
@@ -266,21 +274,26 @@ impl OptionsPanel {
     }
 
     fn render_sections(&self, frame: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = SECTIONS.iter().map(|section| {
-            let label = match section {
-                OptionsSection::Features => "  Features",
-                OptionsSection::Cache => "  Cache",
-                OptionsSection::QuickAccess => "  Quick Access",
-                OptionsSection::Help => "  Help",
-            };
-            let is_focused = self.focused_section == *section;
-            let style = if is_focused {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            ListItem::new(Line::from(Span::styled(label, style)))
-        }).collect();
+        let items: Vec<ListItem> = SECTIONS
+            .iter()
+            .map(|section| {
+                let label = match section {
+                    OptionsSection::Features => "  Features",
+                    OptionsSection::Cache => "  Cache",
+                    OptionsSection::QuickAccess => "  Quick Access",
+                    OptionsSection::Help => "  Help",
+                };
+                let is_focused = self.focused_section == *section;
+                let style = if is_focused {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(Line::from(Span::styled(label, style)))
+            })
+            .collect();
 
         let mut list_state = ratatui::widgets::ListState::default();
         if let Some(idx) = SECTIONS.iter().position(|s| *s == self.focused_section) {
@@ -315,47 +328,71 @@ impl OptionsPanel {
         }
     }
 
-    fn render_item_list(&self, frame: &mut Frame, area: Rect, title: &str, items: &[(&str, &str, bool)]) {
+    fn render_item_list(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        items: &[(&str, &str, bool)],
+    ) {
         let block = section_block(title);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let list_items: Vec<ListItem> = items.iter().enumerate().map(|(i, &(label, _, enabled))| {
-            let is_selected = i == self.selected_item;
-            let prefix = if is_selected { "\u{25b6} " } else { "  " };
-            let status_str = if enabled { "On" } else { "Off" };
-            let status_color = if enabled { Color::Green } else { Color::Red };
-            let line_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{}{}: ", prefix, label), line_style),
-                Span::styled(status_str, Style::default().fg(status_color)),
-            ]))
-        }).collect();
+        let list_items: Vec<ListItem> = items
+            .iter()
+            .enumerate()
+            .map(|(i, &(label, _, enabled))| {
+                let is_selected = i == self.selected_item;
+                let prefix = if is_selected { "\u{25b6} " } else { "  " };
+                let status_str = if enabled { "On" } else { "Off" };
+                let status_color = if enabled { Color::Green } else { Color::Red };
+                let line_style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{}{}: ", prefix, label), line_style),
+                    Span::styled(status_str, Style::default().fg(status_color)),
+                ]))
+            })
+            .collect();
 
         let list = List::new(list_items)
             .style(bg_style())
             .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)));
 
-        let mut list_state = ratatui::widgets::ListState::default()
-            .with_selected(Some(self.selected_item));
+        let mut list_state =
+            ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
 
         frame.render_stateful_widget(list, inner, &mut list_state);
     }
 
     fn render_features_section(&self, frame: &mut Frame, area: Rect) {
         let items = vec![
-            ("Cover Images", "",
-             self.config.show_cover_images.unwrap_or(true)),
-            ("Lyrics Fetching", "",
-             self.config.enable_lyrics.unwrap_or(true)),
-            ("Visualizer Display", "",
-             self.config.show_visualizer.unwrap_or(true)),
-            ("Compact Mode", "",
-             self.config.compact_mode_default.unwrap_or(false)),
+            (
+                "Cover Images",
+                "",
+                self.config.show_cover_images.unwrap_or(true),
+            ),
+            (
+                "Lyrics Fetching",
+                "",
+                self.config.enable_lyrics.unwrap_or(true),
+            ),
+            (
+                "Visualizer Display",
+                "",
+                self.config.show_visualizer.unwrap_or(true),
+            ),
+            (
+                "Compact Mode",
+                "",
+                self.config.compact_mode_default.unwrap_or(false),
+            ),
         ];
         self.render_item_list(frame, area, "Feature Toggles", &items);
     }
@@ -368,7 +405,11 @@ impl OptionsPanel {
         if self.loading {
             let loading_text = Paragraph::new("Loading cache statistics...")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Yellow).bg(Color::Rgb(20, 20, 20)));
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(20, 20, 20)),
+                );
             frame.render_widget(loading_text, inner);
             return;
         }
@@ -393,7 +434,9 @@ impl OptionsPanel {
             let is_sel = i == self.selected_item && i < 3;
             let prefix = if is_sel { "\u{25b6} " } else { "  " };
             let style = if is_sel {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -417,7 +460,9 @@ impl OptionsPanel {
             let is_sel = idx == self.selected_item && idx >= 4;
             let prefix = if is_sel { "\u{25b6} " } else { "  " };
             let style = if is_sel {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
@@ -431,8 +476,8 @@ impl OptionsPanel {
             .style(bg_style())
             .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)));
 
-        let mut list_state = ratatui::widgets::ListState::default()
-            .with_selected(Some(self.selected_item));
+        let mut list_state =
+            ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
 
         frame.render_stateful_widget(list, inner, &mut list_state);
     }
@@ -481,10 +526,7 @@ impl OptionsPanel {
                             .add_modifier(Modifier::BOLD),
                     ))
                 } else {
-                    Line::from(Span::styled(
-                        line,
-                        Style::default().fg(Color::White),
-                    ))
+                    Line::from(Span::styled(line, Style::default().fg(Color::White)))
                 }
             })
             .collect();
@@ -495,7 +537,11 @@ impl OptionsPanel {
         let offset = scroll.min(max_scroll);
 
         let title = if total > visible {
-            let pct = if max_scroll > 0 { (offset * 100) / max_scroll } else { 0 };
+            let pct = if max_scroll > 0 {
+                (offset * 100) / max_scroll
+            } else {
+                0
+            };
             let n = (pct / 10).clamp(0, 10);
             let bar: String = (0..10).map(|i| if i < n { '█' } else { '░' }).collect();
             format!(" Help {bar} ")

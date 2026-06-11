@@ -1,15 +1,15 @@
 pub mod layout;
 pub mod local_tree;
+pub mod options;
 pub mod playback;
 pub mod render;
 pub mod search;
-pub mod options;
 pub mod state;
 
 pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode};
+pub use options::OptionsPanel;
 pub use playback::PlaybackState;
 pub use search::SearchResults;
-pub use options::OptionsPanel;
 pub use state::{ActiveContent, Focus, SearchPanel, UiState};
 
 use crate::utils::debug_overlay::DebugOverlay;
@@ -72,8 +72,9 @@ impl Ui {
         if !state.show_album_art {
             if let Some(constraints) = &mut tree.constraints {
                 if let Some(children) = &tree.children {
-                    if let Some(idx) =
-                        children.iter().position(|c| c.widget == Some(UiWidget::NowPlaying))
+                    if let Some(idx) = children
+                        .iter()
+                        .position(|c| c.widget == Some(UiWidget::NowPlaying))
                     {
                         if idx < constraints.len() {
                             constraints[idx] = SerializableConstraint::Length(8);

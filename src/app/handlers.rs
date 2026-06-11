@@ -5,8 +5,8 @@ use tracing::warn;
 
 use crate::App;
 use crate::player::RepeatMode;
-use crate::utils::debug_overlay::LogLevel;
 use crate::ui::{ActiveContent, Focus, LIBRARY_ITEMS, SearchPanel, SearchResults};
+use crate::utils::debug_overlay::LogLevel;
 
 impl App {
     pub async fn handle_quick_search_key(&mut self, code: KeyCode) {
@@ -83,56 +83,54 @@ impl App {
 
         if let Some(ref mut panel) = self.options_panel {
             if panel.visible {
-                use crate::ui::options::{PanelAction, OptionsSection};
+                use crate::ui::options::{OptionsSection, PanelAction};
                 match panel.handle_key(code) {
                     PanelAction::Close => {
                         panel.visible = false;
                         self.state.status_msg = Some("Options panel closed".to_string());
                     }
-                    PanelAction::ToggleItem => {
-                        match panel.focused_section {
-                            OptionsSection::Features => match panel.selected_item {
-                                0 => {
-                                    self.state.show_album_art = !self.state.show_album_art;
-                                    panel.config.show_cover_images = Some(self.state.show_album_art);
-                                    self.state.status_msg = Some(if self.state.show_album_art {
-                                        "Cover images enabled".to_string()
-                                    } else {
-                                        "Cover images disabled".to_string()
-                                    });
-                                }
-                                1 => {
-                                    let v = !panel.config.enable_lyrics.unwrap_or(true);
-                                    panel.config.enable_lyrics = Some(v);
-                                    self.state.status_msg = Some(if v {
-                                        "Lyrics fetching enabled".to_string()
-                                    } else {
-                                        "Lyrics fetching disabled".to_string()
-                                    });
-                                }
-                                2 => {
-                                    self.state.show_visualizer = !self.state.show_visualizer;
-                                    panel.config.show_visualizer = Some(self.state.show_visualizer);
-                                    self.state.status_msg = Some(if self.state.show_visualizer {
-                                        "Visualizer enabled".to_string()
-                                    } else {
-                                        "Visualizer disabled".to_string()
-                                    });
-                                }
-                                3 => {
-                                    self.state.compact_mode = !self.state.compact_mode;
-                                    panel.config.compact_mode_default = Some(self.state.compact_mode);
-                                    self.state.status_msg = Some(if self.state.compact_mode {
-                                        "Compact mode on".to_string()
-                                    } else {
-                                        "Compact mode off".to_string()
-                                    });
-                                }
-                                _ => {}
-                            },
+                    PanelAction::ToggleItem => match panel.focused_section {
+                        OptionsSection::Features => match panel.selected_item {
+                            0 => {
+                                self.state.show_album_art = !self.state.show_album_art;
+                                panel.config.show_cover_images = Some(self.state.show_album_art);
+                                self.state.status_msg = Some(if self.state.show_album_art {
+                                    "Cover images enabled".to_string()
+                                } else {
+                                    "Cover images disabled".to_string()
+                                });
+                            }
+                            1 => {
+                                let v = !panel.config.enable_lyrics.unwrap_or(true);
+                                panel.config.enable_lyrics = Some(v);
+                                self.state.status_msg = Some(if v {
+                                    "Lyrics fetching enabled".to_string()
+                                } else {
+                                    "Lyrics fetching disabled".to_string()
+                                });
+                            }
+                            2 => {
+                                self.state.show_visualizer = !self.state.show_visualizer;
+                                panel.config.show_visualizer = Some(self.state.show_visualizer);
+                                self.state.status_msg = Some(if self.state.show_visualizer {
+                                    "Visualizer enabled".to_string()
+                                } else {
+                                    "Visualizer disabled".to_string()
+                                });
+                            }
+                            3 => {
+                                self.state.compact_mode = !self.state.compact_mode;
+                                panel.config.compact_mode_default = Some(self.state.compact_mode);
+                                self.state.status_msg = Some(if self.state.compact_mode {
+                                    "Compact mode on".to_string()
+                                } else {
+                                    "Compact mode off".to_string()
+                                });
+                            }
                             _ => {}
-                        }
-                    }
+                        },
+                        _ => {}
+                    },
                     PanelAction::ClearAllCache => {
                         let _ = panel.cache_manager.clear_all().await;
                         panel.cache_stats = Some(panel.cache_manager.get_stats().await);
@@ -141,7 +139,8 @@ impl App {
                     PanelAction::CleanupExpired => {
                         let _ = panel.cache_manager.cleanup_expired().await;
                         panel.cache_stats = Some(panel.cache_manager.get_stats().await);
-                        self.state.status_msg = Some("Expired cache entries cleaned up".to_string());
+                        self.state.status_msg =
+                            Some("Expired cache entries cleaned up".to_string());
                     }
                     PanelAction::RefreshStats => {
                         panel.load_cache_stats().await;
@@ -158,11 +157,13 @@ impl App {
                                     self.state.status_msg = Some("Playlists refreshed".to_string());
                                 }
                                 Err(e) => {
-                                    self.state.status_msg = Some(format!("Failed to refresh playlists: {e}"));
+                                    self.state.status_msg =
+                                        Some(format!("Failed to refresh playlists: {e}"));
                                 }
                             }
                         } else {
-                            self.state.status_msg = Some("Not authenticated with Spotify".to_string());
+                            self.state.status_msg =
+                                Some("Not authenticated with Spotify".to_string());
                         }
                     }
                     PanelAction::None => {}
@@ -321,24 +322,34 @@ impl App {
                 if !self.spotify.authenticated {
                     self.state.status_msg = Some("Spotify not connected".to_string());
                 } else if self.current_track_uri.is_empty() {
-                    self.debug_overlay.log(LogLevel::Warn, "LikeTrack: no current track URI".to_string());
+                    self.debug_overlay.log(
+                        LogLevel::Warn,
+                        "LikeTrack: no current track URI".to_string(),
+                    );
                     self.state.status_msg = Some("No track to like".to_string());
                 } else {
                     self.state.status_msg = Some("♥ Liking...".to_string());
-                    let Some(token) = self.spotify.get_access_token().await else { return };
+                    let Some(token) = self.spotify.get_access_token().await else {
+                        return;
+                    };
                     let http = self.spotify.http.clone();
                     let cache = self.spotify.library_cache.clone();
-                    let track_id = self.current_track_uri
+                    let track_id = self
+                        .current_track_uri
                         .split(':')
                         .last()
                         .unwrap_or("")
                         .to_string();
-                    if track_id.is_empty() { return; }
+                    if track_id.is_empty() {
+                        return;
+                    }
                     tokio::spawn(async move {
                         match crate::spotify::save_track_http(&http, &token, &track_id).await {
                             Ok(_) => {
                                 cache.delete_key_pattern("liked:%");
-                                tracing::info!("LikeTrack: saved successfully — liked cache cleared");
+                                tracing::info!(
+                                    "LikeTrack: saved successfully — liked cache cleared"
+                                );
                             }
                             Err(e) => {
                                 tracing::error!("LikeTrack failed: {e}");
@@ -999,9 +1010,7 @@ impl App {
                                         self.state.tracks_offset = self.state.tracks.len() as u32;
                                         self.state.active_playlist_uri = Some(uri);
                                         self.state.active_playlist_id = Some(id);
-                                        self.state
-                                            .track_list
-                                            .select(Some(0));
+                                        self.state.track_list.select(Some(0));
                                         self.state.active_content = ActiveContent::Tracks;
                                         self.state.rebuild_sort_indices();
                                         self.state.previous_search =
@@ -1020,8 +1029,7 @@ impl App {
                                         self.state.status_msg = Some(
                                             "Authorization expired, reconnecting...".to_string(),
                                         );
-                                    } else if err_str.contains("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE")
-                                    {
+                                    } else if err_str.contains("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE") {
                                         self.state.status_msg = Some(
                                             "⚠ Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
                                         );

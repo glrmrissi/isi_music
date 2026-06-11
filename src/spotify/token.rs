@@ -24,12 +24,7 @@ impl TokenManager {
         }
     }
 
-    pub fn set_token(
-        &self,
-        access_token: &str,
-        refresh_token: Option<&str>,
-        expires_in_secs: u64,
-    ) {
+    pub fn set_token(&self, access_token: &str, refresh_token: Option<&str>, expires_in_secs: u64) {
         if let Ok(mut at) = self.access_token.write() {
             *at = access_token.to_string();
         }
@@ -92,9 +87,7 @@ impl TokenManager {
         if !status.is_success() {
             let body = serde_json::to_string(&json).unwrap_or_default();
             if status.as_u16() == 403 {
-                anyhow::bail!(
-                    "SPOTIFY_FORBIDDEN: token refresh returned 403. Details: {body}"
-                );
+                anyhow::bail!("SPOTIFY_FORBIDDEN: token refresh returned 403. Details: {body}");
             }
             anyhow::bail!("token endpoint {status}: {body}");
         }
