@@ -3,6 +3,8 @@ use chrono::{DateTime, Duration, Utc};
 use std::sync::RwLock;
 use tracing::warn;
 
+use crate::config;
+
 pub struct TokenManager {
     access_token: RwLock<String>,
     refresh_token: RwLock<Option<String>>,
@@ -111,6 +113,7 @@ impl TokenManager {
             if let Ok(mut r) = self.refresh_token.write() {
                 *r = Some(rt.clone());
             }
+            config::save_refresh_token(rt);
         }
         if let Ok(mut ea) = self.expires_at.write() {
             *ea = Some(
