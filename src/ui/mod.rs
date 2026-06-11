@@ -1,11 +1,13 @@
 pub mod layout;
 pub mod local_tree;
+pub mod options;
 pub mod playback;
 pub mod render;
 pub mod search;
 pub mod state;
 
 pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode};
+pub use options::OptionsPanel;
 pub use playback::PlaybackState;
 pub use search::SearchResults;
 pub use state::{ActiveContent, Focus, SearchPanel, UiState};
