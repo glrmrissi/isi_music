@@ -43,6 +43,7 @@ pub enum Action {
     ScrollUp,
     ScrollDown,
     Quit,
+    OptionsPanel,
 }
 
 impl Action {
@@ -83,6 +84,7 @@ impl Action {
             ("scroll_up", &["pageup"], ScrollUp),
             ("scroll_down", &["pagedown"], ScrollDown),
             ("quit", &["q", "ctrl+c"], Quit),
+            ("options_panel", &["t"], OptionsPanel),
         ]
     }
 }
@@ -441,6 +443,7 @@ impl Keybinds {
                     Action::ToggleDebug,
                     Action::ScrollUp,
                     Action::ScrollDown,
+                    Action::OptionsPanel,
                 ],
             ),
             (
@@ -536,7 +539,8 @@ impl KeybindsTomlOutput {
                 | Action::ToggleLyrics
                 | Action::ToggleDebug
                 | Action::ScrollUp
-                | Action::ScrollDown => modes.push(entry),
+                | Action::ScrollDown
+                | Action::OptionsPanel => modes.push(entry),
                 Action::AddToQueue
                 | Action::RemoveFromQueue
                 | Action::SortTracks
@@ -589,3 +593,7 @@ impl Serialize for KeybindsTomlOutput {
         map.end()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/keybinds/mod.rs"]
+mod tests;

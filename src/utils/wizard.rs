@@ -14,7 +14,10 @@ struct Preset {
     border_inactive: &'static str,
     highlight_bg: &'static str,
     text_primary: &'static str,
+    text_secondary: &'static str,
     accent: &'static str,
+    background: &'static str,
+    status_bar: &'static str,
     preview: &'static str,
 }
 
@@ -25,7 +28,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#555555",
         highlight_bg: "#282828",
         text_primary: "#ffffff",
+        text_secondary: "#888888",
         accent: "#00ff00",
+        background: "#141414",
+        status_bar: "#1e1e1e",
         preview: "  ▐\x1b[32m████\x1b[0m▌ green on dark  ",
     },
     Preset {
@@ -34,7 +40,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#585b70",
         highlight_bg: "#313244",
         text_primary: "#cdd6f4",
+        text_secondary: "#a6adc8",
         accent: "#89b4fa",
+        background: "#1e1e2e",
+        status_bar: "#181825",
         preview: "  ▐\x1b[35m████\x1b[0m▌ lavender        ",
     },
     Preset {
@@ -43,7 +52,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#504945",
         highlight_bg: "#3c3836",
         text_primary: "#ebdbb2",
+        text_secondary: "#a89984",
         accent: "#fe8019",
+        background: "#282828",
+        status_bar: "#1d2021",
         preview: "  ▐\x1b[33m████\x1b[0m▌ warm amber      ",
     },
     Preset {
@@ -52,7 +64,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#4c566a",
         highlight_bg: "#3b4252",
         text_primary: "#e5e9f0",
+        text_secondary: "#81a1c1",
         accent: "#5e81ac",
+        background: "#2e3440",
+        status_bar: "#242933",
         preview: "  ▐\x1b[36m████\x1b[0m▌ arctic blue     ",
     },
     Preset {
@@ -61,7 +76,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#524f67",
         highlight_bg: "#26233a",
         text_primary: "#e0def4",
+        text_secondary: "#908caa",
         accent: "#f6c177",
+        background: "#191724",
+        status_bar: "#1f1d2e",
         preview: "  ▐\x1b[31m████\x1b[0m▌ muted rose      ",
     },
     Preset {
@@ -70,7 +88,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#3b4261",
         highlight_bg: "#1f2335",
         text_primary: "#c0caf5",
+        text_secondary: "#9aa5ce",
         accent: "#9ece6a",
+        background: "#1a1b26",
+        status_bar: "#16161e",
         preview: "  ▐\x1b[34m████\x1b[0m▌ blue / neon     ",
     },
     Preset {
@@ -79,7 +100,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#44475a",
         highlight_bg: "#282a36",
         text_primary: "#f8f8f2",
+        text_secondary: "#6272a4",
         accent: "#ff79c6",
+        background: "#1e1f29",
+        status_bar: "#191a21",
         preview: "  ▐\x1b[35m████\x1b[0m▌ purple / pink   ",
     },
     Preset {
@@ -88,7 +112,10 @@ const PRESETS: &[Preset] = &[
         border_inactive: "#666666",
         highlight_bg: "#1a1a1a",
         text_primary: "#cccccc",
+        text_secondary: "#888888",
         accent: "#999999",
+        background: "#111111",
+        status_bar: "#222222",
         preview: "  ▐\x1b[37m████\x1b[0m▌ greyscale       ",
     },
 ];
@@ -161,7 +188,10 @@ fn detect_music_dir() -> Option<String> {
 
 fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
     println!();
-    println!("  {}", style("Configure Spotify (optional but recommended)").bold());
+    println!(
+        "  {}",
+        style("Configure Spotify (optional but recommended)").bold()
+    );
     println!();
     println!(
         "  {}",
@@ -170,7 +200,9 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
     println!(
         "  {}  {}",
         style("1.").cyan(),
-        style("Go to https://developer.spotify.com/dashboard").cyan().underlined()
+        style("Go to https://developer.spotify.com/dashboard")
+            .cyan()
+            .underlined()
     );
     println!(
         "  {}  {}",
@@ -210,7 +242,10 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
             println!(
                 "  {}  {}",
                 style("⚠").yellow(),
-                style("That doesn't look like a valid Client ID. It will be saved but may not work.").dim()
+                style(
+                    "That doesn't look like a valid Client ID. It will be saved but may not work."
+                )
+                .dim()
             );
         }
         cfg.spotify.client_id = Some(trimmed);
@@ -430,12 +465,12 @@ fn template_gallery(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     println!("  Choose a colour preset for your theme:\n");
 
     let chosen_theme = pick_preset(term)?;
-    let cfg = {
+    let cfg = AppConfig::load().unwrap_or_else(|_| {
         let mut c = AppConfig::default();
         c.discord.enabled = Some(false);
         c.local.music_dir = detect_music_dir();
         c
-    };
+    });
 
     Ok((cfg, Some(chosen_theme)))
 }
@@ -465,7 +500,10 @@ fn pick_preset(_term: &Term) -> Result<Theme> {
         border_inactive: parse_hex(preset.border_inactive),
         highlight_bg: parse_hex(preset.highlight_bg),
         text_primary: parse_hex(preset.text_primary),
+        text_secondary: parse_hex(preset.text_secondary),
         accent_color: parse_hex(preset.accent),
+        background: parse_hex(preset.background),
+        status_bar: parse_hex(preset.status_bar),
         ..Theme::default()
     };
 
@@ -542,48 +580,73 @@ pub async fn run() -> Result<()> {
     let theme_path = Theme::get_path().context("Could not determine theme path")?;
 
     println!();
-    println!("  {} Will write:", style("→").cyan());
-    println!("      {}", style(config_path.display()).cyan());
-    if chosen_theme.is_some() {
+    if path_idx == 2 {
+        println!("  {} Will write:", style("→").cyan());
         println!("      {}", style(theme_path.display()).cyan());
-    }
-    println!();
+        println!();
 
-    let write_config = if config_path.exists() {
-        confirm_overwrite(&config_path)?
-    } else {
-        true
-    };
-
-    let write_theme = chosen_theme.is_some()
-        && if theme_path.exists() {
+        let write_theme = if theme_path.exists() {
             confirm_overwrite(&theme_path)?
         } else {
             true
         };
 
-    if write_config {
-        save_config(&cfg)?;
-        println!(
-            "  {}  config saved → {}",
-            style("✓").green(),
-            style(config_path.display()).dim()
-        );
-    } else {
-        println!("  {}  config skipped.", style("–").dim());
-    }
-
-    if write_theme {
-        if let Some(ref t) = chosen_theme {
-            save_theme(t)?;
-            println!(
-                "  {}  theme  saved → {}",
-                style("✓").green(),
-                style(theme_path.display()).dim()
-            );
+        if write_theme {
+            if let Some(ref t) = chosen_theme {
+                save_theme(t)?;
+                println!(
+                    "  {}  theme  saved → {}",
+                    style("✓").green(),
+                    style(theme_path.display()).dim()
+                );
+            }
+        } else {
+            println!("  {}  theme  skipped.", style("–").dim());
         }
-    } else if chosen_theme.is_some() {
-        println!("  {}  theme  skipped.", style("–").dim());
+    } else {
+        println!("  {} Will write:", style("→").cyan());
+        println!("      {}", style(config_path.display()).cyan());
+        if chosen_theme.is_some() {
+            println!("      {}", style(theme_path.display()).cyan());
+        }
+        println!();
+
+        let write_config = if config_path.exists() {
+            confirm_overwrite(&config_path)?
+        } else {
+            true
+        };
+
+        let write_theme = chosen_theme.is_some()
+            && if theme_path.exists() {
+                confirm_overwrite(&theme_path)?
+            } else {
+                true
+            };
+
+        if write_config {
+            save_config(&cfg)?;
+            println!(
+                "  {}  config saved → {}",
+                style("✓").green(),
+                style(config_path.display()).dim()
+            );
+        } else {
+            println!("  {}  config skipped.", style("–").dim());
+        }
+
+        if write_theme {
+            if let Some(ref t) = chosen_theme {
+                save_theme(t)?;
+                println!(
+                    "  {}  theme  saved → {}",
+                    style("✓").green(),
+                    style(theme_path.display()).dim()
+                );
+            }
+        } else if chosen_theme.is_some() {
+            println!("  {}  theme  skipped.", style("–").dim());
+        }
     }
 
     println!();

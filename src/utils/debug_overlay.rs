@@ -328,26 +328,5 @@ impl DebugHandle {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_debug_overlay_creation() {
-        let debug = DebugOverlay::new();
-        assert!(!debug.visible);
-    }
-
-    #[test]
-    fn test_logging() {
-        let debug = DebugOverlay::new();
-        debug.log(LogLevel::Info, "test message");
-        debug.log_api("GET", "/api/track", 200);
-    }
-
-    #[test]
-    fn test_metrics_update() {
-        let debug = DebugOverlay::new();
-        debug.update_metrics();
-        debug.update_eq_state(true, [0.0; 10]);
-    }
-}
+#[path = "../../tests/utils/debug_overlay.rs"]
+mod tests;

@@ -1,0 +1,42 @@
+name: Format
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Run cargo fmt
+        run: cargo fmt
+
+      - name: Commit formatting changes
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No formatting changes — skipping commit"
+          else
+            git add .
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git commit -m "style: apply cargo fmt"
+            git push origin master
+          fi

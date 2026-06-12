@@ -164,8 +164,7 @@ impl NativePlayer {
         let bands_for_sink = Arc::clone(&bands);
 
         let session_for_player = session.clone();
-        let server_position: Arc<Mutex<(u64, Instant)>> =
-            Arc::new(Mutex::new((0, Instant::now())));
+        let server_position: Arc<Mutex<(u64, Instant)>> = Arc::new(Mutex::new((0, Instant::now())));
 
         let player = LibrespotPlayer::new(
             PlayerConfig {
@@ -193,7 +192,11 @@ impl NativePlayer {
             let mut unavailable_count = 0u32;
             while let Some(event) = event_channel.recv().await {
                 match event {
-                    PlayerEvent::Playing { track_id, position_ms, .. } => {
+                    PlayerEvent::Playing {
+                        track_id,
+                        position_ms,
+                        ..
+                    } => {
                         info!("Playing: {} at {}ms", track_id, position_ms);
                         unavailable_count = 0;
                         if let Ok(mut pos) = sp.lock() {

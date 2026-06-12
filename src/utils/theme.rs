@@ -13,7 +13,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::warn;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SerializableDirection {
     Horizontal,
@@ -45,9 +45,11 @@ pub enum UiWidget {
     AsciiArt,
     Spacer,
     Lyrics,
+    NowPlaying,
+    FullscreenLyrics,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SerializableConstraint {
     Length(u16),
@@ -237,10 +239,109 @@ pub struct Theme {
 
     #[serde(default = "default_true")]
     pub show_ascii_art: bool,
+
+    #[serde(default = "default_compact_layout")]
+    pub compact_layout: LayoutNode,
+
+    #[serde(default = "default_fullscreen_layout")]
+    pub fullscreen_layout: LayoutNode,
+
+    #[serde(with = "color_serde")]
+    pub background: Color,
+
+    #[serde(with = "color_serde")]
+    pub text_secondary: Color,
+
+    #[serde(with = "color_serde")]
+    pub status_bar: Color,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_compact_layout() -> LayoutNode {
+    use SerializableConstraint::*;
+    LayoutNode {
+        direction: Some(SerializableDirection::Vertical),
+        constraints: Some(vec![Length(1), Fill(1), Length(1)]),
+        widget: None,
+        children: Some(vec![
+            LayoutNode {
+                widget: Some(UiWidget::Header),
+                direction: None,
+                constraints: None,
+                children: None,
+            },
+            LayoutNode {
+                direction: Some(SerializableDirection::Horizontal),
+                constraints: Some(vec![Percentage(35), Fill(1)]),
+                widget: None,
+                children: Some(vec![
+                    LayoutNode {
+                        widget: Some(UiWidget::AsciiArt),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                    LayoutNode {
+                        widget: Some(UiWidget::MainContent),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                ]),
+            },
+            LayoutNode {
+                direction: Some(SerializableDirection::Horizontal),
+                constraints: Some(vec![Percentage(30), Fill(1)]),
+                widget: None,
+                children: Some(vec![
+                    LayoutNode {
+                        widget: Some(UiWidget::Marquee),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                    LayoutNode {
+                        widget: Some(UiWidget::Progress),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                ]),
+            },
+        ]),
+    }
+}
+
+fn default_fullscreen_layout() -> LayoutNode {
+    use SerializableConstraint::*;
+    LayoutNode {
+        direction: Some(SerializableDirection::Vertical),
+        constraints: Some(vec![Length(18), Length(8), Min(0)]),
+        widget: None,
+        children: Some(vec![
+            LayoutNode {
+                widget: Some(UiWidget::NowPlaying),
+                direction: None,
+                constraints: None,
+                children: None,
+            },
+            LayoutNode {
+                widget: Some(UiWidget::FullscreenLyrics),
+                direction: None,
+                constraints: None,
+                children: None,
+            },
+            LayoutNode {
+                widget: Some(UiWidget::Visualizer),
+                direction: None,
+                constraints: None,
+                children: None,
+            },
+        ]),
+    }
 }
 
 impl Default for Theme {
@@ -257,6 +358,11 @@ impl Default for Theme {
             ascii_art_inline: None,
             ascii_art_path: None,
             show_ascii_art: true,
+            compact_layout: default_compact_layout(),
+            fullscreen_layout: default_fullscreen_layout(),
+            background: Color::Rgb(20, 20, 20),
+            text_secondary: Color::Gray,
+            status_bar: Color::Rgb(30, 30, 30),
         }
     }
 }
@@ -282,6 +388,17 @@ impl std::ops::Deref for ThemeWatcher {
     type Target = std::sync::mpsc::Receiver<Theme>;
     fn deref(&self) -> &Self::Target {
         &self.rx
+    }
+}
+
+#[cfg(test)]
+impl ThemeWatcher {
+    pub fn noop() -> Self {
+        let (_, rx) = std::sync::mpsc::channel();
+        Self {
+            rx,
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 }
 
@@ -344,6 +461,17 @@ impl Theme {
         });
 
         Ok(ThemeWatcher { rx, stop })
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let path = Self::get_path().unwrap_or_else(|| PathBuf::from("theme.toml"));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create theme dir: {e}"))?;
+        }
+        let toml_str =
+            toml::to_string_pretty(self).map_err(|e| format!("Failed to serialize theme: {e}"))?;
+        fs::write(&path, toml_str).map_err(|e| format!("Failed to write theme: {e}"))?;
+        Ok(())
     }
 
     pub fn load_ascii_art(&self) -> Option<Vec<String>> {
@@ -449,6 +577,10 @@ fn parse_color_from_str(s: &str) -> Result<Color, String> {
         _ => Err(format!("Unknown color: {}", s)),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/utils/theme.rs"]
+mod tests;
 
 fn color_to_string(color: &Color) -> String {
     match color {

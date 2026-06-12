@@ -13,6 +13,10 @@ pub struct AppConfig {
     pub local: LocalConfig,
     #[serde(default)]
     pub musixmatch: MusixMatchConfig,
+    #[serde(default)]
+    pub options: AppOptionsConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -41,6 +45,24 @@ pub struct SpotifyConfig {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct MusixMatchConfig {
     pub musixmatch_api_key: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct AppOptionsConfig {
+    pub show_cover_images: Option<bool>,
+    pub enable_lyrics: Option<bool>,
+    pub show_visualizer: Option<bool>,
+    pub default_layout: Option<String>,
+    pub compact_mode_default: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct CacheConfig {
+    pub enabled: Option<bool>,
+    pub auto_cleanup: Option<bool>,
+    pub max_size_mb: Option<u64>,
+    pub cleanup_interval_hours: Option<u32>,
+    pub keep_days: Option<u32>,
 }
 
 impl AppConfig {

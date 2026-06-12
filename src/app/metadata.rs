@@ -155,3 +155,7 @@ pub fn unix_now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+#[cfg(test)]
+#[path = "../../tests/app/metadata.rs"]
+mod tests;

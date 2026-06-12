@@ -4,7 +4,6 @@ pub mod metadata;
 pub mod player;
 pub mod ui;
 
-use crate::ui::PlaybackState;
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use crate::utils::theme::ThemeWatcher;
 use anyhow::Result;
@@ -33,6 +32,8 @@ pub struct App {
     player: Option<Box<dyn AudioPlayer>>,
     parked_player: Option<Box<dyn AudioPlayer>>,
     local_active: bool,
+    saved_volume: u8,
+    local_db_path: String,
     lastfm: Option<Arc<LastfmClient>>,
     ui: Ui,
     state: UiState,
@@ -74,6 +75,7 @@ pub struct App {
     playing_started_at: Option<Instant>,
     progress_at_play_start: u64,
     initial_sync_done: bool,
+    options_panel: Option<crate::ui::OptionsPanel>,
 }
 
 impl App {
@@ -110,7 +112,9 @@ impl App {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("SPOTIFY_FORBIDDEN") {
-                    warn!("Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit");
+                    warn!(
+                        "Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit"
+                    );
                     debug_overlay.log(
                         LogLevel::Warn,
                         "Spotify 403 — create your own app: isi-music setup-spotify",
@@ -130,34 +134,6 @@ impl App {
         };
 
         let volume = crate::config::load_volume();
-
-        let spotify_player: Option<Box<dyn AudioPlayer>> = if spotify.authenticated {
-            match spotify.get_access_token().await {
-                Some(token) => match NativePlayer::new(token, false).await {
-                    Ok(p) => {
-                        debug_overlay.log(LogLevel::Info, "Native player Started");
-                        Some(Box::new(p) as Box<dyn AudioPlayer>)
-                    }
-                    Err(e) => {
-                        let msg = e.to_string().to_lowercase();
-                        if msg.contains("free") || msg.contains("premium") {
-                            warn!("Spotify free account detected — streaming disabled");
-                            startup_warning = Some(
-                                "⚠ Spotify Premium required for streaming. Starting in local-only mode.".to_string(),
-                            );
-                        } else {
-                            debug_overlay
-                                .log(LogLevel::Warn, format!("Failed to load playlists: {e:#}"));
-                        }
-                        None
-                    }
-                },
-                None => None,
-            }
-        } else {
-            None
-        };
-
         let db_path = crate::config::get_local_db_path();
 
         let lyrics = crate::utils::lyrics::LyricsHandle::new(
@@ -169,22 +145,6 @@ impl App {
             debug_overlay.clone(),
         )
         .expect("Failed to open lyrics cache");
-
-        let local_player: Option<Box<dyn AudioPlayer>> = match LocalPlayer::new(volume, &db_path) {
-            Ok(p) => Some(Box::new(p) as Box<dyn AudioPlayer>),
-            Err(e) => {
-                debug_overlay.log(LogLevel::Error, format!("Local Player ({e:#})"));
-                None
-            }
-        };
-
-        let (mut player, parked_player, local_active) = match (spotify_player, local_player) {
-            (Some(sp), local) => (Some(sp), local, false),
-            (None, Some(lp)) => (Some(lp), None, true),
-            (None, None) => (None, None, false),
-        };
-
-        let band_energies = player.as_ref().and_then(|p| p.band_energies());
 
         let mut state = UiState::new();
 
@@ -200,44 +160,18 @@ impl App {
                         state.playlist_list.select(Some(0));
                     }
                 }
-                Err(e) => warn!("Failed to load playlists: {e}"),
-            }
-        }
-
-        let initial_playback = if local_active {
-            player
-                .as_ref()
-                .and_then(|p| p.current_track_info())
-                .map(|info| PlaybackState {
-                    title: info.name,
-                    artist: info.artist,
-                    album: info.album,
-                    path: info.path.map(|p| p.to_string_lossy().to_string()),
-                    cover_path: info.cover_path.map(|p| p.to_string_lossy().to_string()),
-                    art_url: None,
-                    is_local: true,
-                    duration_ms: info.duration_ms,
-                    ..Default::default()
-                })
-                .unwrap_or_default()
-        } else {
-            let mut pb = spotify.fetch_playback().await.unwrap_or_default();
-            pb.is_playing = false;
-            pb
-        };
-
-        let initial_art = initial_playback.art_url.clone();
-
-        state.playback = initial_playback;
-        state.art_url = initial_art.clone();
-
-        if !state.playback.is_playing {
-            if let Some(p) = &mut player {
-                if !local_active {
-                    p.pause();
+                Err(e) => {
+                    warn!("Failed to load playlists: {e}");
+                    state.status_msg = Some(format!("Failed to load playlists: {e}"));
                 }
             }
         }
+
+        let mut pb = spotify.fetch_playback().await.unwrap_or_default();
+        pb.is_playing = false;
+        let initial_art = pb.art_url.clone();
+        state.art_url = initial_art.clone();
+        state.playback = pb;
 
         #[cfg(feature = "mpris")]
         let mpris = match crate::utils::mpris::spawn().await {
@@ -262,13 +196,18 @@ impl App {
             None
         };
 
+        let cache_manager = crate::utils::cache::CacheManager::new();
+        let options_panel = crate::ui::OptionsPanel::new(cache_manager);
+
         Ok(Self {
             seek_tx,
             seek_rx,
             spotify,
-            player,
-            parked_player,
-            local_active,
+            player: None,
+            parked_player: None,
+            local_active: false,
+            saved_volume: volume,
+            local_db_path: db_path,
             lastfm,
             ui: Ui::new(theme.clone(), debug_overlay.clone()),
             state,
@@ -288,7 +227,7 @@ impl App {
             discord_last_title: String::new(),
             discord_last_playing: false,
             discord_pending_since: None,
-            band_energies,
+            band_energies: None,
             art_url: initial_art,
             session_reconnecting: false,
             radio_mode: false,
@@ -310,7 +249,147 @@ impl App {
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
+            options_panel: Some(options_panel),
         })
+    }
+
+    #[cfg(test)]
+    pub async fn new_for_test() -> Self {
+        let (seek_tx, seek_rx) = mpsc::channel();
+        let spotify = crate::spotify::SpotifyClient::new_unauthenticated().await;
+        let debug_overlay = Arc::new(DebugOverlay::new());
+        let lyrics = crate::utils::lyrics::LyricsHandle::new(
+            std::env::temp_dir().join("isi-music-test-lyrics.db"),
+            reqwest::Client::new(),
+            debug_overlay.clone(),
+        )
+        .expect("Failed to create test lyrics handle");
+        let cache_manager = crate::utils::cache::CacheManager::new();
+        let mut state = crate::ui::UiState::new();
+
+        if spotify.authenticated {
+            if let Ok(playlists) = spotify.fetch_playlists().await {
+                state.playlists = playlists;
+                if !state.playlists.is_empty() {
+                    state.playlist_list.select(Some(0));
+                }
+            }
+        }
+
+        Self {
+            seek_tx,
+            seek_rx,
+            spotify,
+            player: None,
+            parked_player: None,
+            local_active: false,
+            saved_volume: 50,
+            local_db_path: String::new(),
+            lastfm: None,
+            ui: crate::ui::Ui::new(Default::default(), debug_overlay.clone()),
+            state,
+            last_tick: Instant::now(),
+            should_quit: false,
+            last_seek_time: None,
+            seek_hold_count: 0,
+            scrobble_sent: false,
+            track_start_unix: 0,
+            current_track_uri: String::new(),
+            last_art_uri: String::new(),
+            album_art_pending: None,
+            picker: ratatui_image::picker::Picker::halfblocks(),
+            #[cfg(feature = "mpris")]
+            mpris: None,
+            discord: None,
+            discord_last_title: String::new(),
+            discord_last_playing: false,
+            discord_pending_since: None,
+            band_energies: None,
+            art_url: None,
+            session_reconnecting: false,
+            radio_mode: false,
+            recent_track_uris: std::collections::VecDeque::new(),
+            playing_tracks: Vec::new(),
+            theme: Default::default(),
+            theme_rx: crate::utils::theme::ThemeWatcher::noop(),
+            keybinds: crate::keybinds::Keybinds::defaults(),
+            keybinds_rx: crate::keybinds::KeybindsWatcher::noop(),
+            consecutive_unavailable: 0,
+            spotify_streaming_disabled: false,
+            local_scan_rx: None,
+            local_scan_total: 0,
+            lyrics,
+            debug_overlay,
+            reconnect_attempts: 0,
+            last_reconnect_attempt: None,
+            last_playback_health_check: Instant::now(),
+            playing_started_at: None,
+            progress_at_play_start: 0,
+            initial_sync_done: false,
+            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
+        }
+    }
+
+    async fn ensure_spotify_player(&mut self) -> bool {
+        if self.player.is_some() && !self.local_active {
+            return true;
+        }
+        if self.parked_player.is_some() && self.local_active {
+            std::mem::swap(&mut self.player, &mut self.parked_player);
+            self.local_active = false;
+            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+            return true;
+        }
+        let Some(token) = self.spotify.get_access_token().await else {
+            return false;
+        };
+        match NativePlayer::new(token, false).await {
+            Ok(mut p) => {
+                p.set_volume(self.saved_volume);
+                self.band_energies = p.band_energies();
+                self.player = Some(Box::new(p));
+                self.local_active = false;
+                true
+            }
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("free") || msg.contains("premium") {
+                    self.spotify_streaming_disabled = true;
+                }
+                self.debug_overlay.log(
+                    LogLevel::Warn,
+                    format!("Failed to create Spotify player: {e:#}"),
+                );
+                false
+            }
+        }
+    }
+
+    async fn ensure_local_player(&mut self) -> bool {
+        if self.player.is_some() && self.local_active {
+            return true;
+        }
+        if self.parked_player.is_some() && !self.local_active {
+            std::mem::swap(&mut self.player, &mut self.parked_player);
+            self.local_active = true;
+            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+            return true;
+        }
+        match LocalPlayer::new(self.saved_volume, &self.local_db_path) {
+            Ok(p) => {
+                self.band_energies = p.band_energies();
+                self.player = Some(Box::new(p));
+                self.local_active = true;
+                true
+            }
+            Err(e) => {
+                self.debug_overlay.log(
+                    LogLevel::Error,
+                    format!("Failed to create local player: {e}"),
+                );
+                false
+            }
+        }
     }
 
     pub async fn run<B: ratatui::backend::Backend>(
@@ -687,16 +766,20 @@ impl App {
                 for cmd in cmds {
                     match cmd {
                         MprisCmd::Play => {
+                            self.ensure_spotify_player().await;
                             if let Some(p) = &mut self.player {
                                 p.play();
                             }
+                            self.state.playback.is_playing = true;
                         }
                         MprisCmd::Pause => {
                             if let Some(p) = &mut self.player {
                                 p.pause();
                             }
+                            self.state.playback.is_playing = false;
                         }
                         MprisCmd::Next => {
+                            self.ensure_spotify_player().await;
                             if let Some(p) = &mut self.player {
                                 p.next();
                             }
@@ -704,6 +787,7 @@ impl App {
                             self.sync_queue_display();
                         }
                         MprisCmd::Prev => {
+                            self.ensure_spotify_player().await;
                             if let Some(p) = &mut self.player {
                                 p.prev();
                             }
@@ -721,8 +805,9 @@ impl App {
                             }
                         }
                         MprisCmd::SetVolume(v) => {
+                            self.saved_volume = (v * 100.0).round() as u8;
                             if let Some(p) = &mut self.player {
-                                p.set_volume((v * 100.0).round() as u8);
+                                p.set_volume(self.saved_volume);
                                 self.state.playback.volume = p.volume();
                             }
                         }
@@ -789,7 +874,12 @@ impl App {
 
             self.maybe_fetch_album_art().await;
 
-            terminal.draw(|f| self.ui.render(f, &mut self.state))?;
+            terminal.draw(|f| {
+                self.ui.render(f, &mut self.state);
+                if let Some(ref panel) = self.options_panel {
+                    panel.render(f, &self.state);
+                }
+            })?;
 
             let timeout = tick_rate
                 .checked_sub(now.elapsed())

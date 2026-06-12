@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod debug_overlay;
 pub mod discord;
 pub mod ipc;

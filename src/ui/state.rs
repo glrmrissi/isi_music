@@ -2,7 +2,7 @@ use ratatui::widgets::ListState;
 
 use super::{LIBRARY_ITEMS, LocalNode, SearchResults};
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Focus {
     Library,
     Playlists,
@@ -11,7 +11,7 @@ pub enum Focus {
     Queue,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SearchPanel {
     Tracks,
     Artists,
@@ -30,7 +30,7 @@ impl SearchPanel {
     }
 }
 
-#[derive(Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub enum ActiveContent {
     #[default]
     None,
@@ -41,7 +41,7 @@ pub enum ActiveContent {
     LocalFiles,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackSortBy {
     Default,
     Title,
@@ -122,9 +122,6 @@ pub struct UiState {
     pub show_lyrics: bool,
     pub compact_mode: bool,
     pub compact_effective: bool,
-    pub show_help: bool,
-    pub help_text: Vec<String>,
-    pub help_scroll: usize,
 }
 
 impl UiState {
@@ -181,9 +178,6 @@ impl UiState {
             show_lyrics: false,
             compact_mode: false,
             compact_effective: false,
-            show_help: false,
-            help_text: Vec::new(),
-            help_scroll: 0,
         }
     }
 
@@ -685,3 +679,7 @@ fn scroll_down(state: &mut ListState, len: usize) {
         .unwrap_or(0);
     state.select(Some(i));
 }
+
+#[cfg(test)]
+#[path = "../../tests/ui/state.rs"]
+mod tests;
