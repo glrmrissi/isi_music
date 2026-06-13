@@ -193,6 +193,7 @@ jobs:
           git cliff \
             --tag "${{ github.ref_name }}" \
             --config cliff.toml \
+            --unreleased \
             -o changelog-full.md
 
           cat > release-notes.md <<- RELEASE
