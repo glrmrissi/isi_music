@@ -32,9 +32,55 @@ jobs:
         id: extract
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+  bump-version:
+    name: Bump version and update tag
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump version in Cargo.toml and update tag
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          BRANCH=$(git branch -r --contains "${{ github.sha }}" \
+            | grep -v 'origin/HEAD' \
+            | head -1 \
+            | sed 's|.*origin/||' \
+            | xargs)
+          echo "Detected branch: $BRANCH"
+          git checkout "$BRANCH"
+
+          OLD_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)
+
+          if [[ "$OLD_VERSION" == "$VERSION" ]]; then
+            echo "Version already $VERSION — skipping commit"
+          else
+            echo "Updating version: $OLD_VERSION -> $VERSION"
+            sed "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml > Cargo.toml.tmp
+            mv Cargo.toml.tmp Cargo.toml
+            sed '/^name = "isi-music"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' Cargo.lock > Cargo.lock.tmp
+            mv Cargo.lock.tmp Cargo.lock
+
+            git add Cargo.toml Cargo.lock
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git commit -m "chore: v$OLD_VERSION -> v$VERSION"
+            git push origin "$BRANCH"
+            # Point tag at the version-bumped commit
+            git tag -f "${{ github.ref_name }}" HEAD
+            git push origin "${{ github.ref_name }}" --force
+          fi
+
   build:
     name: Build (${{ matrix.label }})
-    needs: validate
+    needs: [validate, bump-version]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -66,19 +112,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Sync version with tag
-        run: |
-          VERSION="${{ needs.validate.outputs.version }}"
-          echo "Updating version to $VERSION"
-
-          sed "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml > Cargo.toml.tmp
-          mv Cargo.toml.tmp Cargo.toml
-
-          sed '/^name = "isi-music"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' Cargo.lock > Cargo.lock.tmp
-          mv Cargo.lock.tmp Cargo.lock
-
-          grep '^version =' Cargo.toml
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -153,36 +186,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Commit version bump to branch
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          BRANCH=$(git branch -r --contains "${{ github.sha }}" \
-            | grep -v 'origin/HEAD' \
-            | head -1 \
-            | sed 's|.*origin/||' \
-            | xargs)
-          echo "Detected branch: $BRANCH"
-          git checkout "$BRANCH"
-
-          OLD_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)
-
-          if [[ "$OLD_VERSION" == "$VERSION" ]]; then
-            echo "Version already $VERSION — skipping commit"
-          else
-            echo "Updating version: $OLD_VERSION -> $VERSION"
-            sed "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml > Cargo.toml.tmp
-            mv Cargo.toml.tmp Cargo.toml
-            sed '/^name = "isi-music"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' Cargo.lock > Cargo.lock.tmp
-            mv Cargo.lock.tmp Cargo.lock
-
-            git add Cargo.toml Cargo.lock
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git config user.name "github-actions[bot]"
-            git commit -m "chore: v$OLD_VERSION -> v$VERSION"
-            git push origin "$BRANCH"
-          fi
-
       - name: Install git-cliff
         uses: taiki-e/install-action@v2
         with:
@@ -193,7 +196,7 @@ jobs:
           git cliff \
             --tag "${{ github.ref_name }}" \
             --config cliff.toml \
-            --unreleased \
+            --current \
             -o changelog-full.md
 
           cat > release-notes.md <<- RELEASE
