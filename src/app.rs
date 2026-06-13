@@ -25,6 +25,9 @@ use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
 use crate::utils::theme::Theme;
 use rspotify::model::RepeatState;
 
+#[cfg(target_os = "linux")]
+use libc;
+
 pub struct App {
     pub seek_tx: mpsc::Sender<u32>,
     pub seek_rx: mpsc::Receiver<u32>,
@@ -76,6 +79,7 @@ pub struct App {
     progress_at_play_start: u64,
     initial_sync_done: bool,
     options_panel: Option<crate::ui::OptionsPanel>,
+    trim_counter: u64,
 }
 
 impl App {
@@ -250,6 +254,7 @@ impl App {
             progress_at_play_start: 0,
             initial_sync_done: false,
             options_panel: Some(options_panel),
+            trim_counter: 0,
         })
     }
 
@@ -346,6 +351,7 @@ impl App {
         match NativePlayer::new(token, false).await {
             Ok(mut p) => {
                 p.set_volume(self.saved_volume);
+                p.set_visualizer_enabled(self.state.show_visualizer);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = false;
@@ -376,7 +382,8 @@ impl App {
             return true;
         }
         match LocalPlayer::new(self.saved_volume, &self.local_db_path) {
-            Ok(p) => {
+            Ok(mut p) => {
+                p.set_visualizer_enabled(self.state.show_visualizer);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = true;
@@ -946,6 +953,14 @@ impl App {
                         }
                         self.scrobble_sent = true;
                     }
+                }
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                self.trim_counter += 1;
+                if self.trim_counter % 50 == 0 {
+                    unsafe { libc::malloc_trim(0); }
                 }
             }
 

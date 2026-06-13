@@ -10,7 +10,7 @@ use librespot_core::{
     authentication::Credentials, config::SessionConfig, session::Session, spotify_uri::SpotifyUri,
 };
 use librespot_playback::{
-    audio_backend,
+    audio_backend::{self, Sink},
     config::{AudioFormat, PlayerConfig},
     mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
@@ -20,7 +20,10 @@ use librespot_playback::{
 use libc;
 use rand::seq::SliceRandom;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -40,18 +43,6 @@ pub enum PlayerNotification {
     Paused,
     SessionLost,
     FreeAccountDetected,
-}
-
-#[derive(Clone, Debug)]
-pub struct TrackInfo {
-    #[allow(dead_code)]
-    pub uri: String,
-    pub name: String,
-    pub artist: String,
-    pub album: String,
-    pub duration_ms: u64,
-    pub path: Option<PathBuf>,
-    pub cover_path: Option<PathBuf>,
 }
 
 pub trait AudioPlayer: Send {
@@ -101,15 +92,12 @@ pub trait AudioPlayer: Send {
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (vec![], None)
     }
+    fn set_visualizer_enabled(&mut self, _enabled: bool) {}
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None
     }
     #[allow(dead_code)]
     fn current_uri(&self) -> Option<String>;
-    fn current_track_info(&self) -> Option<TrackInfo> {
-        None
-    }
-
     fn current_playback_state(&self) -> Option<PlaybackState> {
         None
     }
@@ -138,6 +126,7 @@ pub struct NativePlayer {
     pub event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     server_position: Arc<Mutex<(u64, Instant)>>,
+    analyzer_enabled: Arc<AtomicBool>,
 }
 
 impl NativePlayer {
@@ -162,9 +151,15 @@ impl NativePlayer {
 
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
+        let analyzer_enabled = Arc::new(AtomicBool::new(true));
+        let analyzer_enabled_for_sink = Arc::clone(&analyzer_enabled);
 
         let session_for_player = session.clone();
         let server_position: Arc<Mutex<(u64, Instant)>> = Arc::new(Mutex::new((0, Instant::now())));
+
+        // factory to recreate inner sink (drops queued audio)
+        let sink_factory: Box<dyn Fn() -> Box<dyn Sink> + Send> =
+            Box::new(move || backend(None, audio_format));
 
         let player = LibrespotPlayer::new(
             PlayerConfig {
@@ -176,9 +171,12 @@ impl NativePlayer {
             session_for_player,
             volume_getter,
             move || {
-                Box::new(AnalyzerSink::new(
-                    backend(None, audio_format),
+                let inner = backend(None, audio_format);
+                Box::new(AnalyzerSink::with_factory(
+                    inner,
                     Arc::clone(&bands_for_sink),
+                    Arc::clone(&analyzer_enabled_for_sink),
+                    sink_factory,
                 ))
             },
         );
@@ -263,6 +261,7 @@ impl NativePlayer {
             event_rx: notif_rx,
             band_energies: bands,
             server_position,
+            analyzer_enabled,
         };
         instance.apply_volume();
         Ok(instance)
@@ -540,8 +539,16 @@ impl AudioPlayer for NativePlayer {
         Some(notif)
     }
 
+    fn set_visualizer_enabled(&mut self, enabled: bool) {
+        self.analyzer_enabled.store(enabled, Ordering::Relaxed);
+    }
+
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
-        Some(Arc::clone(&self.band_energies))
+        if self.analyzer_enabled.load(Ordering::Relaxed) {
+            Some(Arc::clone(&self.band_energies))
+        } else {
+            None
+        }
     }
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {

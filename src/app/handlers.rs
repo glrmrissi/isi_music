@@ -527,6 +527,9 @@ impl App {
             }
             A::ToggleVisualizer => {
                 self.state.show_visualizer = !self.state.show_visualizer;
+                if let Some(player) = &mut self.player {
+                    player.set_visualizer_enabled(self.state.show_visualizer);
+                }
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;

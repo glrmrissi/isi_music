@@ -155,18 +155,18 @@ type AnalyzerProducer = ringbuf::wrap::caching::CachingProd<Arc<HeapRb<f32>>>;
 pub struct AnalyzerHandle {
     bands: Arc<Mutex<Vec<f32>>>,
     producer: Arc<Mutex<AnalyzerProducer>>,
-    // Not implemented
-    #[allow(dead_code)]
+    enabled: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 }
 
 impl AnalyzerHandle {
-    pub fn spawn(bands: Arc<Mutex<Vec<f32>>>) -> Self {
+    pub fn spawn_with_enabled(bands: Arc<Mutex<Vec<f32>>>, enabled: Arc<AtomicBool>) -> Self {
         let rb = HeapRb::<f32>::new(RING_CAP);
         let (prod, mut cons) = rb.split();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
         let bands_clone = Arc::clone(&bands);
+        let enabled_clone = Arc::clone(&enabled);
 
         std::thread::Builder::new()
             .name("band-analyzer".into())
@@ -176,11 +176,16 @@ impl AnalyzerHandle {
                     if shutdown_clone.load(Ordering::Relaxed) {
                         break;
                     }
-                    while let Some(sample) = cons.try_pop() {
-                        analyzer.push_sample(sample);
+                    if enabled_clone.load(Ordering::Relaxed) {
+                        while let Some(sample) = cons.try_pop() {
+                            analyzer.push_sample(sample);
+                        }
+                        analyzer.tick();
+                        std::thread::sleep(Duration::from_millis(30));
+                    } else {
+                        while let Some(_) = cons.try_pop() {}
+                        std::thread::sleep(Duration::from_millis(100));
                     }
-                    analyzer.tick();
-                    std::thread::sleep(Duration::from_millis(30));
                 }
             })
             .expect("failed to spawn analyzer thread");
@@ -188,11 +193,15 @@ impl AnalyzerHandle {
         Self {
             bands,
             producer: Arc::new(Mutex::new(prod)),
+            enabled,
             shutdown,
         }
     }
 
     pub(crate) fn push_mono(&self, sample: f32) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         if let Ok(mut prod) = self.producer.lock() {
             let _ = prod.try_push(sample);
         }
@@ -202,25 +211,81 @@ impl AnalyzerHandle {
         Arc::clone(&self.bands)
     }
 
-    // Not implemented
-    // So, calm down. I working on it
-    // pub fn shutdown(&self) {
-    //     self.shutdown.store(true, Ordering::Relaxed);
-    // }
+    #[allow(dead_code)]
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for AnalyzerHandle {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+pub struct SharedAnalyzerState {
+    pub band_energies: Arc<Mutex<Vec<f32>>>,
+    handle: Mutex<Option<AnalyzerHandle>>,
+    enabled: Arc<AtomicBool>,
+}
+
+impl SharedAnalyzerState {
+    pub fn new() -> Self {
+        Self {
+            band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
+            handle: Mutex::new(None),
+            enabled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::Relaxed);
+        let mut handle = self.handle.lock().unwrap();
+        if on && handle.is_none() {
+            *handle = Some(AnalyzerHandle::spawn_with_enabled(
+                Arc::clone(&self.band_energies),
+                Arc::clone(&self.enabled),
+            ));
+        } else if !on {
+            *handle = None;
+        }
+    }
+
+    pub fn handle(&self) -> Option<AnalyzerHandle> {
+        self.handle.lock().unwrap().clone()
+    }
+
+    pub fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
+        if self.enabled.load(Ordering::Relaxed) {
+            Some(Arc::clone(&self.band_energies))
+        } else {
+            None
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
 }
 
 pub struct AnalyzerSink {
     inner: Box<dyn Sink>,
     pub handle: AnalyzerHandle,
+    sink_factory: Option<Box<dyn Fn() -> Box<dyn Sink> + Send>>,
 }
 
 impl AnalyzerSink {
-    pub fn new(inner: Box<dyn Sink>, bands: Arc<Mutex<Vec<f32>>>) -> Self {
-        Self::with_handle(inner, AnalyzerHandle::spawn(bands))
-    }
-
-    pub fn with_handle(inner: Box<dyn Sink>, handle: AnalyzerHandle) -> Self {
-        Self { inner, handle }
+    pub fn with_factory(
+        inner: Box<dyn Sink>,
+        bands: Arc<Mutex<Vec<f32>>>,
+        enabled: Arc<AtomicBool>,
+        sink_factory: Box<dyn Fn() -> Box<dyn Sink> + Send>,
+    ) -> Self {
+        Self {
+            inner,
+            handle: AnalyzerHandle::spawn_with_enabled(bands, enabled),
+            sink_factory: Some(sink_factory),
+        }
     }
 
     fn push_stereo_f64(&mut self, samples: &[f64]) {
@@ -241,6 +306,10 @@ impl Sink for AnalyzerSink {
             for v in bands.iter_mut() {
                 *v = 0.0;
             }
+        }
+        // fresh sink drops all queued audio buffers
+        if let Some(ref factory) = self.sink_factory {
+            self.inner = factory();
         }
         self.inner.stop()
     }
@@ -271,10 +340,6 @@ impl<S> AnalyzingSource<S>
 where
     S: rodio::Source<Item = f32>,
 {
-    pub fn new(inner: S, bands: Arc<Mutex<Vec<f32>>>) -> Self {
-        Self::with_handle(inner, AnalyzerHandle::spawn(bands))
-    }
-
     pub fn with_handle(inner: S, handle: AnalyzerHandle) -> Self {
         let channels = inner.channels().max(1);
         Self {
