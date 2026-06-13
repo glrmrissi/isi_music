@@ -805,18 +805,27 @@ impl App {
                             if pos >= 1 && pos < 1 + LIBRARY_ITEMS.len() {
                                 let idx = pos - 1;
                                 if self.handle_library_item(idx).await {
-                                    needs_reconnect = true;
+                                    if !self.session_reconnecting {
+                                        self.session_reconnecting = true;
+                                        self.reconnect_player().await;
+                                    }
+                                    return;
                                 }
                             } else if !self.state.playlists.is_empty() {
                                 let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
                                 if pos >= playlist_start {
                                     let idx = pos - playlist_start;
                                     if self.handle_playlist_item(idx).await {
-                                        needs_reconnect = true;
+                                        if !self.session_reconnecting {
+                                            self.session_reconnecting = true;
+                                            self.reconnect_player().await;
+                                        }
+                                        return;
                                     }
                                 }
                             }
                         }
+                        return;
                     }
                     if let Some(display_idx) = self.state.selected_track_index() {
                         let actual_idx = match self.state.sorted_track_indices.get(display_idx) {
