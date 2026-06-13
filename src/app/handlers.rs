@@ -533,6 +533,11 @@ impl App {
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
+                if self.state.show_lyrics {
+                    self.ensure_lyrics();
+                } else {
+                    self.state.playback.lyrics = None;
+                }
                 self.state.status_msg = Some(if self.state.show_lyrics {
                     "Lyrics panel on".to_string()
                 } else {
