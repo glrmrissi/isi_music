@@ -181,6 +181,9 @@ jobs:
             git config user.name "github-actions[bot]"
             git commit -m "chore: v$OLD_VERSION -> v$VERSION"
             git push origin "$BRANCH"
+            # Move tag to the version-bumped commit
+            git tag -f "${{ github.ref_name }}" HEAD
+            git push origin "${{ github.ref_name }}" --force
           fi
 
       - name: Install git-cliff
@@ -193,7 +196,7 @@ jobs:
           git cliff \
             --tag "${{ github.ref_name }}" \
             --config cliff.toml \
-            --unreleased \
+            --current \
             -o changelog-full.md
 
           cat > release-notes.md <<- RELEASE
