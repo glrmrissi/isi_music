@@ -522,7 +522,8 @@ impl App {
                 match (lyrics.poll(), lyrics.is_loading()) {
                     (Some(data), _) => {
                         self.state.playback.lyrics_loading = false;
-                        self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
+                        self.state.playback.lyrics =
+                            if data.is_empty() { None } else { Some(data) };
                     }
                     (None, true) => {
                         self.state.playback.lyrics_loading = true;
@@ -963,7 +964,9 @@ impl App {
             {
                 self.trim_counter += 1;
                 if self.trim_counter % 50 == 0 {
-                    unsafe { libc::malloc_trim(0); }
+                    unsafe {
+                        libc::malloc_trim(0);
+                    }
                 }
             }
 

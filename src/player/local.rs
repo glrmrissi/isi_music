@@ -1,15 +1,10 @@
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
-use std::{
-    fs::File,
-    io::BufReader,
-    path::PathBuf,
-    time::Instant,
-};
+use std::{fs::File, io::BufReader, path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
