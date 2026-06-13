@@ -393,6 +393,14 @@ fn main() -> Result<()> {
     }
     dotenvy::dotenv().ok();
 
+    #[cfg(target_os = "linux")]
+    unsafe {
+        // buffers >=40KB use mmap, freed pages return to OS immediately
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 40960);
+        // aggressive auto-trim
+        libc::mallopt(libc::M_TRIM_THRESHOLD, 4096);
+    }
+
     let mut cfg = config::AppConfig::load()?;
     let args: Vec<String> = std::env::args().collect();
     let arg1 = args.get(1).map(|s| s.as_str());

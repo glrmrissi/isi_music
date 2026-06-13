@@ -357,7 +357,7 @@ impl Default for Theme {
             ascii_art: None,
             ascii_art_inline: None,
             ascii_art_path: None,
-            show_ascii_art: true,
+            show_ascii_art: false,
             compact_layout: default_compact_layout(),
             fullscreen_layout: default_fullscreen_layout(),
             background: Color::Rgb(20, 20, 20),
@@ -463,6 +463,7 @@ impl Theme {
         Ok(ThemeWatcher { rx, stop })
     }
 
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<(), String> {
         let path = Self::get_path().unwrap_or_else(|| PathBuf::from("theme.toml"));
         if let Some(parent) = path.parent() {

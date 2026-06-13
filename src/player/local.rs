@@ -1,18 +1,23 @@
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::{
     fs::File,
     io::BufReader,
     path::PathBuf,
-    sync::{Arc, Mutex},
     time::Instant,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode, TrackInfo};
-use crate::audio::audio_sink::{AnalyzingSource, N_BANDS};
+#[cfg(target_os = "linux")]
+use libc;
+
+use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode};
+use crate::audio::audio_sink::{AnalyzingSource, SharedAnalyzerState};
 use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]
@@ -42,7 +47,7 @@ pub struct LocalPlayer {
     pub repeat: RepeatMode,
     event_tx: mpsc::UnboundedSender<PlayerNotification>,
     event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
-    pub band_energies: Arc<Mutex<Vec<f32>>>,
+    pub analyzer: Arc<SharedAnalyzerState>,
     load_guard: Option<Instant>,
     pub is_seeking: Arc<AtomicBool>,
 }
@@ -103,7 +108,7 @@ impl LocalPlayer {
             repeat: RepeatMode::Off,
             event_tx: tx,
             event_rx: rx,
-            band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
+            analyzer: Arc::new(SharedAnalyzerState::new()),
             load_guard: None,
             is_seeking: Arc::new(AtomicBool::new(false)),
         };
@@ -158,7 +163,13 @@ impl LocalPlayer {
             return false;
         }
 
+        self.sink.clear();
         self.sink.stop();
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::malloc_trim(0);
+        }
 
         let file = match File::open(&path) {
             Ok(f) => f,
@@ -170,8 +181,16 @@ impl LocalPlayer {
             Err(_) => return false,
         };
 
-        let analyzing = AnalyzingSource::new(decoder, Arc::clone(&self.band_energies));
-        self.sink.append(analyzing);
+        if self.analyzer.enabled() {
+            if let Some(handle) = self.analyzer.handle() {
+                let analyzing = AnalyzingSource::with_handle(decoder, handle);
+                self.sink.append(analyzing);
+            } else {
+                self.sink.append(decoder);
+            }
+        } else {
+            self.sink.append(decoder);
+        }
         self.sink.play();
 
         self.current_idx = Some(idx);
@@ -199,11 +218,12 @@ impl LocalPlayer {
         if let Some(idx) = self.current_idx {
             let path = self.queue[idx].path.clone();
             let sink = Arc::clone(&self.sink);
-            let energies = Arc::clone(&self.band_energies);
+            let analyzer = Arc::clone(&self.analyzer);
             let event_tx = self.event_tx.clone();
             let is_seeking = Arc::clone(&self.is_seeking);
 
             is_seeking.store(true, Ordering::SeqCst);
+            sink.clear();
             sink.stop();
 
             std::thread::spawn(move || {
@@ -213,9 +233,17 @@ impl LocalPlayer {
                 if let Some(d) = decoder {
                     let skipped =
                         d.skip_duration(std::time::Duration::from_millis(position_ms as u64));
-                    let analyzing = AnalyzingSource::new(skipped, energies);
 
-                    sink.append(analyzing);
+                    if analyzer.enabled() {
+                        if let Some(handle) = analyzer.handle() {
+                            let analyzing = AnalyzingSource::with_handle(skipped, handle);
+                            sink.append(analyzing);
+                        } else {
+                            sink.append(skipped);
+                        }
+                    } else {
+                        sink.append(skipped);
+                    }
                     sink.play();
 
                     is_seeking.store(false, Ordering::SeqCst);
@@ -433,19 +461,6 @@ impl AudioPlayer for LocalPlayer {
             .map(|t| t.uri.clone())
     }
 
-    fn current_track_info(&self) -> Option<TrackInfo> {
-        let t = self.current_track_meta()?;
-        Some(TrackInfo {
-            uri: t.uri.clone(),
-            name: t.name.clone(),
-            artist: t.artist.clone(),
-            album: t.album.clone(),
-            duration_ms: t.duration_ms,
-            path: Some(t.path.clone()),
-            cover_path: t.cover_path.clone(),
-        })
-    }
-
     fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
         self.apply_volume();
@@ -478,8 +493,12 @@ impl AudioPlayer for LocalPlayer {
         self.event_rx.try_recv().ok()
     }
 
+    fn set_visualizer_enabled(&mut self, enabled: bool) {
+        self.analyzer.set_enabled(enabled);
+    }
+
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
-        Some(Arc::clone(&self.band_energies))
+        self.analyzer.band_energies()
     }
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {

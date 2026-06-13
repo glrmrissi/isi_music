@@ -25,6 +25,9 @@ use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
 use crate::utils::theme::Theme;
 use rspotify::model::RepeatState;
 
+#[cfg(target_os = "linux")]
+use libc;
+
 pub struct App {
     pub seek_tx: mpsc::Sender<u32>,
     pub seek_rx: mpsc::Receiver<u32>,
@@ -67,7 +70,7 @@ pub struct App {
     spotify_streaming_disabled: bool,
     local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
     local_scan_total: usize,
-    lyrics: crate::utils::lyrics::LyricsHandle,
+    lyrics: Option<crate::utils::lyrics::LyricsHandle>,
     pub debug_overlay: Arc<DebugOverlay>,
     reconnect_attempts: u32,
     last_reconnect_attempt: Option<Instant>,
@@ -76,6 +79,7 @@ pub struct App {
     progress_at_play_start: u64,
     initial_sync_done: bool,
     options_panel: Option<crate::ui::OptionsPanel>,
+    trim_counter: u64,
 }
 
 impl App {
@@ -135,16 +139,6 @@ impl App {
 
         let volume = crate::config::load_volume();
         let db_path = crate::config::get_local_db_path();
-
-        let lyrics = crate::utils::lyrics::LyricsHandle::new(
-            db_path.clone().into(),
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(8))
-                .build()
-                .unwrap_or_default(),
-            debug_overlay.clone(),
-        )
-        .expect("Failed to open lyrics cache");
 
         let mut state = UiState::new();
 
@@ -241,7 +235,7 @@ impl App {
             spotify_streaming_disabled: false,
             local_scan_rx: None,
             local_scan_total: 0,
-            lyrics,
+            lyrics: None,
             debug_overlay,
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
@@ -250,6 +244,7 @@ impl App {
             progress_at_play_start: 0,
             initial_sync_done: false,
             options_panel: Some(options_panel),
+            trim_counter: 0,
         })
     }
 
@@ -258,12 +253,6 @@ impl App {
         let (seek_tx, seek_rx) = mpsc::channel();
         let spotify = crate::spotify::SpotifyClient::new_unauthenticated().await;
         let debug_overlay = Arc::new(DebugOverlay::new());
-        let lyrics = crate::utils::lyrics::LyricsHandle::new(
-            std::env::temp_dir().join("isi-music-test-lyrics.db"),
-            reqwest::Client::new(),
-            debug_overlay.clone(),
-        )
-        .expect("Failed to create test lyrics handle");
         let cache_manager = crate::utils::cache::CacheManager::new();
         let mut state = crate::ui::UiState::new();
 
@@ -318,7 +307,7 @@ impl App {
             spotify_streaming_disabled: false,
             local_scan_rx: None,
             local_scan_total: 0,
-            lyrics,
+            lyrics: None,
             debug_overlay,
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
@@ -327,6 +316,20 @@ impl App {
             progress_at_play_start: 0,
             initial_sync_done: false,
             options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
+        }
+    }
+
+    fn ensure_lyrics(&mut self) {
+        if self.lyrics.is_none() {
+            self.lyrics = crate::utils::lyrics::LyricsHandle::new(
+                crate::config::get_local_db_path().into(),
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(8))
+                    .build()
+                    .unwrap_or_default(),
+                self.debug_overlay.clone(),
+            )
+            .ok();
         }
     }
 
@@ -346,6 +349,7 @@ impl App {
         match NativePlayer::new(token, false).await {
             Ok(mut p) => {
                 p.set_volume(self.saved_volume);
+                p.set_visualizer_enabled(self.state.show_visualizer);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = false;
@@ -376,7 +380,8 @@ impl App {
             return true;
         }
         match LocalPlayer::new(self.saved_volume, &self.local_db_path) {
-            Ok(p) => {
+            Ok(mut p) => {
+                p.set_visualizer_enabled(self.state.show_visualizer);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = true;
@@ -452,11 +457,14 @@ impl App {
                                 }
                             }
 
-                            self.lyrics.request(
-                                &self.state.playback.title,
-                                &self.state.playback.artist,
-                                &self.current_track_uri,
-                            );
+                            self.ensure_lyrics();
+                            if let Some(ref lyrics) = self.lyrics {
+                                lyrics.request(
+                                    &self.state.playback.title,
+                                    &self.state.playback.artist,
+                                    &self.current_track_uri,
+                                );
+                            }
 
                             self.state.playback.lyrics = None;
                             self.state.playback.lyrics_loading = true;
@@ -510,16 +518,18 @@ impl App {
                 }
             }
 
-            match (self.lyrics.poll(), self.lyrics.is_loading()) {
-                (Some(data), _) => {
-                    self.state.playback.lyrics_loading = false;
-                    self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
-                }
-                (None, true) => {
-                    self.state.playback.lyrics_loading = true;
-                }
-                (None, false) => {
-                    self.state.playback.lyrics_loading = false;
+            if let Some(ref lyrics) = self.lyrics {
+                match (lyrics.poll(), lyrics.is_loading()) {
+                    (Some(data), _) => {
+                        self.state.playback.lyrics_loading = false;
+                        self.state.playback.lyrics = if data.is_empty() { None } else { Some(data) };
+                    }
+                    (None, true) => {
+                        self.state.playback.lyrics_loading = true;
+                    }
+                    (None, false) => {
+                        self.state.playback.lyrics_loading = false;
+                    }
                 }
             }
 
@@ -946,6 +956,14 @@ impl App {
                         }
                         self.scrobble_sent = true;
                     }
+                }
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                self.trim_counter += 1;
+                if self.trim_counter % 50 == 0 {
+                    unsafe { libc::malloc_trim(0); }
                 }
             }
 

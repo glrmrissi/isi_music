@@ -75,7 +75,6 @@ ratatui-image = { version = "9", default-features = false, features = ["crosster
 
 # Error handling
 anyhow = "1"
-thiserror = "2"
 
 # Logging
 tracing = "0.1"
@@ -86,9 +85,6 @@ mpris-server = { version = "0.8", optional = true }
 
 # Discord Rich Presence
 discord-rich-presence = { version = "0.2", optional = true }
-
-# Hot reload
-notify = "4.0"
 
 # Encoding
 urlencoding = "2.1.3"

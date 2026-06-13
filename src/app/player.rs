@@ -49,8 +49,11 @@ impl App {
         let uri = self.current_track_uri.clone();
 
         if !title.is_empty() && !artist.is_empty() {
+            self.ensure_lyrics();
             self.state.playback.lyrics_loading = true;
-            self.lyrics.request(&title, &artist, &uri);
+            if let Some(ref lyrics) = self.lyrics {
+                lyrics.request(&title, &artist, &uri);
+            }
         }
     }
 

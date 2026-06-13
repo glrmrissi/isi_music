@@ -527,9 +527,17 @@ impl App {
             }
             A::ToggleVisualizer => {
                 self.state.show_visualizer = !self.state.show_visualizer;
+                if let Some(player) = &mut self.player {
+                    player.set_visualizer_enabled(self.state.show_visualizer);
+                }
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
+                if self.state.show_lyrics {
+                    self.ensure_lyrics();
+                } else {
+                    self.state.playback.lyrics = None;
+                }
                 self.state.status_msg = Some(if self.state.show_lyrics {
                     "Lyrics panel on".to_string()
                 } else {
@@ -797,18 +805,27 @@ impl App {
                             if pos >= 1 && pos < 1 + LIBRARY_ITEMS.len() {
                                 let idx = pos - 1;
                                 if self.handle_library_item(idx).await {
-                                    needs_reconnect = true;
+                                    if !self.session_reconnecting {
+                                        self.session_reconnecting = true;
+                                        self.reconnect_player().await;
+                                    }
+                                    return;
                                 }
                             } else if !self.state.playlists.is_empty() {
                                 let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
                                 if pos >= playlist_start {
                                     let idx = pos - playlist_start;
                                     if self.handle_playlist_item(idx).await {
-                                        needs_reconnect = true;
+                                        if !self.session_reconnecting {
+                                            self.session_reconnecting = true;
+                                            self.reconnect_player().await;
+                                        }
+                                        return;
                                     }
                                 }
                             }
                         }
+                        return;
                     }
                     if let Some(display_idx) = self.state.selected_track_index() {
                         let actual_idx = match self.state.sorted_track_indices.get(display_idx) {
