@@ -2,8 +2,8 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, List, ListItem, Padding, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
 use ratatui_image::protocol::StatefulProtocol;
 use rspotify::model::RepeatState;
