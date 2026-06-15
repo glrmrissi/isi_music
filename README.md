@@ -631,11 +631,11 @@ Show the current track in your Discord activity status.
    enabled = true
    ```
 
-2. Optional: use a custom app ID (default: Anthropic's official app):
+2. Optional: use a custom app ID (default: isi-music official app):
    ```toml
    [discord]
    enabled = true
-   app_id = "your_custom_app_id"
+   app_id = "1489692487541850324"
    ```
 
 3. Restart isi-music
