@@ -129,15 +129,12 @@ impl App {
                                 });
                             }
                             4 => {
-                                self.state.show_breadcrumb =
-                                    !self.state.show_breadcrumb;
-                                self.state.status_msg = Some(
-                                    if self.state.show_breadcrumb {
-                                        "Breadcrumb on".to_string()
-                                    } else {
-                                        "Breadcrumb off".to_string()
-                                    },
-                                );
+                                self.state.show_breadcrumb = !self.state.show_breadcrumb;
+                                self.state.status_msg = Some(if self.state.show_breadcrumb {
+                                    "Breadcrumb on".to_string()
+                                } else {
+                                    "Breadcrumb off".to_string()
+                                });
                             }
                             _ => {}
                         },
@@ -355,19 +352,13 @@ impl App {
                         self.state.status_msg = Some("Like failed: empty track ID".to_string());
                         return;
                     }
-                    match crate::spotify::save_track_http(
-                        &self.spotify.http,
-                        &token,
-                        &track_id,
-                    )
-                    .await
+                    match crate::spotify::save_track_http(&self.spotify.http, &token, &track_id)
+                        .await
                     {
                         Ok(_) => {
                             self.state.status_msg = Some("Liked".to_string());
                             self.spotify.library_cache.delete_key_pattern("liked:%");
-                            tracing::info!(
-                                "LikeTrack: saved successfully — liked cache cleared"
-                            );
+                            tracing::info!("LikeTrack: saved successfully — liked cache cleared");
                         }
                         Err(e) => {
                             self.state.status_msg = Some(format!("Like failed: {e}"));
@@ -614,7 +605,11 @@ impl App {
                 } else {
                     let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
                     let cmd = if wayland { "wl-copy" } else { "xclip" };
-                    let args: &[&str] = if wayland { &[] } else { &["-selection", "clipboard"] };
+                    let args: &[&str] = if wayland {
+                        &[]
+                    } else {
+                        &["-selection", "clipboard"]
+                    };
                     let mut child = match std::process::Command::new(cmd)
                         .args(args)
                         .stdin(std::process::Stdio::piped())
@@ -640,10 +635,8 @@ impl App {
                     match child.wait() {
                         Ok(status) if status.success() => {
                             self.state.status_msg = Some(format!("Link copied: {url}"));
-                            self.debug_overlay.log(
-                                LogLevel::Info,
-                                format!("CopyTrackLink: copied {url}"),
-                            );
+                            self.debug_overlay
+                                .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
                         }
                         Ok(status) => {
                             self.state.status_msg =
@@ -654,8 +647,7 @@ impl App {
                             );
                         }
                         Err(e) => {
-                            self.state.status_msg =
-                                Some(format!("Copy failed: {cmd} error ({e})"));
+                            self.state.status_msg = Some(format!("Copy failed: {cmd} error ({e})"));
                             self.debug_overlay.log(
                                 LogLevel::Error,
                                 format!("CopyTrackLink: {cmd} wait error: {e}"),

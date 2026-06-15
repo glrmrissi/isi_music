@@ -210,7 +210,6 @@ impl AnalyzerHandle {
     pub fn bands(&self) -> Arc<Mutex<Vec<f32>>> {
         Arc::clone(&self.bands)
     }
-
 }
 
 impl Drop for AnalyzerHandle {

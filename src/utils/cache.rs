@@ -316,7 +316,6 @@ impl CacheManager {
         info!("Cache cleanup completed");
         Ok(())
     }
-
 }
 
 #[cfg(test)]

@@ -390,11 +390,7 @@ impl OptionsPanel {
                 "",
                 self.config.compact_mode_default.unwrap_or(false),
             ),
-            (
-                "Breadcrumb",
-                "",
-                state.show_breadcrumb,
-            ),
+            ("Breadcrumb", "", state.show_breadcrumb),
         ];
         self.render_item_list(frame, area, "Feature Toggles", &items);
     }
