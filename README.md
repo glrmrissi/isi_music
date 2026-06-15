@@ -113,13 +113,6 @@ enabled = true
 
 [musixmatch]
 musixmatch_api_key = "your_musixmatch_api_key"
-
-[cache]
-enabled = true
-auto_cleanup = true
-max_size_mb = 500
-cleanup_interval_hours = 24
-keep_days = 60
 ```
 
 See [Spotify Setup](#spotify-setup) for obtaining a Client ID.
