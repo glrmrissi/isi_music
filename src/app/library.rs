@@ -13,7 +13,8 @@ impl App {
             return false;
         }
         match idx {
-            0 => {
+             0 => {
+                self.state.push_nav();
                 self.state.status_msg = Some("Loading Liked Songs…".to_string());
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 match self.spotify.fetch_liked_tracks(0).await {
@@ -50,6 +51,7 @@ impl App {
                 }
             }
             1 => {
+                self.state.push_nav();
                 self.state.status_msg = Some("Loading saved albums…".to_string());
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 match self.spotify.fetch_saved_albums(0).await {
@@ -83,6 +85,7 @@ impl App {
                 }
             }
             2 => {
+                self.state.push_nav();
                 self.state.status_msg = Some("Loading followed artists…".to_string());
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 match self.spotify.fetch_followed_artists().await {
@@ -129,6 +132,7 @@ impl App {
             Some(p) => p.clone(),
             None => return false,
         };
+        self.state.push_nav();
         self.state.status_msg = Some(format!("Loading {}…", playlist.name));
         tokio::time::sleep(Duration::from_millis(100)).await;
         match self.spotify.fetch_playlist_tracks(&playlist.id, 0).await {
@@ -192,6 +196,7 @@ impl App {
             return;
         }
 
+        self.state.push_nav();
         self.state.status_msg = Some("Loading local files...".to_string());
         self.state.active_content = ActiveContent::LocalFiles;
         self.state.focus = Focus::Tracks;

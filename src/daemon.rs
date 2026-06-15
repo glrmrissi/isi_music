@@ -16,6 +16,7 @@ use crate::utils::mpris::{MprisCmd, MprisState};
 struct TrackInfo {
     name: String,
     artist: String,
+    album: String,
     duration_ms: u64,
 }
 
@@ -243,10 +244,11 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                                     if let Some(lfm) = lastfm.clone() {
                                         let artist = t.artist.clone();
                                         let title  = t.name.clone();
+                                        let album  = t.album.clone();
                                         let ts  = track_start_unix;
                                         let dur = t.duration_ms;
                                         tokio::spawn(async move {
-                                            lfm.scrobble(&artist, &title, ts, dur).await;
+                                            lfm.scrobble(&artist, &title, &album, ts, dur).await;
                                         });
                                     }
                                     scrobble_sent = true;
@@ -288,6 +290,7 @@ async fn load_playlist(
             track_list.push(TrackInfo {
                 name: t.name,
                 artist: t.artist,
+                album: t.album,
                 duration_ms: t.duration_ms,
             });
         }
@@ -324,6 +327,7 @@ async fn load_liked(
             track_list.push(TrackInfo {
                 name: t.name,
                 artist: t.artist,
+                album: t.album,
                 duration_ms: t.duration_ms,
             });
         }
@@ -351,7 +355,7 @@ fn ls_string(player: &dyn AudioPlayer, tracks: &[TrackInfo]) -> String {
         .enumerate()
         .map(|(i, t)| {
             let marker = if current == Some(i) {
-                if player.is_playing() { "▶" } else { "⏸" }
+                if player.is_playing() { ">" } else { "||" }
             } else {
                 " "
             };
@@ -366,7 +370,7 @@ fn status_string(player: &dyn AudioPlayer, tracks: &[TrackInfo], progress_ms: u6
     let Some(idx) = player.current_index() else {
         return "stopped".into();
     };
-    let state = if player.is_playing() { "▶" } else { "⏸" };
+    let state = if player.is_playing() { ">" } else { "||" };
     match tracks.get(idx) {
         Some(t) => format!(
             "{state}  {} — {}  |  {} / {}  |  vol {}%",

@@ -81,10 +81,11 @@ impl LastfmClient {
         Ok(resp.session.key)
     }
 
-    pub async fn update_now_playing(&self, artist: &str, track: &str, duration_ms: u64) {
+    pub async fn update_now_playing(&self, artist: &str, track: &str, album: &str, duration_ms: u64) {
         let mut params: BTreeMap<&str, String> = BTreeMap::new();
         params.insert("api_key", self.api_key.clone());
         params.insert("artist", artist.to_string());
+        params.insert("album", album.to_string());
         params.insert("duration", (duration_ms / 1000).to_string());
         params.insert("method", "track.updateNowPlaying".to_string());
         params.insert("sk", self.session_key.clone());
@@ -106,10 +107,11 @@ impl LastfmClient {
         }
     }
 
-    pub async fn scrobble(&self, artist: &str, track: &str, timestamp: u64, duration_ms: u64) {
+    pub async fn scrobble(&self, artist: &str, track: &str, album: &str, timestamp: u64, duration_ms: u64) {
         let mut params: BTreeMap<&str, String> = BTreeMap::new();
         params.insert("api_key", self.api_key.clone());
         params.insert("artist[0]", artist.to_string());
+        params.insert("album[0]", album.to_string());
         params.insert("duration[0]", (duration_ms / 1000).to_string());
         params.insert("method", "track.scrobble".to_string());
         params.insert("sk", self.session_key.clone());

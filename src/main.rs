@@ -252,7 +252,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
 
     cfg.spotify.client_id = Some(client_id);
     cfg.save()?;
-    println!("  {GREEN}✓{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
 
     let authenticate = loop {
         let v = prompt("Authenticate with Spotify now? (Y/n): ");
@@ -279,7 +279,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
                                         let rt = token.refresh_token.as_deref().unwrap_or("");
                                         crate::config::save_refresh_token(rt);
                                         println!(
-                                            "  {GREEN}✓{RESET}  Authenticated successfully!\n"
+                                            "  {GREEN}[OK]{RESET}  Authenticated successfully!\n"
                                         );
                                     }
                                 }

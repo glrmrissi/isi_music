@@ -13,7 +13,7 @@ fn defaults_contains_all_actions() {
 fn defaults_no_duplicate_key_combos() {
     let k = Keybinds::defaults();
     let lookup: &HashMap<KeyCombo, Action> = &k.action_for;
-    assert_eq!(lookup.len(), 37);
+    assert_eq!(lookup.len(), 39);
 }
 
 #[test]
@@ -274,6 +274,24 @@ fn lookup_y_is_toggle_lyrics() {
 }
 
 #[test]
+fn lookup_ctrl_y_is_copy_track_link() {
+    let k = Keybinds::defaults();
+    assert_eq!(
+        k.lookup(KeyCode::Char('y'), KeyModifiers::CONTROL),
+        Some(Action::CopyTrackLink)
+    );
+}
+
+#[test]
+fn lookup_shift_b_is_toggle_breadcrumb() {
+    let k = Keybinds::defaults();
+    assert_eq!(
+        k.lookup(KeyCode::Char('b'), KeyModifiers::SHIFT),
+        Some(Action::ToggleBreadcrumb)
+    );
+}
+
+#[test]
 fn lookup_unmapped_returns_none() {
     let k = Keybinds::defaults();
     assert_eq!(k.lookup(KeyCode::F(24), KeyModifiers::empty()), None);
@@ -308,7 +326,7 @@ fn format_help_text_key_strings() {
 #[test]
 fn action_variants_count() {
     let count = Action::all().len();
-    assert_eq!(count, 35, "Action::all() should have 35 entries");
+    assert_eq!(count, 37, "Action::all() should have 37 entries");
 }
 
 #[test]
@@ -336,8 +354,8 @@ fn keybinds_toml_output_sections() {
     let output = KeybindsTomlOutput::from_defaults();
     assert_eq!(output.playback.len(), 12);
     assert_eq!(output.navigation.len(), 8);
-    assert_eq!(output.modes.len(), 11);
-    assert_eq!(output.actions.len(), 4);
+    assert_eq!(output.modes.len(), 12);
+    assert_eq!(output.actions.len(), 5);
 }
 
 #[test]

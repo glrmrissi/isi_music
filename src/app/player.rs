@@ -31,11 +31,12 @@ impl App {
         if let Some(lfm) = self.lastfm.clone() {
             let artist = self.state.playback.artist.clone();
             let track = self.state.playback.title.clone();
+            let album = self.state.playback.album.clone();
             let duration = self.state.playback.duration_ms;
 
             if !artist.trim().is_empty() && !track.trim().is_empty() && duration > 30_000 {
                 tokio::spawn(async move {
-                    lfm.update_now_playing(&artist, &track, duration).await;
+                    lfm.update_now_playing(&artist, &track, &album, duration).await;
                 });
             }
         }
@@ -157,7 +158,7 @@ impl App {
             );
         }
         if let Some(p) = &self.parked_player {
-            let prefix = if self.local_active { " " } else { "󰈣 " };
+            let prefix = if self.local_active { " " } else { "* " };
             items.extend(
                 p.user_queue()
                     .iter()
@@ -183,7 +184,7 @@ impl App {
                     for t in tracks {
                         player.add_to_queue(t.uri, t.name, t.artist, t.duration_ms, None);
                     }
-                    self.state.status_msg = Some(format!("󰐇 Radio: queued {count} tracks"));
+                    self.state.status_msg = Some(format!("Radio: queued {count} tracks"));
                     self.sync_queue_display();
                 }
             }
@@ -241,13 +242,14 @@ impl App {
                 self.state
                     .track_list
                     .select(if count == 0 { None } else { Some(0) });
+                self.state.push_nav();
                 self.state.active_content = crate::ui::ActiveContent::Tracks;
                 self.state.search_results = None;
                 self.state.focus = Focus::Tracks;
                 self.state.status_msg = if count == 0 {
                     Some("No recommendations found".to_string())
                 } else {
-                    Some(format!("󰐇 {count} similar tracks"))
+                    Some(format!("{count} similar tracks"))
                 };
             }
             Err(e) => {
@@ -345,7 +347,7 @@ impl App {
                 }
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
-                self.state.status_msg = Some("🎵 Reconnected!".to_string());
+                self.state.status_msg = Some("Reconnected!".to_string());
                 info!("Librespot session reconnected successfully");
                 self.debug_overlay.log(
                     crate::utils::debug_overlay::LogLevel::Info,
@@ -365,7 +367,7 @@ impl App {
                     );
                     self.spotify_streaming_disabled = true;
                     self.state.status_msg = Some(
-                        "⚠ Spotify Premium required. Switched to local-only mode.".to_string(),
+                        "Spotify Premium required. Switched to local-only mode.".to_string(),
                     );
                     if self.parked_player.is_some() {
                         std::mem::swap(&mut self.player, &mut self.parked_player);

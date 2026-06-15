@@ -133,15 +133,15 @@ fn switch_focus_prev_reverses() {
 }
 
 #[test]
-fn switch_focus_compact_always_tracks() {
+fn switch_focus_compact_follows_cycle() {
     let mut s = UiState::new();
     s.compact_effective = true;
     s.focus = Focus::Library;
     s.switch_focus();
-    assert_eq!(s.focus, Focus::Tracks);
+    assert_eq!(s.focus, Focus::Playlists);
     s.focus = Focus::Queue;
     s.switch_focus();
-    assert_eq!(s.focus, Focus::Tracks);
+    assert_eq!(s.focus, Focus::Library);
 }
 
 #[test]

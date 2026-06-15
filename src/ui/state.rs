@@ -2,7 +2,7 @@ use ratatui::widgets::ListState;
 
 use super::{LIBRARY_ITEMS, LocalNode, SearchResults};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
     Library,
     Playlists,
@@ -28,9 +28,39 @@ impl SearchPanel {
             Self::Playlists => Self::Tracks,
         }
     }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Tracks => Self::Playlists,
+            Self::Artists => Self::Tracks,
+            Self::Albums => Self::Artists,
+            Self::Playlists => Self::Albums,
+        }
+    }
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Clone, Copy)]
+pub enum CompactItem {
+    LibraryItem(usize),
+    PlaylistItem(usize),
+}
+
+#[derive(Clone)]
+pub struct NavEntry {
+    pub active_content: ActiveContent,
+    pub focus: Focus,
+    pub active_playlist_uri: Option<String>,
+    pub active_playlist_id: Option<String>,
+    pub active_artist_name: Option<String>,
+    pub search_results: Option<super::SearchResults>,
+    pub previous_search: Option<super::SearchResults>,
+    pub tracks: Vec<crate::spotify::TrackSummary>,
+    pub sorted_track_indices: Vec<usize>,
+    pub track_sort_by: TrackSortBy,
+    pub label: String,
+}
+
+#[derive(Debug, Default, PartialEq, Clone)]
 pub enum ActiveContent {
     #[default]
     None,
@@ -113,6 +143,7 @@ pub struct UiState {
     pub quick_search_query: String,
     pub spin_angle: f64,
     pub marquee_offset: usize,
+    pub show_breadcrumb: bool,
     pub marquee_ms: u64,
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
@@ -122,6 +153,7 @@ pub struct UiState {
     pub show_lyrics: bool,
     pub compact_mode: bool,
     pub compact_effective: bool,
+    pub nav_stack: Vec<NavEntry>,
 }
 
 impl UiState {
@@ -169,6 +201,7 @@ impl UiState {
             quick_search_query: String::new(),
             spin_angle: 0.0,
             marquee_offset: 0,
+            show_breadcrumb: false,
             marquee_ms: 0,
             viz_bands: Vec::new(),
             art_url: None,
@@ -178,6 +211,7 @@ impl UiState {
             show_lyrics: false,
             compact_mode: false,
             compact_effective: false,
+            nav_stack: Vec::new(),
         }
     }
 
@@ -352,6 +386,62 @@ impl UiState {
         }
     }
 
+    pub fn current_label(&self) -> String {
+        if let Some(ref sr) = self.search_results {
+            return format!("Search: \"{}\"", sr.query);
+        }
+        if let Some(ref uri) = self.active_playlist_uri {
+            if uri == "liked_songs" {
+                return "Liked Songs".to_string();
+            }
+            if uri.starts_with("artist:") {
+                return self
+                    .active_artist_name
+                    .clone()
+                    .unwrap_or_else(|| "Artist".to_string());
+            }
+            if let Some(p) = self
+                .playlists
+                .iter()
+                .find(|p| p.uri == *uri || p.id == *uri)
+            {
+                return p.name.clone();
+            }
+        }
+        match self.active_content {
+            ActiveContent::None => "Library".to_string(),
+            ActiveContent::Tracks => "Tracks".to_string(),
+            ActiveContent::Albums => "Albums".to_string(),
+            ActiveContent::Artists => "Artists".to_string(),
+            ActiveContent::Shows => "Shows".to_string(),
+            ActiveContent::LocalFiles => "Local Files".to_string(),
+        }
+    }
+
+    pub fn push_nav(&mut self) {
+        if self.nav_stack.len() >= 3 {
+            self.nav_stack.remove(0);
+        }
+        let entry = NavEntry {
+            active_content: self.active_content.clone(),
+            focus: self.focus,
+            active_playlist_uri: self.active_playlist_uri.clone(),
+            active_playlist_id: self.active_playlist_id.clone(),
+            active_artist_name: self.active_artist_name.clone(),
+            search_results: self.search_results.clone(),
+            previous_search: self.previous_search.clone(),
+            tracks: self.tracks.clone(),
+            sorted_track_indices: self.sorted_track_indices.clone(),
+            track_sort_by: self.track_sort_by,
+            label: self.current_label(),
+        };
+        self.nav_stack.push(entry);
+    }
+
+    pub fn pop_nav(&mut self) -> Option<NavEntry> {
+        self.nav_stack.pop()
+    }
+
     fn compact_selectable_positions(&self) -> Vec<usize> {
         let mut positions: Vec<usize> = (1..=LIBRARY_ITEMS.len()).collect();
         if !self.playlists.is_empty() {
@@ -361,6 +451,23 @@ impl UiState {
             }
         }
         positions
+    }
+
+    pub fn compact_item_at(&self, pos: usize) -> Option<CompactItem> {
+        if pos >= 1 && pos < 1 + LIBRARY_ITEMS.len() {
+            Some(CompactItem::LibraryItem(pos - 1))
+        } else if !self.playlists.is_empty() {
+            let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
+            if pos >= playlist_start {
+                let idx = pos - playlist_start;
+                if idx < self.playlists.len() {
+                    return Some(CompactItem::PlaylistItem(idx));
+                }
+            }
+            None
+        } else {
+            None
+        }
     }
 
     pub fn nav_up(&mut self) {
@@ -598,62 +705,51 @@ impl UiState {
         }
     }
 
+    fn focus_cycle(&self) -> Vec<Focus> {
+        let mut cycle = vec![Focus::Library, Focus::Playlists];
+        if self.search_results.is_some() {
+            cycle.push(Focus::Search);
+        }
+        cycle.push(Focus::Tracks);
+        cycle.push(Focus::Queue);
+        cycle
+    }
+
     pub fn switch_focus(&mut self) {
         self.search_active = false;
-        if self.compact_effective {
-            self.focus = match self.focus {
-                Focus::Search => Focus::Tracks,
-                _ => {
-                    if self.search_results.is_some() {
-                        Focus::Search
-                    } else {
-                        Focus::Tracks
-                    }
-                }
-            };
-            return;
-        }
-        self.focus = match self.focus {
-            Focus::Library => Focus::Playlists,
-            Focus::Playlists => {
-                if self.search_results.is_some() {
-                    Focus::Search
-                } else {
-                    Focus::Tracks
-                }
-            }
-            Focus::Tracks => Focus::Queue,
-            Focus::Queue | Focus::Search => Focus::Library,
+        let cycle = self.focus_cycle();
+        let pos = cycle.iter().position(|f| *f == self.focus);
+        self.focus = match pos {
+            Some(i) => cycle[(i + 1) % cycle.len()],
+            None => cycle[0],
         };
     }
 
     pub fn switch_focus_prev(&mut self) {
         self.search_active = false;
-        if self.compact_effective {
-            self.focus = match self.focus {
-                Focus::Search => Focus::Tracks,
-                _ => {
-                    if self.search_results.is_some() {
-                        Focus::Search
-                    } else {
-                        Focus::Tracks
-                    }
+        let cycle = self.focus_cycle();
+        let pos = cycle.iter().position(|f| *f == self.focus);
+        self.focus = match pos {
+            Some(i) => {
+                if i == 0 {
+                    cycle[cycle.len() - 1]
+                } else {
+                    cycle[i - 1]
                 }
-            };
-            return;
-        }
-        self.focus = match self.focus {
-            Focus::Library => Focus::Queue,
-            Focus::Playlists => Focus::Library,
-            Focus::Tracks => Focus::Playlists,
-            Focus::Queue => Focus::Tracks,
-            Focus::Search => Focus::Playlists,
+            }
+            None => cycle[0],
         };
     }
 
     pub fn switch_search_panel(&mut self) {
         if let Some(sr) = &mut self.search_results {
             sr.next_panel();
+        }
+    }
+
+    pub fn switch_search_panel_prev(&mut self) {
+        if let Some(sr) = &mut self.search_results {
+            sr.prev_panel();
         }
     }
 }

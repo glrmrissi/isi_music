@@ -103,6 +103,7 @@ pub trait AudioPlayer: Send {
     }
 }
 
+#[derive(Clone)]
 pub struct QueuedTrack {
     pub uri: String,
     pub name: String,
@@ -557,8 +558,7 @@ impl AudioPlayer for NativePlayer {
 
     fn current_playback_state(&self) -> Option<PlaybackState> {
         let guard = self.server_position.lock().ok()?;
-        let (base, time) = *guard;
-        let progress_ms = base + time.elapsed().as_millis() as u64;
+        let (base, _time) = *guard;
         Some(PlaybackState {
             is_playing: self.is_playing,
             volume: self.volume,
@@ -569,7 +569,7 @@ impl AudioPlayer for NativePlayer {
                 RepeatMode::Track => rspotify::model::RepeatState::Track,
             },
             is_local: false,
-            progress_ms,
+            progress_ms: base,
             ..PlaybackState::default()
         })
     }

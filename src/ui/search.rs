@@ -4,6 +4,7 @@ use crate::spotify::{
 use crate::ui::SearchPanel;
 use ratatui::widgets::ListState;
 
+#[derive(Clone)]
 pub struct SearchResults {
     pub tracks: Vec<TrackSummary>,
     pub artists: Vec<ArtistSummary>,
@@ -93,6 +94,10 @@ impl SearchResults {
 
     pub fn next_panel(&mut self) {
         self.panel = self.panel.next();
+    }
+
+    pub fn prev_panel(&mut self) {
+        self.panel = self.panel.prev();
     }
 
     pub fn selected_track_uri(&self) -> Option<&str> {

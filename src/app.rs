@@ -124,7 +124,7 @@ impl App {
                         "Spotify 403 — create your own app: isi-music setup-spotify",
                     );
                     startup_warning = Some(
-                        "⚠ Spotify 403: seu Client ID atingiu o limite do Development Mode. Crie seu próprio app: isi-music setup-spotify".to_string(),
+                        "Spotify 403: seu Client ID atingiu o limite do Development Mode. Crie seu próprio app: isi-music setup-spotify".to_string(),
                     );
                 } else {
                     debug_overlay.log(
@@ -315,6 +315,7 @@ impl App {
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
+            trim_counter: 0,
             options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
         }
     }
@@ -596,7 +597,7 @@ impl App {
                                     format!("Free account detected - switching to local-only mode"),
                                 );
                                 self.state.status_msg = Some(
-                                    "⚠ Spotify Premium required. Switched to local-only mode."
+                                    "Spotify Premium required. Switched to local-only mode."
                                         .to_string(),
                                 );
 
@@ -949,10 +950,11 @@ impl App {
                         if let Some(lfm) = self.lastfm.clone() {
                             let artist = self.state.playback.artist.clone();
                             let track = self.state.playback.title.clone();
+                            let album = self.state.playback.album.clone();
                             let ts = self.track_start_unix;
                             let dur = duration;
                             tokio::spawn(async move {
-                                lfm.scrobble(&artist, &track, ts, dur).await;
+                                lfm.scrobble(&artist, &track, &album, ts, dur).await;
                             });
                         }
                         self.scrobble_sent = true;

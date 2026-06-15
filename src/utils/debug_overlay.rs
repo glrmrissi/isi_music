@@ -200,7 +200,7 @@ impl DebugOverlay {
         let outer = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .title(" 󰃤 Debug Overlay [D] Close ")
+            .title(" Debug Overlay [D] Close ")
             .title_alignment(Alignment::Center)
             .style(Style::default().fg(Color::DarkGray));
 

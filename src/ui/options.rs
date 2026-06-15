@@ -103,7 +103,7 @@ impl OptionsPanel {
 
     fn items_in_section(&self) -> usize {
         match self.focused_section {
-            OptionsSection::Features => 4,
+            OptionsSection::Features => 5,
             OptionsSection::Cache => 8,
             OptionsSection::QuickAccess => 1,
             OptionsSection::Help => 1,
@@ -196,7 +196,7 @@ impl OptionsPanel {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, _state: &UiState) {
+    pub fn render(&self, frame: &mut Frame, state: &UiState) {
         if !self.visible {
             return;
         }
@@ -246,7 +246,7 @@ impl OptionsPanel {
         frame.render_widget(Paragraph::new("").style(bg), content_area);
 
         self.render_sections(frame, sections_area);
-        self.render_content(frame, content_area);
+        self.render_content(frame, state, content_area);
 
         // Opaque footer
         frame.render_widget(Clear, footer_area);
@@ -319,9 +319,9 @@ impl OptionsPanel {
         frame.render_stateful_widget(list, area, &mut list_state);
     }
 
-    fn render_content(&self, frame: &mut Frame, area: Rect) {
+    fn render_content(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         match self.focused_section {
-            OptionsSection::Features => self.render_features_section(frame, area),
+            OptionsSection::Features => self.render_features_section(frame, state, area),
             OptionsSection::Cache => self.render_cache_section(frame, area),
             OptionsSection::QuickAccess => self.render_quick_access_section(frame, area),
             OptionsSection::Help => self.render_help_section(frame, area),
@@ -371,7 +371,7 @@ impl OptionsPanel {
         frame.render_stateful_widget(list, inner, &mut list_state);
     }
 
-    fn render_features_section(&self, frame: &mut Frame, area: Rect) {
+    fn render_features_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let items = vec![
             (
                 "Cover Images",
@@ -392,6 +392,11 @@ impl OptionsPanel {
                 "Compact Mode",
                 "",
                 self.config.compact_mode_default.unwrap_or(false),
+            ),
+            (
+                "Breadcrumb",
+                "",
+                state.show_breadcrumb,
             ),
         ];
         self.render_item_list(frame, area, "Feature Toggles", &items);

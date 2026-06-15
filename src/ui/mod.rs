@@ -10,7 +10,7 @@ pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode};
 pub use options::OptionsPanel;
 pub use playback::PlaybackState;
 pub use search::SearchResults;
-pub use state::{ActiveContent, Focus, SearchPanel, UiState};
+pub use state::{ActiveContent, CompactItem, Focus, SearchPanel, UiState};
 
 use crate::utils::debug_overlay::DebugOverlay;
 use crate::utils::theme::{LayoutNode, SerializableConstraint, Theme, UiWidget};
@@ -99,15 +99,6 @@ impl Ui {
         };
 
         state.compact_effective = state.compact_mode || root_area.width < 100;
-
-        if state.compact_effective
-            && matches!(
-                state.focus,
-                Focus::Library | Focus::Playlists | Focus::Queue
-            )
-        {
-            state.focus = Focus::Tracks;
-        }
 
         if state.fullscreen_player {
             let accent = self.theme.border_active;
