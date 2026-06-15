@@ -62,6 +62,18 @@ chore: bump ratatui to 0.30
 - Reference issues in the footer: `Closes #42`
 - Breaking changes go in the footer: `BREAKING CHANGE: config format changed`
 
+### Versioning
+
+This project follows **Semantic Versioning** (SemVer), derived automatically from commit types:
+
+| Commit type | Version bump |
+|-------------|--------------|
+| `fix:` | Patch (1.0.x) |
+| `feat:` | Minor (1.x.0) |
+| Any commit with `BREAKING CHANGE` footer | Major (x.0.0) |
+
+All other types (`perf`, `refactor`, `style`, `test`, `docs`, `chore`) do not affect the version.
+
 ---
 
 ## Branch naming
