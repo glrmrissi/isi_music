@@ -9,7 +9,7 @@ isi-music is a terminal audio player for Spotify streaming and local file playba
 ## Features
 
 - **Spotify streaming** via librespot -- no official Spotify app required
-- **Local file playback** -- MP3, FLAC, OGG, WAV, AIFF, Opus with automatic metadata extraction
+- **Local file playback** -- MP3, FLAC, OGG, WAV, AIFF with automatic metadata extraction
 - **Real-time audio visualizer** using braille characters (Spotify + local files)
 - **Full-text search** across tracks, albums, artists, playlists, and podcasts
 - **Queue management** with cross-player support (mix Spotify and local tracks)
@@ -148,7 +148,198 @@ show_ascii_art = false
 
 Colors can be specified as hex (`#rrggbb`), named (`white`, `red`, `green`, etc.), or RGB function (`rgb(r,g,b)`).
 
-The theme file supports custom layout trees (`layout_tree`, `compact_layout`, `fullscreen_layout`), widget styles, and ASCII art. Run the wizard (`isi-music setup`) to choose from 8 color presets that preserve your existing layout settings.
+The theme file supports custom layout trees, widget styles, and ASCII art:
+
+```toml
+border_active = "#00d4ff"
+border_inactive = "#ffffff"
+highlight_bg = "#004b7a"
+text_primary = "#ffffff"
+accent_color = "#ffeb3b"
+background = "#141414"
+text_secondary = "#888888"
+status_bar = "#1e1e1e"
+
+ascii_art_inline = [
+    "      .---.         ",
+    '     /|66_\        ',
+    '     \| ^ /---.    ',
+    "      |'-'| UI |   ",
+    "      |   |____|   ",
+    "      |   |        ",
+    "      '---'        ",
+    "    _________      ",
+    "   /        /|     ",
+    "  /________/ |     ",
+    "  |        | |     ",
+    "  |  ISI   | /     ",
+    "  |________|/      ",
+]
+show_ascii_art = false
+
+[widget_styles]
+
+[layout_tree]
+direction = "vertical"
+
+[[layout_tree.constraints]]
+length = 3
+
+[[layout_tree.constraints]]
+fill = 1
+
+[[layout_tree.constraints]]
+length = 1
+
+[[layout_tree.constraints]]
+length = 1
+
+[[layout_tree.children]]
+direction = "horizontal"
+
+[[layout_tree.children.constraints]]
+fill = 1
+
+[[layout_tree.children.constraints]]
+length = 40
+
+[[layout_tree.children.children]]
+widget = "header"
+
+[[layout_tree.children.children]]
+widget = "visualizer"
+
+[[layout_tree.children]]
+direction = "horizontal"
+
+[[layout_tree.children.constraints]]
+percentage = 20
+
+[[layout_tree.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children]]
+direction = "vertical"
+
+[[layout_tree.children.children.constraints]]
+length = 7
+
+[[layout_tree.children.children.constraints]]
+length = 15
+
+[[layout_tree.children.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children.children]]
+widget = "library"
+
+[[layout_tree.children.children.children]]
+widget = "playlists"
+
+[[layout_tree.children.children.children]]
+widget = "ascii_art"
+
+[[layout_tree.children.children]]
+direction = "vertical"
+
+[[layout_tree.children.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children.constraints]]
+length = 8
+
+[[layout_tree.children.children.children]]
+widget = "main_content"
+
+[[layout_tree.children.children.children]]
+widget = "queue"
+
+[[layout_tree.children]]
+direction = "horizontal"
+
+[[layout_tree.children.constraints]]
+percentage = 30
+
+[[layout_tree.children.constraints]]
+fill = 1
+
+[[layout_tree.children.children]]
+widget = "marquee"
+
+[[layout_tree.children.children]]
+widget = "progress"
+
+[[layout_tree.children]]
+widget = "help"
+
+[compact_layout]
+direction = "vertical"
+
+[[compact_layout.constraints]]
+length = 1
+
+[[compact_layout.constraints]]
+fill = 1
+
+[[compact_layout.constraints]]
+length = 1
+
+[[compact_layout.children]]
+widget = "header"
+
+[[compact_layout.children]]
+direction = "horizontal"
+
+[[compact_layout.children.constraints]]
+percentage = 35
+
+[[compact_layout.children.constraints]]
+fill = 1
+
+[[compact_layout.children.children]]
+widget = "ascii_art"
+
+[[compact_layout.children.children]]
+widget = "main_content"
+
+[[compact_layout.children]]
+direction = "horizontal"
+
+[[compact_layout.children.constraints]]
+percentage = 30
+
+[[compact_layout.children.constraints]]
+fill = 1
+
+[[compact_layout.children.children]]
+widget = "marquee"
+
+[[compact_layout.children.children]]
+widget = "progress"
+
+[fullscreen_layout]
+direction = "vertical"
+
+[[fullscreen_layout.constraints]]
+length = 18
+
+[[fullscreen_layout.constraints]]
+length = 8
+
+[[fullscreen_layout.constraints]]
+min = 0
+
+[[fullscreen_layout.children]]
+widget = "now_playing"
+
+[[fullscreen_layout.children]]
+widget = "fullscreen_lyrics"
+
+[[fullscreen_layout.children]]
+widget = "visualizer"
+```
+
+Run the wizard (`isi-music setup`) to choose from 8 color presets that preserve your existing layout settings.
 
 ### Custom Keybindings
 
@@ -216,8 +407,6 @@ The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser
 | `?` | Open help panel |
 | `Ctrl+f` | Quick search (filter current track list) |
 | `PgUp` / `PgDown` | Scroll lyrics |
-| `c` | Toggle album art panel (in Options > Features) |
-
 All keybindings are customizable in `keybinds.toml`.
 
 ### Daemon Mode
@@ -252,7 +441,7 @@ isi-music --status       # shows current track and progress
 isi-music --quit-daemon
 ```
 
-Logs are written to `~/.local/share/isi-music/isi-music.log` (Linux) or the equivalent AppData path on other platforms. Clear them with `isi-music --clear-logs`.
+Logs are written to `~/.cache/isi-music/isi-music.log` (Linux) or the equivalent cache path on other platforms. Clear them with `isi-music --clear-logs`.
 
 > Daemon mode currently supports Spotify playback only. Local file playback works in TUI mode.
 
@@ -265,7 +454,7 @@ isi-music can play local audio files without a Spotify account. Point it at your
 music_dir = "~/Music"
 ```
 
-Supported formats: MP3, FLAC, OGG, WAV, AIFF, Opus.
+Supported formats: MP3, FLAC, OGG, WAV, AIFF.
 
 Navigate to **Local Files** in the library panel and press Enter to scan. The first scan extracts metadata and embedded cover art, cached in SQLite for instant subsequent loads.
 
@@ -349,7 +538,7 @@ cargo test
 isi-music uses multiple audio backends depending on the source:
 
 - **librespot** -- Spotify authentication and audio streaming via the Spotify Connect protocol
-- **rodio + symphonia** -- Local audio decoding (MP3, FLAC, OGG, WAV, AIFF, Opus)
+- **rodio + symphonia** -- Local audio decoding (MP3, FLAC, OGG, WAV, AIFF)
 - **rspotify** -- Spotify Web API client for search, metadata, playlists, and album art
 
 The TUI is built with ratatui. The event loop polls player state, processes keyboard input, and renders at ~60 fps.

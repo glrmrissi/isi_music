@@ -315,7 +315,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     println!("  Where is your local music library?\n");
     println!(
         "  {}",
-        style("Supported formats: mp3, flac, ogg, wav, aiff, m4a, opus").dim()
+        style("Supported formats: mp3, flac, ogg, wav, aiff").dim()
     );
     println!();
 

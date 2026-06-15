@@ -205,7 +205,7 @@ impl App {
         self.local_scan_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
-            let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "m4a", "opus"];
+            let extensions = ["mp3", "flac", "ogg", "wav", "aiff"];
             let mut nodes: Vec<LocalNode> = Vec::new();
 
             let db_path = crate::config::get_local_db_path();
