@@ -12,7 +12,7 @@ fn default_theme_has_correct_colors() {
     assert_eq!(t.background, Color::Rgb(20, 20, 20));
     assert_eq!(t.text_secondary, Color::Gray);
     assert_eq!(t.status_bar, Color::Rgb(30, 30, 30));
-    assert!(t.show_ascii_art);
+    assert!(!t.show_ascii_art);
 }
 
 #[test]

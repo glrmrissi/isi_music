@@ -272,7 +272,6 @@ impl App {
                         name,
                         depth,
                         expanded: true,
-                        children_start: folder_idx + 1,
                         children_count: 0,
                     });
                     let before = nodes.len();

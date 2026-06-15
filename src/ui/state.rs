@@ -215,13 +215,6 @@ impl UiState {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn selected_playlist(&self) -> Option<&crate::spotify::PlaylistSummary> {
-        self.playlist_list
-            .selected()
-            .and_then(|i| self.playlists.get(i))
-    }
-
     pub fn selected_track_index(&self) -> Option<usize> {
         self.track_list.selected()
     }

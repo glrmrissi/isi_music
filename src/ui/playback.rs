@@ -5,8 +5,6 @@ pub struct PlaybackState {
     pub title: String,
     pub artist: String,
     pub album: String,
-    #[allow(dead_code)]
-    pub path: Option<String>,
     pub is_playing: bool,
     pub shuffle: bool,
     pub repeat: RepeatState,
@@ -28,7 +26,6 @@ impl Default for PlaybackState {
             title: String::new(),
             artist: String::new(),
             album: String::new(),
-            path: None,
             is_playing: false,
             shuffle: false,
             repeat: RepeatState::Off,

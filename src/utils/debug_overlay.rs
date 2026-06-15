@@ -112,16 +112,6 @@ impl DebugOverlay {
         self.handle().log(level, msg);
     }
 
-    #[allow(dead_code)]
-    pub fn log_api(&self, method: &str, url: &str, status: u16) {
-        self.log(LogLevel::Api, format!("{} {}  → {}", method, url, status));
-    }
-
-    #[allow(dead_code)]
-    pub fn log_audio(&self, msg: impl Into<String>) {
-        self.log(LogLevel::Audio, msg);
-    }
-
     pub fn update_metrics(&self) {
         let mut g = self.inner.lock().unwrap();
         let now = Instant::now();
@@ -314,16 +304,6 @@ impl DebugHandle {
             message: msg.into(),
             elapsed,
         });
-    }
-
-    #[allow(dead_code)]
-    pub fn log_api(&self, method: &str, url: &str, status: u16) {
-        self.log(LogLevel::Api, format!("{} {}  → {}", method, url, status));
-    }
-
-    #[allow(dead_code)]
-    pub fn log_audio(&self, msg: impl Into<String>) {
-        self.log(LogLevel::Audio, msg);
     }
 }
 

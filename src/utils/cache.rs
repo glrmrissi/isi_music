@@ -1,5 +1,4 @@
 use anyhow::Result;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -318,107 +317,6 @@ impl CacheManager {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub async fn update_library_cache(&self, key: &str, data: impl Serialize) {
-        let data_json = match serde_json::to_string(&data) {
-            Ok(json) => json,
-            Err(e) => {
-                warn!("Failed to serialize library cache data: {e}");
-                return;
-            }
-        };
-
-        let key = key.to_string();
-        let db_path = self.db_path.clone();
-        let now = Self::unix_now();
-        spawn_blocking(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    warn!("Failed to open connection for library cache: {e}");
-                    return;
-                }
-            };
-
-            if let Err(e) = conn.execute(
-                "INSERT OR REPLACE INTO library_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
-                params![key, data_json, now],
-            ) {
-                warn!("Failed to save library cache: {e}");
-            }
-        });
-    }
-
-    #[allow(dead_code)]
-    pub async fn add_lyrics(&self, key: String, lyrics: CachedLyrics) {
-        {
-            let mut lyrics_guard = self.lyrics_cache.write().await;
-            lyrics_guard.store.insert(key.clone(), lyrics.clone());
-        }
-
-        let db_path = self.db_path.clone();
-        spawn_blocking(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    warn!("Failed to open connection for lyrics cache: {e}");
-                    return;
-                }
-            };
-
-            let json = match serde_json::to_string(&lyrics) {
-                Ok(json) => json,
-                Err(e) => {
-                    warn!("Failed to serialize lyrics cache: {e}");
-                    return;
-                }
-            };
-
-            if let Err(e) = conn.execute(
-                "INSERT OR REPLACE INTO lyrics_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
-                params![key, json, lyrics.saved_at],
-            ) {
-                warn!("Failed to save lyrics cache: {e}");
-            }
-        });
-    }
-
-    #[allow(dead_code)]
-    pub async fn update_search_cache(&self, key: String, results: CachedSearch) {
-        {
-            let mut search_guard = self.search_cache.write().await;
-            search_guard
-                .store
-                .insert(key.clone(), (Self::unix_now(), results.clone()));
-        }
-
-        let db_path = self.db_path.clone();
-        let now = Self::unix_now();
-        let json = match serde_json::to_string(&results) {
-            Ok(json) => json,
-            Err(e) => {
-                warn!("Failed to serialize search cache: {e}");
-                return;
-            }
-        };
-
-        spawn_blocking(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    warn!("Failed to open connection for search cache: {e}");
-                    return;
-                }
-            };
-
-            if let Err(e) = conn.execute(
-                "INSERT OR REPLACE INTO search_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
-                params![key, json, now],
-            ) {
-                warn!("Failed to save search cache: {e}");
-            }
-        });
-    }
 }
 
 #[cfg(test)]

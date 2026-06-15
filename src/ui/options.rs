@@ -1,4 +1,4 @@
-use crate::config::{AppOptionsConfig, CacheConfig};
+use crate::config::AppOptionsConfig;
 use crate::utils::cache::{CacheManager, CacheStats};
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -28,8 +28,6 @@ pub struct OptionsPanel {
     pub selected_item: usize,
     pub cache_manager: CacheManager,
     pub config: AppOptionsConfig,
-    #[allow(dead_code)]
-    pub cache_config: CacheConfig,
     pub cache_stats: Option<CacheStats>,
     pub loading: bool,
     pub help_text: Vec<String>,
@@ -71,7 +69,6 @@ impl OptionsPanel {
             selected_item: 0,
             cache_manager,
             config: AppOptionsConfig::default(),
-            cache_config: CacheConfig::default(),
             cache_stats: None,
             loading: false,
             help_text: Vec::new(),

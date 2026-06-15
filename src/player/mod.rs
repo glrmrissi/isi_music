@@ -96,8 +96,6 @@ pub trait AudioPlayer: Send {
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None
     }
-    #[allow(dead_code)]
-    fn current_uri(&self) -> Option<String>;
     fn current_playback_state(&self) -> Option<PlaybackState> {
         None
     }
@@ -433,13 +431,6 @@ impl NativePlayer {
         let v = (self.volume as u32 * 65535 / 100) as u16;
         self.mixer.set_volume(v);
     }
-
-    #[allow(dead_code)]
-    pub fn current_uri(&self) -> Option<String> {
-        self.current_index()
-            .and_then(|i| self.queue.get(i))
-            .cloned()
-    }
 }
 
 impl AudioPlayer for NativePlayer {
@@ -466,9 +457,6 @@ impl AudioPlayer for NativePlayer {
     }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
         self.playing_queued.take()
-    }
-    fn current_uri(&self) -> Option<String> {
-        self.current_uri()
     }
 
     fn play(&mut self) {

@@ -211,10 +211,6 @@ impl AnalyzerHandle {
         Arc::clone(&self.bands)
     }
 
-    #[allow(dead_code)]
-    pub fn shutdown(&self) {
-        self.shutdown.store(true, Ordering::Relaxed);
-    }
 }
 
 impl Drop for AnalyzerHandle {

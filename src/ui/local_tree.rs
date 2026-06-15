@@ -7,8 +7,6 @@ pub enum LocalNode {
         name: String,
         depth: usize,
         expanded: bool,
-        #[allow(dead_code)]
-        children_start: usize,
         children_count: usize,
     },
     Track {

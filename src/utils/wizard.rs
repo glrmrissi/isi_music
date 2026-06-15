@@ -495,6 +495,7 @@ fn pick_preset(_term: &Term) -> Result<Theme> {
         style(format!("Preset selected: {}", preset.name)).bold()
     );
 
+    let existing = Theme::load();
     let t = Theme {
         border_active: parse_hex(preset.border_active),
         border_inactive: parse_hex(preset.border_inactive),
@@ -504,7 +505,7 @@ fn pick_preset(_term: &Term) -> Result<Theme> {
         accent_color: parse_hex(preset.accent),
         background: parse_hex(preset.background),
         status_bar: parse_hex(preset.status_bar),
-        ..Theme::default()
+        ..existing
     };
 
     Ok(t)

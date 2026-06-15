@@ -490,7 +490,6 @@ pub struct PlaylistSummary {
     pub name: String,
     pub uri: String,
     pub total_tracks: u32,
-    #[allow(dead_code)]
     pub art_url: Option<String>,
 }
 
@@ -526,8 +525,6 @@ pub struct ShowSummary {
     pub id: String,
     pub name: String,
     pub publisher: String,
-    #[allow(dead_code)]
-    pub uri: String,
     pub total_episodes: u32,
 }
 
@@ -1101,7 +1098,6 @@ impl SpotifyClient {
             title,
             artist,
             album,
-            path: None,
             is_playing,
             shuffle: self.shuffle_state,
             repeat: self.repeat_state,
@@ -1818,13 +1814,11 @@ impl SpotifyClient {
                 let id = show["id"].as_str().unwrap_or("").to_string();
                 let name = show["name"].as_str().unwrap_or("Unknown").to_string();
                 let publisher = show["publisher"].as_str().unwrap_or("").to_string();
-                let uri = show["uri"].as_str().unwrap_or("").to_string();
                 let total_episodes = show["total_episodes"].as_u64().unwrap_or(0) as u32;
                 shows.push(ShowSummary {
                     id,
                     name,
                     publisher,
-                    uri,
                     total_episodes,
                 });
             }

@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 #[test]
 fn unix_now_returns_recent_timestamp() {

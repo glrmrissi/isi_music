@@ -17,9 +17,6 @@ use crate::spotify::TrackSummary;
 
 #[derive(Clone, Debug)]
 pub struct LocalTrack {
-    // This id is used but for now i just put allow dead_code, not good pratice.
-    #[allow(dead_code)]
-    pub id: i64,
     pub path: PathBuf,
     pub uri: String,
     pub name: String,
@@ -129,7 +126,6 @@ impl LocalPlayer {
                 let path_str: String = row.get(1)?;
                 let cover_path_str: Option<String> = row.get(6)?;
                 Ok(LocalTrack {
-                    id: row.get(0)?,
                     path: PathBuf::from(&path_str),
                     uri: format!("file://{}", path_str),
                     name: row
@@ -281,7 +277,6 @@ impl LocalPlayer {
             let track = self.user_queue.remove(0);
             let path = LocalTrack::uri_to_path(&track.uri);
             let lt = LocalTrack {
-                id: -1,
                 path,
                 uri: track.uri.clone(),
                 name: track.name.clone(),
@@ -450,12 +445,6 @@ impl AudioPlayer for LocalPlayer {
         self.current_idx
     }
 
-    fn current_uri(&self) -> Option<String> {
-        self.current_idx
-            .and_then(|i| self.queue.get(i))
-            .map(|t| t.uri.clone())
-    }
-
     fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
         self.apply_volume();
@@ -519,7 +508,6 @@ impl AudioPlayer for LocalPlayer {
             } else {
                 t.album.clone()
             },
-            path: t.path.to_str().map(|s| s.to_string()),
             cover_path: t
                 .cover_path
                 .as_ref()
@@ -538,63 +526,5 @@ impl AudioPlayer for LocalPlayer {
             art_url: None,
             ..crate::ui::PlaybackState::default()
         })
-    }
-}
-
-#[allow(dead_code)]
-struct SkipDecoder<D>
-where
-    D: Source,
-{
-    inner: D,
-    remaining: u32,
-}
-
-impl<D> SkipDecoder<D>
-where
-    D: Source,
-{
-    #[allow(dead_code)]
-    fn new(inner: D, duration: std::time::Duration) -> Self {
-        let sample_rate = inner.sample_rate().max(1) as u32;
-        let channels = inner.channels() as u32;
-        let remaining = (duration.as_secs_f32() * sample_rate as f32 * channels as f32) as u32;
-        Self { inner, remaining }
-    }
-}
-
-impl<D> Iterator for SkipDecoder<D>
-where
-    D: Source,
-{
-    type Item = D::Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.remaining > 0 {
-            self.remaining -= 1;
-            let _ = self.inner.next();
-        }
-        self.inner.next()
-    }
-}
-
-impl<D> rodio::Source for SkipDecoder<D>
-where
-    D: Source,
-{
-    fn current_span_len(&self) -> Option<usize> {
-        self.inner.current_span_len()
-    }
-
-    fn channels(&self) -> u16 {
-        self.inner.channels()
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.inner.sample_rate()
-    }
-
-    fn total_duration(&self) -> Option<std::time::Duration> {
-        self.inner.total_duration()
     }
 }
