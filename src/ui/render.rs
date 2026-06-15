@@ -8,7 +8,9 @@ use ratatui::{
 use ratatui_image::protocol::StatefulProtocol;
 use rspotify::model::RepeatState;
 
-use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
+use super::{
+    Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState,
+};
 
 impl Ui {
     pub fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -38,7 +40,7 @@ impl Ui {
                         LocalNode::Track { track, .. } => {
                             let is_playing =
                                 state.playback.title == track.name && state.playback.is_local;
-                            let icon = if is_playing { "󰎈 " } else { " " };
+                            let icon = if is_playing { " " } else { " " };
                             let title_style = if is_playing {
                                 Style::default()
                                     .fg(self.theme.border_active)
@@ -88,7 +90,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" 󰈣 Local Files ")
+            .title(" Local Files ")
             .title_bottom(Line::from(vec![Span::styled(
                 format!(
                     " {} tracks  [ENTER] play/expand  [A] queue  [Ctrl+F] search ",
@@ -110,7 +112,7 @@ impl Ui {
                 let indent = "  ".repeat(node.depth());
                 let item = match node {
                     LocalNode::Folder { name, expanded, .. } => {
-                        let icon = if *expanded { "󰝰 " } else { "󰉋 " };
+                        let icon = if *expanded { "v " } else { "> " };
                         let child_count = state.local_tree.tracks_under_folder(vi).len();
                         ListItem::new(Line::from(vec![
                             Span::raw(indent),
@@ -135,7 +137,7 @@ impl Ui {
                     LocalNode::Track { track, .. } => {
                         let is_playing =
                             state.playback.title == track.name && state.playback.is_local;
-                        let icon = if is_playing { "󰎈 " } else { "󰝚 " };
+                        let icon = if is_playing { " " } else { " " };
                         let title_style = if is_playing {
                             Style::default()
                                 .fg(self.theme.border_active)
@@ -150,7 +152,7 @@ impl Ui {
                             Span::styled(track.name.clone(), title_style),
                             if !track.artist.is_empty() {
                                 Span::styled(
-                                    format!("  󰠃 {}", track.artist),
+                                    format!(" - {}", track.artist),
                                     Style::default().fg(self.theme.border_inactive),
                                 )
                             } else {
@@ -177,7 +179,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("▶ ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.local_tree_list);
     }
@@ -259,12 +261,28 @@ impl Ui {
         }
     }
 
+    fn breadcrumb(&self, state: &UiState) -> String {
+        if !state.show_breadcrumb {
+            return String::new();
+        }
+        let mut segments: Vec<String> = Vec::new();
+        for entry in &state.nav_stack {
+            segments.push(entry.label.clone());
+        }
+        segments.push(state.current_label());
+        if segments.is_empty() {
+            return String::new();
+        }
+        format!(" {} ", segments.join(" > "))
+    }
+
     pub fn render_header(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let compact = area.height < 2;
 
         if compact {
+            let bc = self.breadcrumb(state);
             let content = if state.search_active {
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(" Search: ", Style::default().fg(self.theme.border_active)),
                     Span::styled(
                         &state.search_query,
@@ -276,9 +294,14 @@ impl Ui {
                             .fg(self.theme.border_active)
                             .add_modifier(Modifier::SLOW_BLINK),
                     ),
-                ])
+                ];
+                if !bc.is_empty() {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                }
+                Line::from(spans)
             } else if state.quick_search_active {
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(
                         " Quick Search: ",
                         Style::default().fg(self.theme.border_active),
@@ -293,24 +316,48 @@ impl Ui {
                             .fg(self.theme.border_active)
                             .add_modifier(Modifier::SLOW_BLINK),
                     ),
-                ])
+                ];
+                if !bc.is_empty() {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                }
+                Line::from(spans)
             } else if let Some(msg) = &state.status_msg {
-                Line::from(Span::styled(
+                let mut spans = vec![Span::styled(
                     msg.clone(),
                     Style::default().fg(self.theme.border_active),
-                ))
+                )];
+                if !bc.is_empty() {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                }
+                Line::from(spans)
             } else if state.search_results.is_some() {
-                Line::from(Span::styled(
-                    " 󰍉 Search Results",
-                    Style::default()
-                        .fg(self.theme.border_active)
-                        .add_modifier(Modifier::BOLD),
-                ))
+                let mut spans = vec![
+                    Span::styled(
+                        " Search Results",
+                        Style::default()
+                            .fg(self.theme.border_active)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ];
+                if !bc.is_empty() {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                }
+                Line::from(spans)
             } else {
-                Line::from(Span::styled(
-                    " isi-music ",
-                    Style::default().fg(self.theme.border_inactive),
-                ))
+                let mut spans = vec![
+                    Span::styled(
+                        " isi-music ",
+                        Style::default().fg(self.theme.border_inactive),
+                    ),
+                ];
+                if !bc.is_empty() {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                }
+                Line::from(spans)
             };
             frame.render_widget(
                 Paragraph::new(content)
@@ -321,7 +368,7 @@ impl Ui {
             return;
         }
 
-        let block = Block::default()
+        let mut block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(
@@ -331,6 +378,17 @@ impl Ui {
                     self.theme.border_inactive
                 },
             ));
+
+        let bc = self.breadcrumb(state);
+        if !bc.is_empty() {
+            block = block.title(
+                Line::from(Span::styled(
+                    bc,
+                    Style::default().fg(self.theme.text_secondary),
+                ))
+                .alignment(Alignment::Right),
+            );
+        }
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -366,10 +424,15 @@ impl Ui {
                         .add_modifier(Modifier::SLOW_BLINK),
                 ),
             ])
+        } else if let Some(msg) = &state.status_msg {
+            Line::from(Span::styled(
+                msg.clone(),
+                Style::default().fg(self.theme.border_active),
+            ))
         } else if state.search_results.is_some() {
             Line::from(vec![
                 Span::styled(
-                    " 󰍉  Search Results",
+                    "  Search Results",
                     Style::default()
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
@@ -394,7 +457,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(Line::from(vec![Span::raw(" 󰋑 Library ")]).alignment(Alignment::Left))
+            .title(Line::from(vec![Span::raw(" Library ")]).alignment(Alignment::Left))
             .border_style(if focused {
                 Style::default().fg(self.theme.border_active)
             } else {
@@ -426,14 +489,14 @@ impl Ui {
         let status_icon = if pb.is_playing { "Playing" } else { "Paused" };
         let repeat_str = match pb.repeat {
             RepeatState::Off => String::new(),
-            RepeatState::Context => " 󰑖 Rep ".to_string(),
-            RepeatState::Track => " 󰑘 Rep1 ".to_string(),
+            RepeatState::Context => " Rep ".to_string(),
+            RepeatState::Track => " Rep1 ".to_string(),
         };
 
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(Line::from(vec![Span::raw(" 󰲚 Playlists ")]).alignment(Alignment::Left))
+            .title(Line::from(vec![Span::raw(" Playlists ")]).alignment(Alignment::Left))
             .title_bottom(Line::from(vec![
                 Span::styled(
                     format!(" Vol: {}% ", pb.volume),
@@ -533,7 +596,7 @@ impl Ui {
         let lines = vec![
             Line::from(""),
             Line::from(Span::styled(
-                " 󰓇  isi-music",
+                " isi-music",
                 Style::default()
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
@@ -720,8 +783,8 @@ impl Ui {
                 .sorted_track_indices
                 .iter()
                 .enumerate()
-                .map(|(display_idx, &real_idx)| {
-                    let t = &state.tracks[real_idx];
+                .filter_map(|(display_idx, &real_idx)| {
+                    let t = state.tracks.get(real_idx)?;
                     let is_playing = state.playback.title == t.name;
                     let style = if is_playing {
                         Style::default()
@@ -730,7 +793,7 @@ impl Ui {
                     } else {
                         Style::default().fg(self.theme.text_primary)
                     };
-                    ListItem::new(Line::from(vec![
+                    Some(ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>3}. ", display_idx + 1),
                             Style::default().fg(self.theme.border_inactive),
@@ -740,7 +803,7 @@ impl Ui {
                             format!("  {}", t.artist),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                    ]))
+                    ])))
                 })
                 .collect();
             let list = List::new(items)
@@ -800,8 +863,8 @@ impl Ui {
             .sorted_track_indices
             .iter()
             .enumerate()
-            .map(|(display_idx, &real_idx)| {
-                let t = &state.tracks[real_idx];
+            .filter_map(|(display_idx, &real_idx)| {
+                let t = state.tracks.get(real_idx)?;
                 let is_playing = state.playback.title == t.name;
                 let style = if is_playing {
                     Style::default()
@@ -810,17 +873,17 @@ impl Ui {
                 } else {
                     Style::default().fg(self.theme.text_primary)
                 };
-                ListItem::new(Line::from(vec![
+                Some(ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("{:>3}. ", display_idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(t.name.clone(), style),
                     Span::styled(
-                        format!("  󰠃 {}", t.artist),
+                        format!(" - {}", t.artist),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                ]))
+                ])))
             })
             .collect();
 
@@ -903,7 +966,7 @@ impl Ui {
                     ),
                     Span::raw(a.name.clone()),
                     Span::styled(
-                        format!("  󰠃 {}", a.artist),
+                        format!(" - {}", a.artist),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(
@@ -1127,7 +1190,7 @@ impl Ui {
                         .enumerate()
                         .map(|(idx, t)| {
                             ListItem::new(Line::from(vec![
-                                Span::styled("󰓇 ", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.border_active)),
                                 Span::styled(
                                     format!("{:>3}. ", idx + 1),
                                     Style::default().fg(self.theme.border_inactive),
@@ -1145,7 +1208,7 @@ impl Ui {
                         .iter()
                         .map(|a| {
                             ListItem::new(Line::from(vec![
-                                Span::styled("󰋌 ", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.border_active)),
                                 Span::raw(a.name.clone()),
                             ]))
                         })
@@ -1155,7 +1218,7 @@ impl Ui {
                         .iter()
                         .map(|a| {
                             ListItem::new(Line::from(vec![
-                                Span::styled("󰀥 ", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.border_active)),
                                 Span::raw(a.name.clone()),
                                 Span::styled(
                                     format!("  {}", a.artist),
@@ -1169,7 +1232,7 @@ impl Ui {
                         .iter()
                         .map(|p| {
                             ListItem::new(Line::from(vec![
-                                Span::styled("󰲚 ", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.border_active)),
                                 Span::raw(p.name.clone()),
                             ]))
                         })
@@ -1257,14 +1320,14 @@ impl Ui {
                 .enumerate()
                 .map(|(idx, t)| {
                     ListItem::new(Line::from(vec![
-                        Span::styled(" 󰓇 ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
                         Span::styled(
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
                         Span::raw(t.name.clone()),
                         Span::styled(
-                            format!("  󰠃 {}", t.artist),
+                            format!(" - {}", t.artist),
                             Style::default().fg(self.theme.border_inactive),
                         ),
                     ]))
@@ -1275,7 +1338,7 @@ impl Ui {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .title(ptitle(SearchPanel::Tracks, " 󰎆 Tracks "))
+                        .title(ptitle(SearchPanel::Tracks, " Tracks "))
                         .border_style(panel_style(SearchPanel::Tracks)),
                 )
                 .highlight_style(
@@ -1292,7 +1355,7 @@ impl Ui {
                 .iter()
                 .map(|a| {
                     ListItem::new(Line::from(vec![
-                        Span::styled(" 󰋌 ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
                         Span::raw(a.name.clone()),
                         Span::styled(
                             if a.genres.is_empty() {
@@ -1310,7 +1373,7 @@ impl Ui {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .title(ptitle(SearchPanel::Artists, " 󰋌 Artists "))
+                        .title(ptitle(SearchPanel::Artists, " Artists "))
                         .border_style(panel_style(SearchPanel::Artists)),
                 )
                 .highlight_style(
@@ -1327,10 +1390,10 @@ impl Ui {
                 .iter()
                 .map(|a| {
                     ListItem::new(Line::from(vec![
-                        Span::styled(" 󰀥 ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
                         Span::raw(a.name.clone()),
                         Span::styled(
-                            format!("  󰠃 {}", a.artist),
+                            format!(" - {}", a.artist),
                             Style::default().fg(self.theme.border_inactive),
                         ),
                     ]))
@@ -1341,7 +1404,7 @@ impl Ui {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .title(ptitle(SearchPanel::Albums, " 󰀥 Albums "))
+                        .title(ptitle(SearchPanel::Albums, " Albums "))
                         .border_style(panel_style(SearchPanel::Albums)),
                 )
                 .highlight_style(
@@ -1358,7 +1421,7 @@ impl Ui {
                 .iter()
                 .map(|p| {
                     ListItem::new(Line::from(vec![
-                        Span::styled(" 󰲚 ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
                         Span::raw(p.name.clone()),
                         Span::styled(
                             format!("  ({})", p.total_tracks),
@@ -1372,7 +1435,7 @@ impl Ui {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .title(ptitle(SearchPanel::Playlists, " 󰲚 Playlists "))
+                        .title(ptitle(SearchPanel::Playlists, " Playlists "))
                         .border_style(panel_style(SearchPanel::Playlists)),
                 )
                 .highlight_style(
@@ -1392,7 +1455,7 @@ impl Ui {
         } else {
             0.0
         };
-        let shuffle_label = if pb.shuffle { "  󰒝 Shuf" } else { "" };
+        let shuffle_label = if pb.shuffle { " Shuf" } else { "" };
         let shuffle_width = if pb.shuffle { 9u16 } else { 0u16 };
         let width = area.width.saturating_sub(14 + shuffle_width) as usize;
         let filled = (width as f64 * ratio) as usize;
@@ -1472,7 +1535,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" 󰋩 Cover ")
+            .title(" Cover ")
             .border_style(Style::default().fg(self.theme.border_inactive));
 
         let inner = block.inner(area);
@@ -1498,7 +1561,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" 󰲸 Queue ")
+            .title(" Queue ")
             .title_bottom(Line::from(Span::styled(
                 format!(" {} tracks ", state.queue_items.len()),
                 Style::default().fg(self.theme.border_inactive),
@@ -1531,7 +1594,7 @@ impl Ui {
                     ),
                     Span::styled(name.clone(), Style::default().fg(self.theme.text_primary)),
                     Span::styled(
-                        format!("  󰠃 {}", artist),
+                        format!(" - {}", artist),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                 ]))

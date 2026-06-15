@@ -96,13 +96,12 @@ pub trait AudioPlayer: Send {
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None
     }
-    #[allow(dead_code)]
-    fn current_uri(&self) -> Option<String>;
     fn current_playback_state(&self) -> Option<PlaybackState> {
         None
     }
 }
 
+#[derive(Clone)]
 pub struct QueuedTrack {
     pub uri: String,
     pub name: String,
@@ -432,13 +431,6 @@ impl NativePlayer {
         let v = (self.volume as u32 * 65535 / 100) as u16;
         self.mixer.set_volume(v);
     }
-
-    #[allow(dead_code)]
-    pub fn current_uri(&self) -> Option<String> {
-        self.current_index()
-            .and_then(|i| self.queue.get(i))
-            .cloned()
-    }
 }
 
 impl AudioPlayer for NativePlayer {
@@ -465,9 +457,6 @@ impl AudioPlayer for NativePlayer {
     }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
         self.playing_queued.take()
-    }
-    fn current_uri(&self) -> Option<String> {
-        self.current_uri()
     }
 
     fn play(&mut self) {
@@ -557,8 +546,7 @@ impl AudioPlayer for NativePlayer {
 
     fn current_playback_state(&self) -> Option<PlaybackState> {
         let guard = self.server_position.lock().ok()?;
-        let (base, time) = *guard;
-        let progress_ms = base + time.elapsed().as_millis() as u64;
+        let (base, _time) = *guard;
         Some(PlaybackState {
             is_playing: self.is_playing,
             volume: self.volume,
@@ -569,7 +557,7 @@ impl AudioPlayer for NativePlayer {
                 RepeatMode::Track => rspotify::model::RepeatState::Track,
             },
             is_local: false,
-            progress_ms,
+            progress_ms: base,
             ..PlaybackState::default()
         })
     }

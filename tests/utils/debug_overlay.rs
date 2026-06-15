@@ -10,7 +10,7 @@ fn test_debug_overlay_creation() {
 fn test_logging() {
     let debug = DebugOverlay::default();
     debug.log(LogLevel::Info, "test message");
-    debug.log_api("GET", "/api/track", 200);
+    debug.log(LogLevel::Api, "GET /api/track → 200");
 }
 
 #[test]

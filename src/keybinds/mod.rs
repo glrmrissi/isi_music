@@ -44,6 +44,8 @@ pub enum Action {
     ScrollDown,
     Quit,
     OptionsPanel,
+    CopyTrackLink,
+    ToggleBreadcrumb,
 }
 
 impl Action {
@@ -85,6 +87,8 @@ impl Action {
             ("scroll_down", &["pagedown"], ScrollDown),
             ("quit", &["q", "ctrl+c"], Quit),
             ("options_panel", &["t"], OptionsPanel),
+            ("copy_track_link", &["ctrl+y"], CopyTrackLink),
+            ("toggle_breadcrumb", &["shift+b"], ToggleBreadcrumb),
         ]
     }
 }
@@ -389,11 +393,15 @@ impl Keybinds {
             _ => return None,
         };
 
+        let shift = match key {
+            KeyId::BackTab => false,
+            _ => modifiers.contains(KeyModifiers::SHIFT),
+        };
         let combo = KeyCombo {
             key,
             ctrl: modifiers.contains(KeyModifiers::CONTROL),
             alt: modifiers.contains(KeyModifiers::ALT),
-            shift: modifiers.contains(KeyModifiers::SHIFT),
+            shift,
         };
 
         self.action_for.get(&combo).copied()
@@ -441,6 +449,7 @@ impl Keybinds {
                     Action::ToggleVisualizer,
                     Action::ToggleLyrics,
                     Action::ToggleDebug,
+                    Action::ToggleBreadcrumb,
                     Action::ScrollUp,
                     Action::ScrollDown,
                     Action::OptionsPanel,
@@ -453,6 +462,7 @@ impl Keybinds {
                     Action::AddToQueue,
                     Action::RemoveFromQueue,
                     Action::SortTracks,
+                    Action::CopyTrackLink,
                     Action::Quit,
                 ],
             ),
@@ -538,12 +548,14 @@ impl KeybindsTomlOutput {
                 | Action::ToggleVisualizer
                 | Action::ToggleLyrics
                 | Action::ToggleDebug
+                | Action::ToggleBreadcrumb
                 | Action::ScrollUp
                 | Action::ScrollDown
                 | Action::OptionsPanel => modes.push(entry),
                 Action::AddToQueue
                 | Action::RemoveFromQueue
                 | Action::SortTracks
+                | Action::CopyTrackLink
                 | Action::Quit => actions.push(entry),
             }
         }

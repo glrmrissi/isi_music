@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::App;
 use crate::player::RepeatMode;
-use crate::ui::{ActiveContent, Focus, LIBRARY_ITEMS, SearchPanel, SearchResults};
+use crate::ui::{ActiveContent, CompactItem, Focus, SearchPanel, SearchResults};
 use crate::utils::debug_overlay::LogLevel;
 
 impl App {
@@ -42,6 +42,7 @@ impl App {
                             self.state.search_results =
                                 Some(SearchResults::new(query.clone(), results));
                             self.state.tracks.clear();
+                            self.state.rebuild_sort_indices();
                             self.state.active_playlist_uri = None;
                             self.state.search_active = false;
                             self.state.focus = Focus::Search;
@@ -126,6 +127,17 @@ impl App {
                                 } else {
                                     "Compact mode off".to_string()
                                 });
+                            }
+                            4 => {
+                                self.state.show_breadcrumb =
+                                    !self.state.show_breadcrumb;
+                                self.state.status_msg = Some(
+                                    if self.state.show_breadcrumb {
+                                        "Breadcrumb on".to_string()
+                                    } else {
+                                        "Breadcrumb off".to_string()
+                                    },
+                                );
                             }
                             _ => {}
                         },
@@ -328,12 +340,11 @@ impl App {
                     );
                     self.state.status_msg = Some("No track to like".to_string());
                 } else {
-                    self.state.status_msg = Some("♥ Liking...".to_string());
+                    self.state.status_msg = Some("Liking...".to_string());
                     let Some(token) = self.spotify.get_access_token().await else {
+                        self.state.status_msg = Some("Like failed: no token".to_string());
                         return;
                     };
-                    let http = self.spotify.http.clone();
-                    let cache = self.spotify.library_cache.clone();
                     let track_id = self
                         .current_track_uri
                         .split(':')
@@ -341,21 +352,28 @@ impl App {
                         .unwrap_or("")
                         .to_string();
                     if track_id.is_empty() {
+                        self.state.status_msg = Some("Like failed: empty track ID".to_string());
                         return;
                     }
-                    tokio::spawn(async move {
-                        match crate::spotify::save_track_http(&http, &token, &track_id).await {
-                            Ok(_) => {
-                                cache.delete_key_pattern("liked:%");
-                                tracing::info!(
-                                    "LikeTrack: saved successfully — liked cache cleared"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!("LikeTrack failed: {e}");
-                            }
+                    match crate::spotify::save_track_http(
+                        &self.spotify.http,
+                        &token,
+                        &track_id,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            self.state.status_msg = Some("Liked".to_string());
+                            self.spotify.library_cache.delete_key_pattern("liked:%");
+                            tracing::info!(
+                                "LikeTrack: saved successfully — liked cache cleared"
+                            );
                         }
-                    });
+                        Err(e) => {
+                            self.state.status_msg = Some(format!("Like failed: {e}"));
+                            tracing::error!("LikeTrack failed: {e}");
+                        }
+                    }
                 }
             }
             A::AddToQueue => {
@@ -443,25 +461,45 @@ impl App {
                 }
             }
             A::NavUp => {
-                self.state.nav_up();
+                if !self.state.fullscreen_player {
+                    self.state.nav_up();
+                }
             }
             A::NavDown => {
-                self.state.nav_down();
-                self.maybe_load_more().await;
+                if !self.state.fullscreen_player {
+                    self.state.nav_down();
+                    self.maybe_load_more().await;
+                }
             }
-            A::NavFirst => self.state.nav_first(),
+            A::NavFirst => {
+                if !self.state.fullscreen_player {
+                    self.state.nav_first();
+                }
+            }
             A::NavLast => {
-                self.state.nav_last();
-                self.maybe_load_more().await;
+                if !self.state.fullscreen_player {
+                    self.state.nav_last();
+                    self.maybe_load_more().await;
+                }
             }
             A::TabNext => {
-                if self.state.focus == Focus::Search {
+                if self.state.fullscreen_player {
+                    // no-op
+                } else if self.state.focus == Focus::Search {
                     self.state.switch_search_panel();
                 } else {
                     self.state.switch_focus();
                 }
             }
-            A::TabPrev => self.state.switch_focus_prev(),
+            A::TabPrev => {
+                if self.state.fullscreen_player {
+                    // no-op
+                } else if self.state.focus == Focus::Search {
+                    self.state.switch_search_panel_prev();
+                } else {
+                    self.state.switch_focus_prev();
+                }
+            }
             A::Enter => self.handle_enter().await,
             A::Back => {
                 if self.state.quick_search_active {
@@ -473,6 +511,17 @@ impl App {
                     self.state.previous_search = None;
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
+                } else if let Some(entry) = self.state.pop_nav() {
+                    self.state.active_content = entry.active_content;
+                    self.state.focus = entry.focus;
+                    self.state.active_playlist_uri = entry.active_playlist_uri;
+                    self.state.active_playlist_id = entry.active_playlist_id;
+                    self.state.active_artist_name = entry.active_artist_name;
+                    self.state.search_results = entry.search_results;
+                    self.state.previous_search = entry.previous_search;
+                    self.state.tracks = entry.tracks;
+                    self.state.sorted_track_indices = entry.sorted_track_indices;
+                    self.state.track_sort_by = entry.track_sort_by;
                 } else if self.state.compact_effective
                     && self.state.active_content != ActiveContent::None
                 {
@@ -535,8 +584,6 @@ impl App {
                 self.state.show_lyrics = !self.state.show_lyrics;
                 if self.state.show_lyrics {
                     self.ensure_lyrics();
-                } else {
-                    self.state.playback.lyrics = None;
                 }
                 self.state.status_msg = Some(if self.state.show_lyrics {
                     "Lyrics panel on".to_string()
@@ -553,6 +600,77 @@ impl App {
                         "Options panel closed".to_string()
                     });
                 }
+            }
+            A::CopyTrackLink => {
+                let url = self
+                    .current_track_uri
+                    .strip_prefix("spotify:track:")
+                    .map(|id| format!("https://open.spotify.com/track/{id}"))
+                    .unwrap_or_default();
+                if url.is_empty() {
+                    self.state.status_msg = Some("No track playing".to_string());
+                    self.debug_overlay
+                        .log(LogLevel::Warn, "CopyTrackLink: no track playing");
+                } else {
+                    let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+                    let cmd = if wayland { "wl-copy" } else { "xclip" };
+                    let args: &[&str] = if wayland { &[] } else { &["-selection", "clipboard"] };
+                    let mut child = match std::process::Command::new(cmd)
+                        .args(args)
+                        .stdin(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            self.state.status_msg =
+                                Some(format!("Copy failed: {cmd} not found ({e})"));
+                            self.debug_overlay.log(
+                                LogLevel::Error,
+                                format!("CopyTrackLink: failed to spawn {cmd}: {e}"),
+                            );
+                            return;
+                        }
+                    };
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use std::io::Write;
+                        let _ = stdin.write_all(url.as_bytes());
+                    }
+                    match child.wait() {
+                        Ok(status) if status.success() => {
+                            self.state.status_msg = Some(format!("Link copied: {url}"));
+                            self.debug_overlay.log(
+                                LogLevel::Info,
+                                format!("CopyTrackLink: copied {url}"),
+                            );
+                        }
+                        Ok(status) => {
+                            self.state.status_msg =
+                                Some(format!("Copy failed: {cmd} exited with {status}"));
+                            self.debug_overlay.log(
+                                LogLevel::Error,
+                                format!("CopyTrackLink: {cmd} exited with {status}"),
+                            );
+                        }
+                        Err(e) => {
+                            self.state.status_msg =
+                                Some(format!("Copy failed: {cmd} error ({e})"));
+                            self.debug_overlay.log(
+                                LogLevel::Error,
+                                format!("CopyTrackLink: {cmd} wait error: {e}"),
+                            );
+                        }
+                    }
+                }
+            }
+            A::ToggleBreadcrumb => {
+                self.state.show_breadcrumb = !self.state.show_breadcrumb;
+                self.state.status_msg = Some(if self.state.show_breadcrumb {
+                    "Breadcrumb on".to_string()
+                } else {
+                    "Breadcrumb off".to_string()
+                });
             }
             A::ToggleDebug => {
                 self.debug_overlay.toggle_visible();
@@ -594,6 +712,31 @@ impl App {
     pub async fn handle_enter(&mut self) {
         let mut needs_reconnect = false;
 
+        if self.state.compact_effective && self.state.active_content == ActiveContent::None {
+            if let Some(pos) = self.state.library_list.selected() {
+                match self.state.compact_item_at(pos) {
+                    Some(CompactItem::LibraryItem(idx)) => {
+                        if self.handle_library_item(idx).await {
+                            if !self.session_reconnecting {
+                                self.session_reconnecting = true;
+                                self.reconnect_player().await;
+                            }
+                        }
+                    }
+                    Some(CompactItem::PlaylistItem(idx)) => {
+                        if self.handle_playlist_item(idx).await {
+                            if !self.session_reconnecting {
+                                self.session_reconnecting = true;
+                                self.reconnect_player().await;
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+            return;
+        }
+
         match self.state.focus {
             Focus::Library => {
                 let idx = match self.state.library_list.selected() {
@@ -621,6 +764,7 @@ impl App {
                         if let Some(album) = self.state.albums.get(idx) {
                             let id = album.id.clone();
                             let name = album.name.clone();
+                            self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading {name}…"));
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_album_tracks(&id, 0).await {
@@ -664,6 +808,7 @@ impl App {
                         if let Some(artist) = self.state.artists.get(idx) {
                             let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                             let name = artist.name.clone();
+                            self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_artist_tracks(&name, 0).await {
@@ -708,6 +853,7 @@ impl App {
                         if let Some(show) = self.state.shows.get(idx) {
                             let id = show.id.clone();
                             let name = show.name.clone();
+                            self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading {name}…"));
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_show_episodes(&id, 0).await {
@@ -798,35 +944,6 @@ impl App {
                     }
                 }
                 ActiveContent::Tracks | ActiveContent::None => {
-                    if self.state.compact_effective
-                        && self.state.active_content == ActiveContent::None
-                    {
-                        if let Some(pos) = self.state.library_list.selected() {
-                            if pos >= 1 && pos < 1 + LIBRARY_ITEMS.len() {
-                                let idx = pos - 1;
-                                if self.handle_library_item(idx).await {
-                                    if !self.session_reconnecting {
-                                        self.session_reconnecting = true;
-                                        self.reconnect_player().await;
-                                    }
-                                    return;
-                                }
-                            } else if !self.state.playlists.is_empty() {
-                                let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
-                                if pos >= playlist_start {
-                                    let idx = pos - playlist_start;
-                                    if self.handle_playlist_item(idx).await {
-                                        if !self.session_reconnecting {
-                                            self.session_reconnecting = true;
-                                            self.reconnect_player().await;
-                                        }
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        return;
-                    }
                     if let Some(display_idx) = self.state.selected_track_index() {
                         let actual_idx = match self.state.sorted_track_indices.get(display_idx) {
                             Some(&idx) => idx,
@@ -835,9 +952,10 @@ impl App {
 
                         if self.spotify_streaming_disabled {
                             self.state.status_msg =
-                                Some("⚠ Spotify Premium required for streaming".to_string());
+                                Some("Spotify Premium required for streaming".to_string());
                             return;
                         }
+                        self.state.cancel_quick_search();
                         self.activate_spotify_player();
                         self.ensure_spotify_player().await;
                         if self
@@ -921,7 +1039,7 @@ impl App {
                         if let Some(track_uri) = uri {
                             if self.spotify_streaming_disabled {
                                 self.state.status_msg =
-                                    Some("⚠ Spotify Premium required for streaming".to_string());
+                                    Some("Spotify Premium required for streaming".to_string());
                                 return;
                             }
                             self.activate_spotify_player();
@@ -956,6 +1074,7 @@ impl App {
                             } else if self.spotify.authenticated {
                                 let _ = self.spotify.play_track_uri(&track_uri).await;
                             }
+                            self.state.focus = Focus::Tracks;
                         }
                     }
                     Some(SearchPanel::Albums) => {
@@ -982,6 +1101,7 @@ impl App {
                                         } else {
                                             Some(0)
                                         });
+                                    self.state.push_nav();
                                     self.state.active_content = ActiveContent::Tracks;
                                     self.state.rebuild_sort_indices();
                                     self.state.previous_search = self.state.search_results.take();
@@ -1019,7 +1139,7 @@ impl App {
                                 Ok((tracks, total)) => {
                                     if tracks.is_empty() {
                                         self.state.status_msg = Some(
-                                            "⚠ Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
+                                            "Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
                                         );
                                     } else {
                                         self.state.tracks = tracks;
@@ -1028,6 +1148,7 @@ impl App {
                                         self.state.active_playlist_uri = Some(uri);
                                         self.state.active_playlist_id = Some(id);
                                         self.state.track_list.select(Some(0));
+                                        self.state.push_nav();
                                         self.state.active_content = ActiveContent::Tracks;
                                         self.state.rebuild_sort_indices();
                                         self.state.previous_search =
@@ -1048,7 +1169,7 @@ impl App {
                                         );
                                     } else if err_str.contains("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE") {
                                         self.state.status_msg = Some(
-                                            "⚠ Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
+                                            "Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
                                         );
                                     } else {
                                         self.state.status_msg = Some(format!("Error: {e}"));
@@ -1082,6 +1203,7 @@ impl App {
                                         } else {
                                             Some(0)
                                         });
+                                    self.state.push_nav();
                                     self.state.active_content = ActiveContent::Tracks;
                                     self.state.rebuild_sort_indices();
                                     self.state.previous_search = self.state.search_results.take();
@@ -1108,7 +1230,41 @@ impl App {
                     None => {}
                 }
             }
-            Focus::Queue => {}
+            Focus::Queue => {
+                if let Some(idx) = self.state.queue_list.selected() {
+                    let active_len = self
+                        .player
+                        .as_ref()
+                        .map(|p| p.user_queue().len())
+                        .unwrap_or(0);
+                    let queued = if idx < active_len {
+                        self.player
+                            .as_mut()
+                            .and_then(|p| p.user_queue().get(idx).cloned())
+                    } else {
+                        let parked_idx = idx - active_len;
+                        self.parked_player
+                            .as_mut()
+                            .and_then(|p| p.user_queue().get(parked_idx).cloned())
+                    };
+                    if let Some(qt) = queued {
+                        let is_local = qt.uri.starts_with("file://");
+                        if is_local {
+                            self.activate_local_player();
+                        } else if !self.local_active {
+                            // já está no spotify player
+                        } else {
+                            self.activate_spotify_player();
+                        }
+                        if let Some(player) = &mut self.player {
+                            player.set_queue(vec![qt.uri.clone()], 0);
+                            self.playing_tracks = vec![];
+                            self.sync_track_selection();
+                            self.sync_queue_display();
+                        }
+                    }
+                }
+            }
         }
 
         if needs_reconnect && !self.session_reconnecting {

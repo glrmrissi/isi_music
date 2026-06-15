@@ -5,7 +5,7 @@ use std::sync::{
 
 use super::super::App;
 use crate::keybinds::Action;
-use crate::player::{AudioPlayer, QueuedTrack, RepeatMode};
+use crate::player::{QueuedTrack, RepeatMode};
 use crate::spotify::TrackSummary;
 use crate::ui::Focus;
 

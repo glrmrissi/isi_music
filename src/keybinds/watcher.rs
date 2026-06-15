@@ -6,9 +6,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
-#[allow(dead_code)]
 pub struct KeybindsWatcher {
     pub rx: mpsc::Receiver<Keybinds>,
+    #[allow(dead_code)]
     stop: Arc<AtomicBool>,
 }
 

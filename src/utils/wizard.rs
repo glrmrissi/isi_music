@@ -241,7 +241,7 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
         if trimmed.len() < 10 {
             println!(
                 "  {}  {}",
-                style("⚠").yellow(),
+                style("!").yellow(),
                 style(
                     "That doesn't look like a valid Client ID. It will be saved but may not work."
                 )
@@ -266,14 +266,14 @@ fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     if let Some(ref dir) = music_dir {
         println!(
             "  {}  {}",
-            style("✓").green(),
+            style("[OK]").green(),
             style(format!("Music directory detected: {dir}")).dim()
         );
         cfg.local.music_dir = Some(dir.clone());
     } else {
         println!(
             "  {}  {}",
-            style("⚠").yellow(),
+            style("!").yellow(),
             style("Could not auto-detect music directory.").dim()
         );
         println!(
@@ -432,10 +432,10 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         match crate::utils::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
             Ok(session_key) => {
                 cfg.lastfm.session_key = Some(session_key);
-                println!("{}", style("✓").green());
+                println!("{}", style("[OK]").green());
             }
             Err(e) => {
-                println!("{}", style("✗ failed").red());
+                println!("{}", style("failed").red());
                 println!("  {}", style(format!("{e:#}")).dim());
                 println!("  You can run `isi-music setup-lastfm` later.");
                 cfg.lastfm = LastfmConfig::default();
@@ -491,10 +491,11 @@ fn pick_preset(_term: &Term) -> Result<Theme> {
 
     println!(
         "\n  {} {}",
-        style("✓").green(),
+        style("[OK]").green(),
         style(format!("Preset selected: {}", preset.name)).bold()
     );
 
+    let existing = Theme::load();
     let t = Theme {
         border_active: parse_hex(preset.border_active),
         border_inactive: parse_hex(preset.border_inactive),
@@ -504,7 +505,7 @@ fn pick_preset(_term: &Term) -> Result<Theme> {
         accent_color: parse_hex(preset.accent),
         background: parse_hex(preset.background),
         status_bar: parse_hex(preset.status_bar),
-        ..Theme::default()
+        ..existing
     };
 
     Ok(t)
@@ -596,7 +597,7 @@ pub async fn run() -> Result<()> {
                 save_theme(t)?;
                 println!(
                     "  {}  theme  saved → {}",
-                    style("✓").green(),
+                    style("[OK]").green(),
                     style(theme_path.display()).dim()
                 );
             }
@@ -628,7 +629,7 @@ pub async fn run() -> Result<()> {
             save_config(&cfg)?;
             println!(
                 "  {}  config saved → {}",
-                style("✓").green(),
+                style("[OK]").green(),
                 style(config_path.display()).dim()
             );
         } else {
@@ -640,7 +641,7 @@ pub async fn run() -> Result<()> {
                 save_theme(t)?;
                 println!(
                     "  {}  theme  saved → {}",
-                    style("✓").green(),
+                    style("[OK]").green(),
                     style(theme_path.display()).dim()
                 );
             }
@@ -652,7 +653,7 @@ pub async fn run() -> Result<()> {
     println!();
     println!(
         "  {}  All done! Run {} to start playing.",
-        style("✓").bold().green(),
+        style("[OK]").bold().green(),
         style("isi-music").bold()
     );
     println!();

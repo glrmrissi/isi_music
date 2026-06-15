@@ -139,9 +139,6 @@ impl AudioPlayer for MockPlayer {
     fn try_recv_event(&mut self) -> Option<crate::player::PlayerNotification> {
         None
     }
-    fn current_uri(&self) -> Option<String> {
-        None
-    }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None
     }
