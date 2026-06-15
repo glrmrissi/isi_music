@@ -36,7 +36,8 @@ impl App {
 
             if !artist.trim().is_empty() && !track.trim().is_empty() && duration > 30_000 {
                 tokio::spawn(async move {
-                    lfm.update_now_playing(&artist, &track, &album, duration).await;
+                    lfm.update_now_playing(&artist, &track, &album, duration)
+                        .await;
                 });
             }
         }
@@ -366,9 +367,8 @@ impl App {
                         format!("Spotify free account — disabling streaming permanently"),
                     );
                     self.spotify_streaming_disabled = true;
-                    self.state.status_msg = Some(
-                        "Spotify Premium required. Switched to local-only mode.".to_string(),
-                    );
+                    self.state.status_msg =
+                        Some("Spotify Premium required. Switched to local-only mode.".to_string());
                     if self.parked_player.is_some() {
                         std::mem::swap(&mut self.player, &mut self.parked_player);
                         self.local_active = true;

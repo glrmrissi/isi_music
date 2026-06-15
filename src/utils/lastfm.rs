@@ -81,7 +81,13 @@ impl LastfmClient {
         Ok(resp.session.key)
     }
 
-    pub async fn update_now_playing(&self, artist: &str, track: &str, album: &str, duration_ms: u64) {
+    pub async fn update_now_playing(
+        &self,
+        artist: &str,
+        track: &str,
+        album: &str,
+        duration_ms: u64,
+    ) {
         let mut params: BTreeMap<&str, String> = BTreeMap::new();
         params.insert("api_key", self.api_key.clone());
         params.insert("artist", artist.to_string());
@@ -107,7 +113,14 @@ impl LastfmClient {
         }
     }
 
-    pub async fn scrobble(&self, artist: &str, track: &str, album: &str, timestamp: u64, duration_ms: u64) {
+    pub async fn scrobble(
+        &self,
+        artist: &str,
+        track: &str,
+        album: &str,
+        timestamp: u64,
+        duration_ms: u64,
+    ) {
         let mut params: BTreeMap<&str, String> = BTreeMap::new();
         params.insert("api_key", self.api_key.clone());
         params.insert("artist[0]", artist.to_string());

@@ -8,9 +8,7 @@ use ratatui::{
 use ratatui_image::protocol::StatefulProtocol;
 use rspotify::model::RepeatState;
 
-use super::{
-    Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState,
-};
+use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
 
 impl Ui {
     pub fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -297,7 +295,10 @@ impl Ui {
                 ];
                 if !bc.is_empty() {
                     spans.push(Span::raw("  "));
-                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                    spans.push(Span::styled(
+                        &bc,
+                        Style::default().fg(self.theme.text_secondary),
+                    ));
                 }
                 Line::from(spans)
             } else if state.quick_search_active {
@@ -319,7 +320,10 @@ impl Ui {
                 ];
                 if !bc.is_empty() {
                     spans.push(Span::raw("  "));
-                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                    spans.push(Span::styled(
+                        &bc,
+                        Style::default().fg(self.theme.text_secondary),
+                    ));
                 }
                 Line::from(spans)
             } else if let Some(msg) = &state.status_msg {
@@ -329,33 +333,38 @@ impl Ui {
                 )];
                 if !bc.is_empty() {
                     spans.push(Span::raw("  "));
-                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                    spans.push(Span::styled(
+                        &bc,
+                        Style::default().fg(self.theme.text_secondary),
+                    ));
                 }
                 Line::from(spans)
             } else if state.search_results.is_some() {
-                let mut spans = vec![
-                    Span::styled(
-                        " Search Results",
-                        Style::default()
-                            .fg(self.theme.border_active)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ];
+                let mut spans = vec![Span::styled(
+                    " Search Results",
+                    Style::default()
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::BOLD),
+                )];
                 if !bc.is_empty() {
                     spans.push(Span::raw("  "));
-                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                    spans.push(Span::styled(
+                        &bc,
+                        Style::default().fg(self.theme.text_secondary),
+                    ));
                 }
                 Line::from(spans)
             } else {
-                let mut spans = vec![
-                    Span::styled(
-                        " isi-music ",
-                        Style::default().fg(self.theme.border_inactive),
-                    ),
-                ];
+                let mut spans = vec![Span::styled(
+                    " isi-music ",
+                    Style::default().fg(self.theme.border_inactive),
+                )];
                 if !bc.is_empty() {
                     spans.push(Span::raw("  "));
-                    spans.push(Span::styled(&bc, Style::default().fg(self.theme.text_secondary)));
+                    spans.push(Span::styled(
+                        &bc,
+                        Style::default().fg(self.theme.text_secondary),
+                    ));
                 }
                 Line::from(spans)
             };

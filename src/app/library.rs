@@ -13,7 +13,7 @@ impl App {
             return false;
         }
         match idx {
-             0 => {
+            0 => {
                 self.state.push_nav();
                 self.state.status_msg = Some("Loading Liked Songs…".to_string());
                 tokio::time::sleep(Duration::from_millis(100)).await;
