@@ -103,6 +103,13 @@ console   = "0.15"
 [dev-dependencies]
 tempfile = "3"
 
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
 [features]
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]
