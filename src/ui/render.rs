@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
 use ratatui_image::protocol::StatefulProtocol;
-use rspotify::model::RepeatState;
+use crate::spotify::RepeatState;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
 

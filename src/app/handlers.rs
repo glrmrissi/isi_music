@@ -310,9 +310,9 @@ impl App {
                 if let Some(player) = &mut self.player {
                     player.cycle_repeat();
                     self.state.playback.repeat = match player.repeat() {
-                        RepeatMode::Off => rspotify::model::RepeatState::Off,
-                        RepeatMode::Queue => rspotify::model::RepeatState::Context,
-                        RepeatMode::Track => rspotify::model::RepeatState::Track,
+                        RepeatMode::Off => crate::spotify::RepeatState::Off,
+                        RepeatMode::Queue => crate::spotify::RepeatState::Context,
+                        RepeatMode::Track => crate::spotify::RepeatState::Track,
                     };
                 }
             }

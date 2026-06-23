@@ -19,7 +19,6 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Spotify API
-rspotify = { version = "0.16", default-features = false, features = ["client-reqwest"] }
 chrono = "0.4"
 
 # Spotify Connect / native audio

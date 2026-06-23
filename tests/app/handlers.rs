@@ -7,6 +7,7 @@ use super::super::App;
 use crate::keybinds::Action;
 use crate::player::{QueuedTrack, RepeatMode};
 use crate::spotify::TrackSummary;
+use crate::spotify::RepeatState;
 use crate::ui::Focus;
 
 #[path = "mock_player.rs"]
@@ -355,17 +356,17 @@ async fn dispatch_cycle_repeat_cycles_through_modes() {
     app.dispatch(Action::CycleRepeat).await;
     assert_eq!(
         app.state.playback.repeat,
-        rspotify::model::RepeatState::Track
+        RepeatState::Track
     );
 
     app.dispatch(Action::CycleRepeat).await;
     assert_eq!(
         app.state.playback.repeat,
-        rspotify::model::RepeatState::Context
+        RepeatState::Context
     );
 
     app.dispatch(Action::CycleRepeat).await;
-    assert_eq!(app.state.playback.repeat, rspotify::model::RepeatState::Off);
+    assert_eq!(app.state.playback.repeat, RepeatState::Off);
 }
 
 #[tokio::test]

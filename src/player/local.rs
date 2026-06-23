@@ -518,9 +518,9 @@ impl AudioPlayer for LocalPlayer {
             volume: self.volume,
             shuffle: self.shuffle,
             repeat: match self.repeat {
-                super::RepeatMode::Off => rspotify::model::RepeatState::Off,
-                super::RepeatMode::Queue => rspotify::model::RepeatState::Context,
-                super::RepeatMode::Track => rspotify::model::RepeatState::Track,
+                super::RepeatMode::Off => crate::spotify::RepeatState::Off,
+                super::RepeatMode::Queue => crate::spotify::RepeatState::Context,
+                super::RepeatMode::Track => crate::spotify::RepeatState::Track,
             },
             is_local: true,
             art_url: None,

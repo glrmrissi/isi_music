@@ -23,7 +23,7 @@ use crate::utils::lastfm::LastfmClient;
 #[cfg(feature = "mpris")]
 use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
 use crate::utils::theme::Theme;
-use rspotify::model::RepeatState;
+use crate::spotify::RepeatState;
 
 #[cfg(target_os = "linux")]
 use libc;
