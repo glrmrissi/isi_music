@@ -17,6 +17,7 @@ use tracing::warn;
 
 use crate::player::NativePlayer;
 use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification};
+#[cfg(feature = "mpris")]
 use crate::spotify::RepeatState;
 use crate::spotify::SpotifyClient;
 #[cfg(feature = "album-art")]
