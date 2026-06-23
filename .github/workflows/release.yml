@@ -88,7 +88,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: Build full binary
         shell: bash
         env:
           OPENSSL_STATIC: 1
@@ -97,7 +97,23 @@ jobs:
             --release \
             --locked \
             --target ${{ matrix.target }} \
+            -F mpris \
             --verbose
+
+      - name: Build minimal binary
+        shell: bash
+        env:
+          OPENSSL_STATIC: 1
+        run: |
+          cargo build \
+            --release \
+            --locked \
+            --target ${{ matrix.target }} \
+            --no-default-features \
+            -F spotify,discord \
+            --verbose && \
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" \
+             "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"
 
       - name: Create release artifacts
         shell: bash
@@ -105,17 +121,21 @@ jobs:
           mkdir -p release-artifacts
 
           BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+          MINIMAL_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"
 
           if [ -f "$BINARY_PATH" ]; then
             cp "$BINARY_PATH" "release-artifacts/${{ matrix.asset_name }}"
             echo "Artifact ready: ${{ matrix.asset_name }}"
-
-            if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
-              ls -lh "release-artifacts/${{ matrix.asset_name }}"
-              file "release-artifacts/${{ matrix.asset_name }}"
-            fi
           else
             echo "Binary not found at: $BINARY_PATH"
+            exit 1
+          fi
+
+          if [ -f "$MINIMAL_PATH" ]; then
+            cp "$MINIMAL_PATH" "release-artifacts/${{ matrix.asset_name }}-minimal"
+            echo "Artifact ready: ${{ matrix.asset_name }}-minimal"
+          else
+            echo "Minimal binary not found at: $MINIMAL_PATH"
             exit 1
           fi
 
@@ -123,7 +143,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: release-artifacts/${{ matrix.asset_name }}
+          path: release-artifacts/*
           if-no-files-found: error
           retention-days: 1
 
