@@ -26,9 +26,9 @@ chrono = "0.4"
 librespot-core = "0.8"
 librespot-playback = { version = "0.8", features = ["rodio-backend"] }
 
-# Local audio playback (MP3, FLAC, OGG, WAV)
-rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac", "symphonia-ogg", "symphonia-wav"] }
-symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "aiff"] }
+# Local audio playback (MP3, FLAC)
+rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac"] }
+symphonia = { version = "0.5", features = ["mp3", "flac"] }
 
 # .env support (desenvolvimento)
 dotenvy = "0.15"
@@ -85,6 +85,10 @@ mpris-server = { version = "0.8", optional = true }
 
 # Discord Rich Presence
 discord-rich-presence = { version = "0.2", optional = true }
+
+# PKCE OAuth (SHA256 + base64url)
+sha2 = "0.10"
+base64 = { version = "0.22", default-features = false }
 
 # Encoding
 urlencoding = "2.1.3"
