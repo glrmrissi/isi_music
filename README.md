@@ -9,7 +9,7 @@ isi-music is a terminal audio player for Spotify streaming and local file playba
 ## Features
 
 - **Spotify streaming** via librespot -- no official Spotify app required
-- **Local file playback** -- MP3, FLAC, OGG, WAV, AIFF with automatic metadata extraction
+- **Local file playback** -- MP3 and FLAC with automatic metadata extraction
 - **Real-time audio visualizer** using braille characters (Spotify + local files)
 - **Full-text search** across tracks, albums, artists, playlists, and podcasts
 - **Queue management** with cross-player support (mix Spotify and local tracks)
@@ -454,7 +454,7 @@ isi-music can play local audio files without a Spotify account. Point it at your
 music_dir = "~/Music"
 ```
 
-Supported formats: MP3, FLAC, OGG, WAV, AIFF.
+Supported formats: MP3, FLAC.
 
 Navigate to **Local Files** in the library panel and press Enter to scan. The first scan extracts metadata and embedded cover art, cached in SQLite for instant subsequent loads.
 
@@ -529,17 +529,54 @@ cargo build --release
 # Run with debug logging
 RUST_LOG=isi_music=debug cargo run
 
-# Run tests (164 tests)
+# Run tests (154 tests)
 cargo test
 ```
+
+### Build Variants
+
+Pre-built binaries come in two variants:
+
+| Variant | Size | Features | Use Case |
+|---------|------|----------|----------|
+| `isi-music-<platform>` | ~10 MB | All features (album art, visualizer, wizard, lyrics, MPRIS, Discord) | Full experience (MPRIS included via `-F mpris` in CI) |
+| `isi-music-<platform>-minimal` | ~9 MB | Spotify streaming, Discord, Last.fm, setup (no album art, visualizer, lyrics, MPRIS) | Headless daemon or minimal TUI |
+
+### Feature Flags
+
+Build with specific features using the `-F` flag:
+
+```bash
+# Minimal build (streaming + Discord only)
+cargo build --release --no-default-features -F spotify,discord
+
+# Add MPRIS back if needed
+cargo build --release --no-default-features -F spotify,discord,mpris
+
+# Exclude album art (smaller binary, fewer deps)
+cargo build --release --no-default-features -F spotify,discord,mpris,lastfm,wizard,visualizer,lyrics
+```
+
+Available features:
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `spotify` | yes | Spotify streaming via librespot |
+| `discord` | yes | Discord Rich Presence |
+| `mpris` | no | MPRIS2 D-Bus media controls |
+| `lastfm` | yes | Last.fm scrobbling |
+| `wizard` | yes | Interactive setup wizard |
+| `visualizer` | yes | Real-time audio FFT visualizer |
+| `lyrics` | yes | Synced and unsynced lyrics fetching |
+| `album-art` | yes | Album art rendering (Kitty/Sixel/half-block) |
 
 ### How It Works
 
 isi-music uses multiple audio backends depending on the source:
 
 - **librespot** -- Spotify authentication and audio streaming via the Spotify Connect protocol
-- **rodio + symphonia** -- Local audio decoding (MP3, FLAC, OGG, WAV, AIFF)
-- **rspotify** -- Spotify Web API client for search, metadata, playlists, and album art
+- **rodio + symphonia** -- Local audio decoding (MP3 and FLAC)
+- **Custom HTTP client** -- Spotify Web API for search, metadata, playlists, and album art
 
 The TUI is built with ratatui. The event loop polls player state, processes keyboard input, and renders at ~60 fps.
 
