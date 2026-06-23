@@ -1,3 +1,4 @@
+use crate::spotify::RepeatState;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -5,7 +6,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
-use crate::spotify::RepeatState;
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
 

@@ -275,9 +275,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
                 }
                 Err(e) => {
                     println!("  {YELLOW}Authentication failed: {e}{RESET}");
-                    println!(
-                        "  You can authenticate later by launching isi-music normally.\n"
-                    );
+                    println!("  You can authenticate later by launching isi-music normally.\n");
                 }
             }
         }
@@ -550,9 +548,14 @@ fn main() -> Result<()> {
             let mut terminal = Terminal::new(backend)?;
 
             let mut app = App::new(
-                #[cfg(feature = "album-art")] picker,
-                theme, theme_rx, keybinds, keybinds_rx,
-            ).await?;
+                #[cfg(feature = "album-art")]
+                picker,
+                theme,
+                theme_rx,
+                keybinds,
+                keybinds_rx,
+            )
+            .await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

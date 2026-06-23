@@ -128,9 +128,7 @@ async fn run_oauth_flow(authorize_url: &str) -> Result<String> {
 
     open_browser(authorize_url);
 
-    println!(
-        "Waiting for authorization in browser... (port {CALLBACK_PORT})"
-    );
+    println!("Waiting for authorization in browser... (port {CALLBACK_PORT})");
 
     let (mut stream, _) = listener.accept().await?;
 

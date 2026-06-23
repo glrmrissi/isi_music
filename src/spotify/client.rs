@@ -599,8 +599,7 @@ impl SpotifyClient {
             }
         }
 
-        let (access_token, refresh_token, expires_in) =
-            SpotifyAuth::authenticate().await?;
+        let (access_token, refresh_token, expires_in) = SpotifyAuth::authenticate().await?;
 
         config::save_refresh_token(&refresh_token);
         token_manager.set_token(&access_token, Some(&refresh_token), expires_in);

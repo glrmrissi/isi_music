@@ -17,6 +17,7 @@ use tracing::warn;
 
 use crate::player::NativePlayer;
 use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification};
+use crate::spotify::RepeatState;
 use crate::spotify::SpotifyClient;
 #[cfg(feature = "album-art")]
 use crate::ui::AlbumArtData;
@@ -26,7 +27,6 @@ use crate::utils::lastfm::LastfmClient;
 #[cfg(feature = "mpris")]
 use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
 use crate::utils::theme::Theme;
-use crate::spotify::RepeatState;
 
 #[cfg(target_os = "linux")]
 use libc;

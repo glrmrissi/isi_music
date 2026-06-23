@@ -127,7 +127,8 @@ impl App {
                                 }
                                 2 => {
                                     self.state.compact_mode = !self.state.compact_mode;
-                                    panel.config.compact_mode_default = Some(self.state.compact_mode);
+                                    panel.config.compact_mode_default =
+                                        Some(self.state.compact_mode);
                                     self.state.status_msg = Some(if self.state.compact_mode {
                                         "Compact mode on".to_string()
                                     } else {
