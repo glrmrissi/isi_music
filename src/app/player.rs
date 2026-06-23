@@ -24,7 +24,8 @@ impl App {
             }
         }
 
-        self.state.album_art = None;
+        #[cfg(feature = "album-art")]
+        let _ = self.state.album_art.take();
         self.album_art_pending = None;
         self.last_art_uri.clear();
 

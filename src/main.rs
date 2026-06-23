@@ -4,6 +4,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+#[cfg(feature = "album-art")]
 use ratatui_image::picker::Picker;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -539,6 +540,7 @@ fn main() -> Result<()> {
             let theme_rx = utils::theme::Theme::watch()?;
             let keybinds = keybinds::Keybinds::load();
             let keybinds_rx = keybinds::KeybindsWatcher::watch()?;
+            #[cfg(feature = "album-art")]
             let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
             enable_raw_mode()?;
@@ -547,7 +549,10 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker, theme, theme_rx, keybinds, keybinds_rx).await?;
+            let mut app = App::new(
+                #[cfg(feature = "album-art")] picker,
+                theme, theme_rx, keybinds, keybinds_rx,
+            ).await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

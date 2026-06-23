@@ -173,6 +173,7 @@ impl App {
         }
     }
 
+    #[cfg(feature = "album-art")]
     pub async fn maybe_fetch_album_art(&mut self) {
         if !self.state.show_album_art && self.discord.is_none() {
             return;
@@ -235,6 +236,7 @@ impl App {
         });
     }
 
+    #[cfg(feature = "album-art")]
     pub fn fetch_local_album_art(&mut self) {
         if self.current_track_uri == self.last_art_uri || self.album_art_pending.is_some() {
             return;

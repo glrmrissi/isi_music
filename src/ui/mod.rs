@@ -20,9 +20,11 @@ use ratatui::{
     style::Style,
     widgets::{Block, Borders},
 };
+#[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
 use std::sync::Arc;
 
+#[cfg(feature = "album-art")]
 pub struct AlbumArtData {
     pub image_state: Option<StatefulProtocol>,
 }

@@ -82,6 +82,7 @@ impl Ui {
                 UiWidget::Library => self.render_library(frame, state, area),
                 UiWidget::Playlists => self.render_playlists(frame, state, area),
                 UiWidget::AlbumArt => {
+                    #[cfg(feature = "album-art")]
                     if state.show_album_art {
                         self.render_album_art(frame, state, area);
                     }

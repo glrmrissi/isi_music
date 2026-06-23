@@ -91,8 +91,10 @@ impl App {
                         self.state.status_msg = Some("Options panel closed".to_string());
                     }
                     PanelAction::ToggleItem => match panel.focused_section {
-                        OptionsSection::Features => match panel.selected_item {
-                            0 => {
+                        OptionsSection::Features => {
+                            let idx = panel.selected_item;
+                            #[cfg(feature = "album-art")]
+                            if idx == 0 {
                                 self.state.show_album_art = !self.state.show_album_art;
                                 panel.config.show_cover_images = Some(self.state.show_album_art);
                                 self.state.status_msg = Some(if self.state.show_album_art {
@@ -100,44 +102,49 @@ impl App {
                                 } else {
                                     "Cover images disabled".to_string()
                                 });
+                                return Ok(());
                             }
-                            1 => {
-                                let v = !panel.config.enable_lyrics.unwrap_or(true);
-                                panel.config.enable_lyrics = Some(v);
-                                self.state.status_msg = Some(if v {
-                                    "Lyrics fetching enabled".to_string()
-                                } else {
-                                    "Lyrics fetching disabled".to_string()
-                                });
+                            #[cfg(feature = "album-art")]
+                            let idx = idx - 1;
+                            match idx {
+                                0 => {
+                                    let v = !panel.config.enable_lyrics.unwrap_or(true);
+                                    panel.config.enable_lyrics = Some(v);
+                                    self.state.status_msg = Some(if v {
+                                        "Lyrics fetching enabled".to_string()
+                                    } else {
+                                        "Lyrics fetching disabled".to_string()
+                                    });
+                                }
+                                1 => {
+                                    self.state.show_visualizer = !self.state.show_visualizer;
+                                    panel.config.show_visualizer = Some(self.state.show_visualizer);
+                                    self.state.status_msg = Some(if self.state.show_visualizer {
+                                        "Visualizer enabled".to_string()
+                                    } else {
+                                        "Visualizer disabled".to_string()
+                                    });
+                                }
+                                2 => {
+                                    self.state.compact_mode = !self.state.compact_mode;
+                                    panel.config.compact_mode_default = Some(self.state.compact_mode);
+                                    self.state.status_msg = Some(if self.state.compact_mode {
+                                        "Compact mode on".to_string()
+                                    } else {
+                                        "Compact mode off".to_string()
+                                    });
+                                }
+                                3 => {
+                                    self.state.show_breadcrumb = !self.state.show_breadcrumb;
+                                    self.state.status_msg = Some(if self.state.show_breadcrumb {
+                                        "Breadcrumb on".to_string()
+                                    } else {
+                                        "Breadcrumb off".to_string()
+                                    });
+                                }
+                                _ => {}
                             }
-                            2 => {
-                                self.state.show_visualizer = !self.state.show_visualizer;
-                                panel.config.show_visualizer = Some(self.state.show_visualizer);
-                                self.state.status_msg = Some(if self.state.show_visualizer {
-                                    "Visualizer enabled".to_string()
-                                } else {
-                                    "Visualizer disabled".to_string()
-                                });
-                            }
-                            3 => {
-                                self.state.compact_mode = !self.state.compact_mode;
-                                panel.config.compact_mode_default = Some(self.state.compact_mode);
-                                self.state.status_msg = Some(if self.state.compact_mode {
-                                    "Compact mode on".to_string()
-                                } else {
-                                    "Compact mode off".to_string()
-                                });
-                            }
-                            4 => {
-                                self.state.show_breadcrumb = !self.state.show_breadcrumb;
-                                self.state.status_msg = Some(if self.state.show_breadcrumb {
-                                    "Breadcrumb on".to_string()
-                                } else {
-                                    "Breadcrumb off".to_string()
-                                });
-                            }
-                            _ => {}
-                        },
+                        }
                         _ => {}
                     },
                     PanelAction::ClearAllCache => {

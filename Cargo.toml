@@ -67,10 +67,10 @@ rustfft = "6"
 libc = "0.2"
 
 # Image processing (album art)
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 
 # Image rendering in terminal (kitty/sixel/halfblocks auto-detection)
-ratatui-image = { version = "9", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "9", default-features = false, features = ["crossterm"], optional = true }
 
 # Error handling
 anyhow = "1"
@@ -116,5 +116,6 @@ panic = "abort"
 [features]
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]
+album-art = ["image", "ratatui-image"]
 default = ["mpris", "discord","spotify"]
 spotify = []
