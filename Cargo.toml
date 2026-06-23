@@ -117,5 +117,5 @@ panic = "abort"
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]
 album-art = ["image", "ratatui-image"]
-default = ["mpris", "discord","spotify"]
+default = ["discord", "spotify", "album-art"]
 spotify = []
