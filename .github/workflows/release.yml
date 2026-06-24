@@ -197,6 +197,8 @@ jobs:
           tool: git-cliff
 
       - name: Generate changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git cliff \
             --tag "${{ github.ref_name }}" \
