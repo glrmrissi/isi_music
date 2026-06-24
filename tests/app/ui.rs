@@ -1,7 +1,9 @@
-use super::super::App;
+#[cfg(feature = "album-art")]
+mod tests {
+    use super::super::App;
 
-#[tokio::test]
-async fn maybe_fetch_album_art_returns_early_when_disabled() {
+    #[tokio::test]
+    async fn maybe_fetch_album_art_returns_early_when_disabled() {
     let mut app = App::new_for_test().await;
     app.state.show_album_art = false;
     app.discord = None;
@@ -127,4 +129,5 @@ async fn fetch_local_album_art_with_temp_file_sets_pending() {
     assert!(app.album_art_pending.is_some());
 
     let _ = std::fs::remove_dir_all(&dir);
+}
 }
