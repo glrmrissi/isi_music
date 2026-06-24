@@ -44,4 +44,4 @@ sort_commits = "newest"
 
 [remote.github]
 owner = "glrmrissi"
-repo = "isi-music"
+repo = "isi_music"
