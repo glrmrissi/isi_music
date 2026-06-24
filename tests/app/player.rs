@@ -220,6 +220,7 @@ async fn activate_spotify_player_pauses_current_before_swap() {
 // on_track_started
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "album-art")]
 #[tokio::test]
 async fn on_track_started_resets_progress_and_art() {
     let mut app = App::new_for_test().await;
