@@ -6,6 +6,7 @@ use std::sync::{
 use super::super::App;
 use crate::keybinds::Action;
 use crate::player::{QueuedTrack, RepeatMode};
+use crate::spotify::RepeatState;
 use crate::spotify::TrackSummary;
 use crate::ui::Focus;
 
@@ -353,19 +354,13 @@ async fn dispatch_cycle_repeat_cycles_through_modes() {
     app.player = Some(mock);
 
     app.dispatch(Action::CycleRepeat).await;
-    assert_eq!(
-        app.state.playback.repeat,
-        rspotify::model::RepeatState::Track
-    );
+    assert_eq!(app.state.playback.repeat, RepeatState::Track);
 
     app.dispatch(Action::CycleRepeat).await;
-    assert_eq!(
-        app.state.playback.repeat,
-        rspotify::model::RepeatState::Context
-    );
+    assert_eq!(app.state.playback.repeat, RepeatState::Context);
 
     app.dispatch(Action::CycleRepeat).await;
-    assert_eq!(app.state.playback.repeat, rspotify::model::RepeatState::Off);
+    assert_eq!(app.state.playback.repeat, RepeatState::Off);
 }
 
 #[tokio::test]

@@ -552,9 +552,9 @@ impl AudioPlayer for NativePlayer {
             volume: self.volume,
             shuffle: self.shuffle,
             repeat: match self.repeat {
-                RepeatMode::Off => rspotify::model::RepeatState::Off,
-                RepeatMode::Queue => rspotify::model::RepeatState::Context,
-                RepeatMode::Track => rspotify::model::RepeatState::Track,
+                RepeatMode::Off => crate::spotify::RepeatState::Off,
+                RepeatMode::Queue => crate::spotify::RepeatState::Context,
+                RepeatMode::Track => crate::spotify::RepeatState::Track,
             },
             is_local: false,
             progress_ms: base,

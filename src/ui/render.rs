@@ -1,3 +1,4 @@
+use crate::spotify::RepeatState;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -5,8 +6,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
+#[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
-use rspotify::model::RepeatState;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
 
@@ -1518,6 +1519,7 @@ impl Ui {
         );
     }
 
+    #[cfg(feature = "album-art")]
     pub fn render_album_art(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.compact_effective {
             if let Some(art_data) = &mut state.album_art {
@@ -1637,6 +1639,7 @@ impl Ui {
 
         let pb = &state.playback;
 
+        #[cfg(feature = "album-art")]
         let info_area = if state.show_album_art {
             let art_size = area.height.min(18).min(area.width / 4).max(12);
             let cols = Layout::default()
@@ -1662,6 +1665,9 @@ impl Ui {
         } else {
             area
         };
+
+        #[cfg(not(feature = "album-art"))]
+        let info_area = area;
 
         let info_grid = Layout::default()
             .direction(Direction::Vertical)

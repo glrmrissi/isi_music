@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(feature = "mpris")]
+use tracing::warn;
 
 use crate::config::AppConfig;
 use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};

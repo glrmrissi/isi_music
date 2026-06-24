@@ -118,13 +118,6 @@ pub fn env_path() -> Result<PathBuf> {
     Ok(base.join("isi-music").join(".env"))
 }
 
-pub fn cache_path() -> Result<PathBuf> {
-    let base = dirs::cache_dir().context("Could not determine cache directory")?;
-    let dir = base.join("isi-music");
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir.join("token.json"))
-}
-
 pub fn refresh_token_path() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("Could not determine cache directory")?;
     let dir = base.join("isi-music");

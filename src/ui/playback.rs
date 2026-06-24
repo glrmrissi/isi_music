@@ -1,4 +1,4 @@
-use rspotify::model::RepeatState;
+use crate::spotify::RepeatState;
 
 #[derive(Clone, Debug)]
 pub struct PlaybackState {

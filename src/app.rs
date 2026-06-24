@@ -8,6 +8,7 @@ use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use crate::utils::theme::ThemeWatcher;
 use anyhow::Result;
 use ratatui::Terminal;
+#[cfg(feature = "album-art")]
 use ratatui_image::picker::Picker;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -16,14 +17,17 @@ use tracing::warn;
 
 use crate::player::NativePlayer;
 use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification};
+#[cfg(feature = "mpris")]
+use crate::spotify::RepeatState;
 use crate::spotify::SpotifyClient;
-use crate::ui::{AlbumArtData, Ui, UiState};
+#[cfg(feature = "album-art")]
+use crate::ui::AlbumArtData;
+use crate::ui::{Ui, UiState};
 use crate::utils::discord::DiscordRpc;
 use crate::utils::lastfm::LastfmClient;
 #[cfg(feature = "mpris")]
 use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
 use crate::utils::theme::Theme;
-use rspotify::model::RepeatState;
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -49,6 +53,7 @@ pub struct App {
     current_track_uri: String,
     last_art_uri: String,
     album_art_pending: Option<tokio::sync::oneshot::Receiver<Vec<u8>>>,
+    #[cfg(feature = "album-art")]
     picker: Picker,
     #[cfg(feature = "mpris")]
     mpris: Option<MprisHandle>,
@@ -84,7 +89,7 @@ pub struct App {
 
 impl App {
     pub async fn new(
-        picker: Picker,
+        #[cfg(feature = "album-art")] picker: Picker,
         theme: Theme,
         theme_rx: ThemeWatcher,
         keybinds: crate::keybinds::Keybinds,
@@ -214,6 +219,7 @@ impl App {
             current_track_uri: String::new(),
             last_art_uri: String::new(),
             album_art_pending: None,
+            #[cfg(feature = "album-art")]
             picker,
             #[cfg(feature = "mpris")]
             mpris,
@@ -286,6 +292,7 @@ impl App {
             current_track_uri: String::new(),
             last_art_uri: String::new(),
             album_art_pending: None,
+            #[cfg(feature = "album-art")]
             picker: ratatui_image::picker::Picker::halfblocks(),
             #[cfg(feature = "mpris")]
             mpris: None,
@@ -441,7 +448,8 @@ impl App {
                         self.state.playback.lyrics_scroll = saved_lyrics_scroll;
 
                         if self.state.playback.title != prev_title {
-                            self.state.album_art = None;
+                            #[cfg(feature = "album-art")]
+                            let _ = self.state.album_art.take();
                             self.album_art_pending = None;
                             self.last_art_uri.clear();
 
@@ -827,6 +835,7 @@ impl App {
                 }
             }
 
+            #[cfg(feature = "album-art")]
             if let Some(rx) = &mut self.album_art_pending {
                 if let Ok(bytes) = rx.try_recv() {
                     self.album_art_pending = None;
@@ -840,7 +849,7 @@ impl App {
                         }
                         Err(e) => {
                             self.debug_overlay
-                                .log(LogLevel::Error, format!("MPRIS unavailable: {e}"));
+                                .log(LogLevel::Error, format!("Failed to decode album art: {e}"));
                         }
                     }
                 }
@@ -884,6 +893,7 @@ impl App {
                 }
             }
 
+            #[cfg(feature = "album-art")]
             self.maybe_fetch_album_art().await;
 
             terminal.draw(|f| {

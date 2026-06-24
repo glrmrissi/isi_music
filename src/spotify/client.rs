@@ -1,5 +1,4 @@
-use anyhow::{Context, Result};
-use rspotify::clients::OAuthClient;
+use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -544,7 +543,7 @@ pub struct SpotifyClient {
     token_manager: TokenManager,
     pub http: reqwest::Client,
     shuffle_state: bool,
-    repeat_state: rspotify::model::RepeatState,
+    repeat_state: super::RepeatState,
     pub authenticated: bool,
     search_cache: SearchCache,
     pub library_cache: LibraryCache,
@@ -557,7 +556,7 @@ impl SpotifyClient {
             token_manager: dummy_token,
             http: reqwest::Client::new(),
             shuffle_state: false,
-            repeat_state: rspotify::model::RepeatState::Off,
+            repeat_state: super::RepeatState::Off,
             authenticated: false,
             search_cache: SearchCache::new(600),
             library_cache: LibraryCache::new().await,
@@ -588,7 +587,7 @@ impl SpotifyClient {
                         token_manager,
                         http: reqwest::Client::new(),
                         shuffle_state: false,
-                        repeat_state: rspotify::model::RepeatState::Off,
+                        repeat_state: super::RepeatState::Off,
                         authenticated: true,
                         search_cache: SearchCache::new(600),
                         library_cache: LibraryCache::new().await,
@@ -600,32 +599,17 @@ impl SpotifyClient {
             }
         }
 
-        let mut rspotify_client = SpotifyAuth::build_client()?;
+        let (access_token, refresh_token, expires_in) = SpotifyAuth::authenticate().await?;
 
-        let url = rspotify_client
-            .get_authorize_url(None)
-            .context("Failed to generate authorization URL")?;
-        let code = SpotifyAuth::run_oauth_flow(&url).await?;
-        rspotify_client
-            .request_token(&code)
-            .await
-            .context("Failed to exchange code for token")?;
-
-        if let Ok(guard) = rspotify_client.token.lock().await {
-            if let Some(token) = guard.as_ref() {
-                let rt = token.refresh_token.as_deref().unwrap_or("");
-                config::save_refresh_token(rt);
-                let expires_in = token.expires_in.num_seconds().try_into().unwrap_or(3600u64);
-                token_manager.set_token(&token.access_token, Some(rt), expires_in);
-            }
-        }
+        config::save_refresh_token(&refresh_token);
+        token_manager.set_token(&access_token, Some(&refresh_token), expires_in);
 
         info!("Authenticated with Spotify");
         Ok(Self {
             token_manager,
             http: reqwest::Client::new(),
             shuffle_state: false,
-            repeat_state: rspotify::model::RepeatState::Off,
+            repeat_state: super::RepeatState::Off,
             authenticated: true,
             search_cache: SearchCache::new(600),
             library_cache: LibraryCache::new().await,
@@ -1032,11 +1016,10 @@ impl SpotifyClient {
 
         self.shuffle_state = json["shuffle_state"].as_bool().unwrap_or(false);
         let repeat = json["repeat_state"].as_str().unwrap_or("off");
-        use rspotify::model::RepeatState;
         self.repeat_state = match repeat {
-            "context" => RepeatState::Context,
-            "track" => RepeatState::Track,
-            _ => RepeatState::Off,
+            "context" => super::RepeatState::Context,
+            "track" => super::RepeatState::Track,
+            _ => super::RepeatState::Off,
         };
 
         let is_playing = json["is_playing"].as_bool().unwrap_or(false);

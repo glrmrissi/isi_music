@@ -32,9 +32,40 @@ jobs:
         id: extract
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            pkg-config \
+            libasound2-dev \
+            libpulse-dev \
+            libdbus-1-dev \
+            libssl-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test (default features)
+        run: cargo test --locked --verbose
+
+      - name: Test (minimal features)
+        run: cargo test --locked --no-default-features -F spotify,discord --verbose
+
   build:
     name: Build (${{ matrix.label }})
-    needs: [validate]
+    needs: [validate, test]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -88,7 +119,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: Build full binary
         shell: bash
         env:
           OPENSSL_STATIC: 1
@@ -97,7 +128,23 @@ jobs:
             --release \
             --locked \
             --target ${{ matrix.target }} \
+            -F mpris \
             --verbose
+
+      - name: Build minimal binary
+        shell: bash
+        env:
+          OPENSSL_STATIC: 1
+        run: |
+          cargo build \
+            --release \
+            --locked \
+            --target ${{ matrix.target }} \
+            --no-default-features \
+            -F spotify,discord \
+            --verbose && \
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" \
+             "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"
 
       - name: Create release artifacts
         shell: bash
@@ -105,17 +152,21 @@ jobs:
           mkdir -p release-artifacts
 
           BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+          MINIMAL_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"
 
           if [ -f "$BINARY_PATH" ]; then
             cp "$BINARY_PATH" "release-artifacts/${{ matrix.asset_name }}"
             echo "Artifact ready: ${{ matrix.asset_name }}"
-
-            if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
-              ls -lh "release-artifacts/${{ matrix.asset_name }}"
-              file "release-artifacts/${{ matrix.asset_name }}"
-            fi
           else
             echo "Binary not found at: $BINARY_PATH"
+            exit 1
+          fi
+
+          if [ -f "$MINIMAL_PATH" ]; then
+            cp "$MINIMAL_PATH" "release-artifacts/${{ matrix.asset_name }}-minimal"
+            echo "Artifact ready: ${{ matrix.asset_name }}-minimal"
+          else
+            echo "Minimal binary not found at: $MINIMAL_PATH"
             exit 1
           fi
 
@@ -123,7 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: release-artifacts/${{ matrix.asset_name }}
+          path: release-artifacts/*
           if-no-files-found: error
           retention-days: 1
 
@@ -145,7 +196,7 @@ jobs:
         with:
           tool: git-cliff
 
-      - name: Generate release notes
+      - name: Generate changelog
         run: |
           git cliff \
             --tag "${{ github.ref_name }}" \
@@ -153,10 +204,19 @@ jobs:
             --current \
             -o changelog-full.md
 
+      - name: Build release notes
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' "${{ github.ref_name }}"^ 2>/dev/null || echo "")
+          COMMIT_COUNT=$(git rev-list --count "${{ github.ref_name }}" ^"${PREVIOUS_TAG:-$(git rev-list --max-parents=0 HEAD)}" 2>/dev/null || echo "")
+
           cat > release-notes.md <<- RELEASE
           ## ${{ github.ref_name }}
 
-          See the full changelog below.
+          $(if [ -n "$COMMIT_COUNT" ]; then echo "**$COMMIT_COUNT commits**"; fi)$(if [ -n "$PREVIOUS_TAG" ]; then echo " since $PREVIOUS_TAG"; fi)
+
+          $(if [ -n "$PREVIOUS_TAG" ]; then echo "**Full Changelog:** https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...${{ github.ref_name }}"; fi)
+
+          ---
 
           <details>
           <summary>View changelog</summary>
@@ -185,6 +245,15 @@ jobs:
             exit 1
           fi
 
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > ../checksums.sha256
+          cd ..
+          mv checksums.sha256 artifacts/
+          echo "Checksums:"
+          cat artifacts/checksums.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -192,7 +261,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body_path: release-notes.md
           files: artifacts/*
-          draft: false
+          draft: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

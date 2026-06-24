@@ -134,6 +134,7 @@ pub struct UiState {
     pub queue_items: Vec<(String, String)>,
     pub queue_list: ListState,
     pub show_album_art: bool,
+    #[cfg(feature = "album-art")]
     pub album_art: Option<super::AlbumArtData>,
     pub playback: super::PlaybackState,
     pub status_msg: Option<String>,
@@ -192,6 +193,7 @@ impl UiState {
             queue_items: Vec::new(),
             queue_list: ListState::default(),
             show_album_art: true,
+            #[cfg(feature = "album-art")]
             album_art: None,
             playback: super::PlaybackState::default(),
             status_msg: None,

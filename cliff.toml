@@ -7,6 +7,11 @@ body = """
 - {{ commit.message | upper_first }}{% if commit.scope %} ({{ commit.scope }}){% endif %}
 {%- endfor %}
 {% endfor %}
+{% if contrib_users | length > 0 %}
+---
+
+**Contributors:** {% for username in contrib_users | unique %}@{{ username }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
 """
 footer = """
 ---
@@ -36,3 +41,7 @@ filter_commits = false
 topo_order = false
 # sort by type
 sort_commits = "newest"
+
+[remote.github]
+owner = "glrmrissi"
+repo = "isi-music"

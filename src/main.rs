@@ -4,6 +4,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+#[cfg(feature = "album-art")]
 use ratatui_image::picker::Picker;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -20,7 +21,6 @@ mod ui;
 mod utils;
 
 use app::App;
-use rspotify::clients::OAuthClient;
 
 fn prompt(label: &str) -> String {
     print!("{}", label);
@@ -268,36 +268,14 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     if authenticate {
         let client_id = cfg.get_client_id().unwrap_or_default();
         if !client_id.is_empty() {
-            match crate::spotify::auth::SpotifyAuth::build_client() {
-                Ok(mut rspotify_client) => match rspotify_client.get_authorize_url(None) {
-                    Ok(url) => {
-                        let code = crate::spotify::auth::SpotifyAuth::run_oauth_flow(&url).await?;
-                        match rspotify_client.request_token(&code).await {
-                            Ok(_) => {
-                                if let Ok(guard) = rspotify_client.token.lock().await {
-                                    if let Some(token) = guard.as_ref() {
-                                        let rt = token.refresh_token.as_deref().unwrap_or("");
-                                        crate::config::save_refresh_token(rt);
-                                        println!(
-                                            "  {GREEN}[OK]{RESET}  Authenticated successfully!\n"
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                println!("  {YELLOW}Authentication failed: {e}{RESET}");
-                                println!(
-                                    "  You can authenticate later by launching isi-music normally.\n"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("  {YELLOW}Failed to generate auth URL: {e}{RESET}");
-                    }
-                },
+            match crate::spotify::auth::SpotifyAuth::authenticate().await {
+                Ok((_access_token, refresh_token, _expires_in)) => {
+                    crate::config::save_refresh_token(&refresh_token);
+                    println!("  {GREEN}[OK]{RESET}  Authenticated successfully!\n");
+                }
                 Err(e) => {
-                    println!("  {YELLOW}Failed to build Spotify client: {e}{RESET}");
+                    println!("  {YELLOW}Authentication failed: {e}{RESET}");
+                    println!("  You can authenticate later by launching isi-music normally.\n");
                 }
             }
         }
@@ -560,6 +538,7 @@ fn main() -> Result<()> {
             let theme_rx = utils::theme::Theme::watch()?;
             let keybinds = keybinds::Keybinds::load();
             let keybinds_rx = keybinds::KeybindsWatcher::watch()?;
+            #[cfg(feature = "album-art")]
             let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
             enable_raw_mode()?;
@@ -568,7 +547,15 @@ fn main() -> Result<()> {
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
 
-            let mut app = App::new(picker, theme, theme_rx, keybinds, keybinds_rx).await?;
+            let mut app = App::new(
+                #[cfg(feature = "album-art")]
+                picker,
+                theme,
+                theme_rx,
+                keybinds,
+                keybinds_rx,
+            )
+            .await?;
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;
