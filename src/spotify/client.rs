@@ -24,15 +24,9 @@ async fn spotify_rate_limit() {
 
     if elapsed < min_interval {
         let sleep_time = min_interval - elapsed;
-
-        drop(last_request);
         sleep(sleep_time).await;
-
-        let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
-        *last_request = Instant::now();
-    } else {
-        *last_request = Instant::now();
     }
+    *last_request = Instant::now();
 }
 
 #[derive(Clone)]

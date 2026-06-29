@@ -16,8 +16,6 @@ use librespot_playback::{
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
 
-#[cfg(target_os = "linux")]
-use libc;
 use rand::seq::SliceRandom;
 use std::path::PathBuf;
 use std::sync::{
@@ -309,10 +307,6 @@ impl NativePlayer {
                 self.current_index = Some(index);
                 self.is_playing = true;
                 self.playing_queued = None;
-                #[cfg(target_os = "linux")]
-                unsafe {
-                    libc::malloc_trim(0);
-                }
             }
             Err(e) => error!("Invalid URI '{uri}': {e}"),
         }
@@ -354,10 +348,6 @@ impl NativePlayer {
                     self.player.stop();
                     self.player.load(spotify_uri, true, 0);
                     self.is_playing = true;
-                    #[cfg(target_os = "linux")]
-                    unsafe {
-                        libc::malloc_trim(0);
-                    }
                     self.playing_queued = Some(track);
                     return true;
                 }
@@ -546,7 +536,12 @@ impl AudioPlayer for NativePlayer {
 
     fn current_playback_state(&self) -> Option<PlaybackState> {
         let guard = self.server_position.lock().ok()?;
-        let (base, _time) = *guard;
+        let (base, recorded_at) = *guard;
+        let elapsed = if self.is_playing {
+            recorded_at.elapsed().as_millis() as u64
+        } else {
+            0
+        };
         Some(PlaybackState {
             is_playing: self.is_playing,
             volume: self.volume,
@@ -557,7 +552,7 @@ impl AudioPlayer for NativePlayer {
                 RepeatMode::Track => crate::spotify::RepeatState::Track,
             },
             is_local: false,
-            progress_ms: base,
+            progress_ms: base.saturating_add(elapsed),
             ..PlaybackState::default()
         })
     }
