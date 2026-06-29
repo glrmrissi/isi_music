@@ -129,7 +129,9 @@ jobs:
             --locked \
             --target ${{ matrix.target }} \
             -F mpris \
-            --verbose
+            --verbose && \
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" \
+             "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-full"
 
       - name: Build minimal binary
         shell: bash
@@ -151,14 +153,14 @@ jobs:
         run: |
           mkdir -p release-artifacts
 
-          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+          FULL_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-full"
           MINIMAL_PATH="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"
 
-          if [ -f "$BINARY_PATH" ]; then
-            cp "$BINARY_PATH" "release-artifacts/${{ matrix.asset_name }}"
+          if [ -f "$FULL_PATH" ]; then
+            cp "$FULL_PATH" "release-artifacts/${{ matrix.asset_name }}"
             echo "Artifact ready: ${{ matrix.asset_name }}"
           else
-            echo "Binary not found at: $BINARY_PATH"
+            echo "Binary not found at: $FULL_PATH"
             exit 1
           fi
 
