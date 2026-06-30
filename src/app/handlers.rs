@@ -1,3 +1,4 @@
+// TODO: modularize this file (~1580 lines) into smaller modules
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::time::{Duration, Instant};

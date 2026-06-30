@@ -1,3 +1,4 @@
+// TODO: modularize this file (~530 lines) into smaller modules
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
 use std::sync::{

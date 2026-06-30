@@ -1,3 +1,4 @@
+// TODO: modularize this file (~560 lines) into smaller modules
 pub mod local;
 pub use local::LocalPlayer;
 

@@ -1,4 +1,4 @@
-// TODO: modularizar este arquivo (~2400 linhas) em módulos menores
+// TODO: modularize this file (~2300 lines) into smaller modules
 use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashMap;

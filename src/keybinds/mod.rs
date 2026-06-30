@@ -1,3 +1,4 @@
+// TODO: modularize this file (~620 lines) into smaller modules
 pub mod watcher;
 pub use watcher::KeybindsWatcher;
 
@@ -202,7 +203,7 @@ fn key_combo_to_string(kc: &KeyCombo) -> String {
     if kc.alt {
         parts.push("Alt");
     }
-    if kc.shift {
+    if kc.shift && !matches!(&kc.key, KeyId::Char(_)) {
         parts.push("Shift");
     }
     let key = match &kc.key {

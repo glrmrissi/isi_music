@@ -1,3 +1,4 @@
+// TODO: modularize this file (~780 lines) into smaller modules
 use ratatui::widgets::ListState;
 
 use super::{LIBRARY_ITEMS, LocalNode, SearchResults};
