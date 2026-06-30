@@ -1,3 +1,4 @@
+// TODO: modularizar este arquivo (~2400 linhas) em módulos menores
 use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashMap;
@@ -2282,10 +2283,12 @@ pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &s
 pub async fn save_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
     spotify_rate_limit().await;
 
+    let uri = format!("spotify:track:{}", track_id);
     let resp = http
         .put("https://api.spotify.com/v1/me/library")
         .bearer_auth(token)
-        .json(&serde_json::json!({"uris": [format!("spotify:track:{}", track_id)]}))
+        .query(&[("uris", &uri)])
+        .header("Content-Length", "0")
         .send()
         .await?;
 
