@@ -20,6 +20,8 @@ isi-music is a terminal audio player for Spotify streaming and local file playba
 - **Last.fm scrobbling** -- now playing + automatic scrobble at 50% or 4 minutes
 - **Discord Rich Presence** -- shows current track in Discord activity
 - **Daemon mode** -- keep playback after closing the terminal, control via CLI
+- **Playlist management** -- add and remove tracks via keyboard (tiling picker)
+- **Command mode** -- `:` prefix commands like `ap <search>`, `newplaylist <name>`
 - **Seek support** for all audio formats
 
 > Spotify Premium is required for streaming. Local file playback works without any Spotify account.
@@ -386,6 +388,9 @@ The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser
 | Key | Action |
 |-----|--------|
 | `l` | Like current track |
+| `A` | Add selected track to playlist (tiling picker) |
+| `D` | Remove selected track from playlist / unlike |
+| `:` | Command prompt (`ap <search>`, `newplaylist <name>`) |
 | `a` | Add track to queue |
 | `Delete` | Remove selected item from queue |
 | `o` | Sort tracks (default / title / artist / album / duration) |
