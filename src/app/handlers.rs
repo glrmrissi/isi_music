@@ -206,6 +206,9 @@ impl App {
             match self.spotify.add_tracks_to_playlist(&playlist.id, &[uri.clone()], None).await {
                 Ok(_) => {
                     self.state.status_msg = Some(format!("Added to '{}'", playlist.name));
+                    self.spotify.library_cache.delete_key_pattern(
+                        &format!("playlist:{}:%", playlist.id),
+                    );
                 }
                 Err(e) => {
                     self.state.status_msg = Some(format!("Failed: {e}"));
