@@ -46,6 +46,9 @@ pub enum Action {
     OptionsPanel,
     CopyTrackLink,
     ToggleBreadcrumb,
+    AddToPlaylist,
+    RemoveFromPlaylist,
+    CommandPrompt,
 }
 
 impl Action {
@@ -89,6 +92,9 @@ impl Action {
             ("options_panel", &["t"], OptionsPanel),
             ("copy_track_link", &["ctrl+y"], CopyTrackLink),
             ("toggle_breadcrumb", &["shift+b"], ToggleBreadcrumb),
+            ("add_to_playlist", &["A"], AddToPlaylist),
+            ("remove_from_playlist", &["D"], RemoveFromPlaylist),
+            ("command_prompt", &[":"], CommandPrompt),
         ]
     }
 }
@@ -123,8 +129,7 @@ pub struct KeyCombo {
 }
 
 fn parse_key_combo(s: &str) -> Option<KeyCombo> {
-    let s = s.trim().to_lowercase();
-    let parts: Vec<&str> = s.split('+').collect();
+    let parts: Vec<&str> = s.trim().split('+').collect();
 
     let mut ctrl = false;
     let mut alt = false;
@@ -133,7 +138,7 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
 
     for part in &parts {
         let p = part.trim();
-        match p {
+        match &*p.to_lowercase() {
             "ctrl" | "control" => ctrl = true,
             "alt" => alt = true,
             "shift" => shift = true,
@@ -145,7 +150,7 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         return None;
     }
 
-    let key = match key_str {
+    let key = match &*key_str.to_lowercase() {
         "space" => KeyId::Space,
         "enter" | "return" => KeyId::Enter,
         "tab" => KeyId::Tab,
@@ -168,8 +173,8 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
             }
             KeyId::F(n)
         }
-        s => {
-            let chars: Vec<char> = s.chars().collect();
+        _ => {
+            let chars: Vec<char> = key_str.chars().collect();
             if chars.len() != 1 {
                 return None;
             }
@@ -463,6 +468,9 @@ impl Keybinds {
                     Action::RemoveFromQueue,
                     Action::SortTracks,
                     Action::CopyTrackLink,
+                    Action::AddToPlaylist,
+                    Action::RemoveFromPlaylist,
+                    Action::CommandPrompt,
                     Action::Quit,
                 ],
             ),
@@ -556,6 +564,9 @@ impl KeybindsTomlOutput {
                 | Action::RemoveFromQueue
                 | Action::SortTracks
                 | Action::CopyTrackLink
+                |                 Action::AddToPlaylist
+                | Action::RemoveFromPlaylist
+                | Action::CommandPrompt
                 | Action::Quit => actions.push(entry),
             }
         }
