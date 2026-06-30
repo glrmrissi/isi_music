@@ -1,3 +1,4 @@
+// TODO: modularize this file (~2300 lines) into smaller modules
 use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashMap;
@@ -24,15 +25,9 @@ async fn spotify_rate_limit() {
 
     if elapsed < min_interval {
         let sleep_time = min_interval - elapsed;
-
-        drop(last_request);
         sleep(sleep_time).await;
-
-        let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
-        *last_request = Instant::now();
-    } else {
-        *last_request = Instant::now();
     }
+    *last_request = Instant::now();
 }
 
 #[derive(Clone)]
@@ -2126,108 +2121,183 @@ impl SpotifyClient {
             .and_then(|img| img["url"].as_str())
             .map(|s| s.to_string())
     }
+
+    pub async fn add_tracks_to_playlist(
+        &self,
+        playlist_id: &str,
+        uris: &[String],
+        position: Option<u32>,
+    ) -> Result<String> {
+        spotify_rate_limit().await;
+        let token = self.get_access_token().await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let mut body = serde_json::json!({ "uris": uris });
+        if let Some(pos) = position {
+            body["position"] = serde_json::json!(pos);
+        }
+        let resp = self.http
+            .post(format!("https://api.spotify.com/v1/playlists/{playlist_id}/items"))
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if status.is_success() {
+            let snap: serde_json::Value = serde_json::from_str(&text)?;
+            Ok(snap["snapshot_id"].as_str().unwrap_or("").to_string())
+        } else {
+            anyhow::bail!("Add to playlist failed ({}): {}", status.as_u16(), text);
+        }
+    }
+
+    pub async fn remove_tracks_from_playlist(
+        &self,
+        playlist_id: &str,
+        uris: &[String],
+    ) -> Result<String> {
+        spotify_rate_limit().await;
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let body = serde_json::json!({
+            "items": uris.iter().map(|uri| serde_json::json!({"uri": uri})).collect::<Vec<_>>()
+        });
+        let resp = self
+            .http
+            .delete(format!(
+                "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+            ))
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if status.is_success() {
+            let snap: serde_json::Value = serde_json::from_str(&text)?;
+            Ok(snap["snapshot_id"].as_str().unwrap_or("").to_string())
+        } else {
+            anyhow::bail!(
+                "Remove from playlist failed ({}): {}",
+                status.as_u16(),
+                text
+            );
+        }
+    }
+
+    pub async fn check_track_saved(&self, track_id: &str) -> Result<bool> {
+        spotify_rate_limit().await;
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let resp = self
+            .http
+            .get("https://api.spotify.com/v1/me/library/contains")
+            .bearer_auth(&token)
+            .query(&[("uris", &format!("spotify:track:{}", track_id))])
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if status.is_success() {
+            let arr: Vec<bool> = serde_json::from_str(&text)?;
+            Ok(arr.first().copied().unwrap_or(false))
+        } else {
+            anyhow::bail!(
+                "Check track saved failed ({}): {}",
+                status.as_u16(),
+                text
+            );
+        }
+    }
+
+    pub async fn create_playlist(
+        &self,
+        name: &str,
+        public: bool,
+        description: Option<&str>,
+    ) -> Result<PlaylistSummary> {
+        spotify_rate_limit().await;
+        let token = self.get_access_token().await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let mut body = serde_json::json!({
+            "name": name,
+            "public": public,
+        });
+        if let Some(desc) = description {
+            body["description"] = serde_json::json!(desc);
+        }
+        let resp = self.http
+            .post("https://api.spotify.com/v1/me/playlists")
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if status.is_success() {
+            let v: serde_json::Value = serde_json::from_str(&text)?;
+            Ok(PlaylistSummary {
+                id: v["id"].as_str().unwrap_or("").to_string(),
+                name: v["name"].as_str().unwrap_or("").to_string(),
+                uri: v["uri"].as_str().unwrap_or("").to_string(),
+                total_tracks: v["tracks"]["total"].as_u64().unwrap_or(0) as u32,
+                art_url: v["images"]
+                    .as_array()
+                    .and_then(|imgs| imgs.first())
+                    .and_then(|img| img["url"].as_str())
+                    .map(|s| s.to_string()),
+            })
+        } else {
+            anyhow::bail!("Create playlist failed ({}): {}", status.as_u16(), text);
+        }
+    }
+
+}
+
+pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
+    spotify_rate_limit().await;
+
+    let uri = format!("spotify:track:{}", track_id);
+    let resp = http
+        .delete("https://api.spotify.com/v1/me/library")
+        .bearer_auth(token)
+        .query(&[("uris", &uri)])
+        .header("Content-Length", "0")
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if status.is_success() {
+        tracing::info!("Unlike track: OK ({})", status.as_u16());
+        Ok(())
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Unlike failed ({}): {}", status.as_u16(), text);
+    }
 }
 
 pub async fn save_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
     spotify_rate_limit().await;
 
-    let mut results: Vec<(String, u16, String)> = Vec::new();
+    let uri = format!("spotify:track:{}", track_id);
+    let resp = http
+        .put("https://api.spotify.com/v1/me/library")
+        .bearer_auth(token)
+        .query(&[("uris", &uri)])
+        .header("Content-Length", "0")
+        .send()
+        .await?;
 
-    macro_rules! try_format {
-        ($label:expr, $req_fut:expr) => {
-            match tokio::time::timeout(Duration::from_secs(10), $req_fut).await {
-                Ok(Ok(resp)) => {
-                    let status = resp.status();
-                    let code = status.as_u16();
-                    let body = resp.text().await.unwrap_or_default();
-                    results.push(($label.to_string(), code, body.clone()));
-                    if status.is_success() {
-                        tracing::info!("Like track: {} OK ({})", $label, code);
-                        return Ok(());
-                    }
-                    tracing::warn!("Like track: {} failed ({}): {}", $label, code, body);
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("Like track: {} request error: {}", $label, e);
-                }
-                Err(_) => {
-                    tracing::error!("Like track: {} timed out (10s)", $label);
-                }
-            }
-        };
+    let status = resp.status();
+    if status.is_success() {
+        tracing::info!("Like track: OK ({})", status.as_u16());
+        Ok(())
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Like failed ({}): {}", status.as_u16(), text);
     }
-
-    // Format 1: PUT /v1/me/library JSON {uris: [spotify:track:ID]} — correct endpoint
-    {
-        let url = "https://api.spotify.com/v1/me/library";
-        let body_str =
-            serde_json::json!({"uris": [format!("spotify:track:{}", track_id)]}).to_string();
-        let req = http
-            .put(url)
-            .bearer_auth(token)
-            .header("Content-Type", "application/json")
-            .body(body_str);
-        try_format!("library JSON uris", req.send());
-        spotify_rate_limit().await;
-    }
-
-    // Format 2: PUT /v1/me/library?uris=spotify:track:ID
-    {
-        let url = "https://api.spotify.com/v1/me/library";
-        let uri_str = format!("spotify:track:{}", track_id);
-        let req = http
-            .put(url)
-            .bearer_auth(token)
-            .query(&[("uris", &uri_str)])
-            .header("Content-Length", "0");
-        try_format!("library?uris=", req.send());
-        spotify_rate_limit().await;
-    }
-
-    // Format 3: PUT /v1/me/tracks?ids=ID
-    {
-        let url = "https://api.spotify.com/v1/me/tracks";
-        let req = http
-            .put(url)
-            .bearer_auth(token)
-            .query(&[("ids", track_id)])
-            .header("Content-Length", "0");
-        try_format!("tracks?ids=ID", req.send());
-        spotify_rate_limit().await;
-    }
-
-    // Format 4: PUT /v1/me/library JSON {ids: [ID]}
-    {
-        let url = "https://api.spotify.com/v1/me/library";
-        let body_str = serde_json::json!({"ids": [track_id]}).to_string();
-        let req = http
-            .put(url)
-            .bearer_auth(token)
-            .header("Content-Type", "application/json")
-            .body(body_str);
-        try_format!("library JSON ids", req.send());
-        spotify_rate_limit().await;
-    }
-
-    // Format 5: PUT /v1/me/library?ids=ID
-    {
-        let url = "https://api.spotify.com/v1/me/library";
-        let req = http
-            .put(url)
-            .bearer_auth(token)
-            .query(&[("ids", track_id)])
-            .header("Content-Length", "0");
-        try_format!("library?ids=", req.send());
-        spotify_rate_limit().await;
-    }
-
-    if results.is_empty() {
-        anyhow::bail!("All 5 API formats failed (all requests errored/timed out)");
-    }
-    let detail: String = results
-        .iter()
-        .map(|(label, code, body)| format!("{} ({}): {}", label, code, body))
-        .collect::<Vec<_>>()
-        .join("; ");
-    anyhow::bail!("All 5 API formats failed: {}", detail);
 }

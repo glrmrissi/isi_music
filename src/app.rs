@@ -1,3 +1,4 @@
+// TODO: modularize this file (~970 lines) into smaller modules
 pub mod handlers;
 pub mod library;
 pub mod metadata;
@@ -433,19 +434,10 @@ impl App {
                 if let Some(pb) = player.current_playback_state() {
                     let prev_title = self.state.playback.title.clone();
                     let progress = self.state.playback.progress_ms;
-                    let radio_mode = self.state.playback.radio_mode;
 
                     if pb.is_local {
-                        let saved_lyrics = self.state.playback.lyrics.take();
-                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
-                        let saved_lyrics_scroll = self.state.playback.lyrics_scroll;
-
-                        self.state.playback = pb;
+                        self.state.playback.merge_from_api(pb);
                         self.state.playback.progress_ms = progress;
-                        self.state.playback.radio_mode = radio_mode;
-                        self.state.playback.lyrics = saved_lyrics;
-                        self.state.playback.lyrics_loading = saved_lyrics_loading;
-                        self.state.playback.lyrics_scroll = saved_lyrics_scroll;
 
                         if self.state.playback.title != prev_title {
                             #[cfg(feature = "album-art")]
@@ -670,16 +662,10 @@ impl App {
                 self.sync_queue_display();
                 if self.player.is_none() {
                     if let Ok(current_pb) = self.spotify.fetch_playback().await {
-                        let saved_lyrics = self.state.playback.lyrics.take();
-                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
-                        let saved_lyrics_scroll = self.state.playback.lyrics_scroll;
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
-                        self.state.playback = current_pb;
-                        self.state.playback.lyrics = saved_lyrics;
-                        self.state.playback.lyrics_loading = saved_lyrics_loading;
-                        self.state.playback.lyrics_scroll = saved_lyrics_scroll;
+                        self.state.playback.merge_from_api(current_pb);
                         if self.playing_started_at.is_none() {
                             self.state.playback.is_playing = false;
                         }
@@ -715,16 +701,10 @@ impl App {
 
                 if self.player.is_none() {
                     if let Ok(current_pb) = self.spotify.fetch_playback().await {
-                        let saved_lyrics = self.state.playback.lyrics.take();
-                        let saved_lyrics_loading = self.state.playback.lyrics_loading;
-                        let saved_lyrics_scroll = self.state.playback.lyrics_scroll;
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
-                        self.state.playback = current_pb;
-                        self.state.playback.lyrics = saved_lyrics;
-                        self.state.playback.lyrics_loading = saved_lyrics_loading;
-                        self.state.playback.lyrics_scroll = saved_lyrics_scroll;
+                        self.state.playback.merge_from_api(current_pb);
                         if self.playing_started_at.is_none() {
                             self.state.playback.is_playing = false;
                         }
@@ -915,7 +895,8 @@ impl App {
 
             if self.state.playback.is_playing {
                 if self.player.is_some() && !self.local_active {
-                    // NativePlayer: progress from current_playback_state
+                    // NativePlayer: progress already interpolated inside
+                    // current_playback_state() - nothing to do here
                 } else {
                     if self.playing_started_at.is_none() {
                         self.playing_started_at = Some(Instant::now());

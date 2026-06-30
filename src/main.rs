@@ -1,3 +1,4 @@
+// TODO: modularize this file (~570 lines) into smaller modules
 use anyhow::Result;
 use crossterm::{
     execute,

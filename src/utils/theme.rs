@@ -1,3 +1,4 @@
+// TODO: modularize this file (~590 lines) into smaller modules
 use ratatui::layout::{Constraint, Direction};
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};

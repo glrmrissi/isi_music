@@ -1,3 +1,4 @@
+// TODO: modularize this file (~780 lines) into smaller modules
 use ratatui::widgets::ListState;
 
 use super::{LIBRARY_ITEMS, LocalNode, SearchResults};
@@ -155,6 +156,10 @@ pub struct UiState {
     pub compact_mode: bool,
     pub compact_effective: bool,
     pub nav_stack: Vec<NavEntry>,
+    pub add_to_playlist_mode: bool,
+    pub add_to_playlist_list: ListState,
+    pub command_mode: bool,
+    pub command_buffer: String,
 }
 
 impl UiState {
@@ -214,6 +219,10 @@ impl UiState {
             compact_mode: false,
             compact_effective: false,
             nav_stack: Vec::new(),
+            add_to_playlist_mode: false,
+            add_to_playlist_list: ListState::default(),
+            command_mode: false,
+            command_buffer: String::new(),
         }
     }
 

@@ -13,7 +13,7 @@ fn defaults_contains_all_actions() {
 fn defaults_no_duplicate_key_combos() {
     let k = Keybinds::defaults();
     let lookup: &HashMap<KeyCombo, Action> = &k.action_for;
-    assert_eq!(lookup.len(), 39);
+    assert_eq!(lookup.len(), 43);
 }
 
 #[test]
@@ -26,13 +26,10 @@ fn parse_key_combo_simple_char() {
 }
 
 #[test]
-fn parse_key_combo_uppercase_normalized_to_lowercase() {
+fn parse_key_combo_uppercase_infers_shift() {
     let kc = parse_key_combo("A").unwrap();
     assert_eq!(kc.key, KeyId::Char('a'));
-    assert!(
-        !kc.shift,
-        "input is lowercased before processing, shift not inferred"
-    );
+    assert!(kc.shift, "uppercase input should set shift flag");
 }
 
 #[test]
@@ -283,6 +280,15 @@ fn lookup_ctrl_y_is_copy_track_link() {
 }
 
 #[test]
+fn lookup_shift_d_is_remove_from_playlist() {
+    let k = Keybinds::defaults();
+    assert_eq!(
+        k.lookup(KeyCode::Char('D'), KeyModifiers::empty()),
+        Some(Action::RemoveFromPlaylist)
+    );
+}
+
+#[test]
 fn lookup_shift_b_is_toggle_breadcrumb() {
     let k = Keybinds::defaults();
     assert_eq!(
@@ -326,7 +332,7 @@ fn format_help_text_key_strings() {
 #[test]
 fn action_variants_count() {
     let count = Action::all().len();
-    assert_eq!(count, 37, "Action::all() should have 37 entries");
+    assert_eq!(count, 40, "Action::all() should have 40 entries");
 }
 
 #[test]
@@ -355,7 +361,7 @@ fn keybinds_toml_output_sections() {
     assert_eq!(output.playback.len(), 12);
     assert_eq!(output.navigation.len(), 8);
     assert_eq!(output.modes.len(), 12);
-    assert_eq!(output.actions.len(), 5);
+    assert_eq!(output.actions.len(), 8);
 }
 
 #[test]

@@ -1,15 +1,13 @@
+// TODO: modularize this file (~530 lines) into smaller modules
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
 use rusqlite::Connection;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::{fs::File, io::BufReader, path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-#[cfg(target_os = "linux")]
-use libc;
 
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode};
 use crate::audio::audio_sink::{AnalyzingSource, SharedAnalyzerState};
@@ -42,6 +40,7 @@ pub struct LocalPlayer {
     pub analyzer: Arc<SharedAnalyzerState>,
     load_guard: Option<Instant>,
     pub is_seeking: Arc<AtomicBool>,
+    seek_generation: Arc<AtomicU64>,
 }
 
 impl LocalPlayer {
@@ -103,6 +102,7 @@ impl LocalPlayer {
             analyzer: Arc::new(SharedAnalyzerState::new()),
             load_guard: None,
             is_seeking: Arc::new(AtomicBool::new(false)),
+            seek_generation: Arc::new(AtomicU64::new(0)),
         };
 
         if let Err(e) = instance.reload_library_from_db() {
@@ -157,11 +157,6 @@ impl LocalPlayer {
         self.sink.clear();
         self.sink.stop();
 
-        #[cfg(target_os = "linux")]
-        unsafe {
-            libc::malloc_trim(0);
-        }
-
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(_) => return false,
@@ -212,16 +207,25 @@ impl LocalPlayer {
             let analyzer = Arc::clone(&self.analyzer);
             let event_tx = self.event_tx.clone();
             let is_seeking = Arc::clone(&self.is_seeking);
+            let generation = Arc::clone(&self.seek_generation);
+            let seek_gen = self.seek_generation.fetch_add(1, Ordering::SeqCst);
 
             is_seeking.store(true, Ordering::SeqCst);
-            sink.clear();
             sink.stop();
 
             std::thread::spawn(move || {
+                if seek_gen != generation.load(Ordering::Acquire) {
+                    is_seeking.store(false, Ordering::SeqCst);
+                    return;
+                }
                 let file = File::open(&path).ok();
                 let decoder = file.and_then(|f| Decoder::new(BufReader::new(f)).ok());
 
                 if let Some(d) = decoder {
+                    if seek_gen != generation.load(Ordering::Acquire) {
+                        is_seeking.store(false, Ordering::SeqCst);
+                        return;
+                    }
                     let skipped =
                         d.skip_duration(std::time::Duration::from_millis(position_ms as u64));
 

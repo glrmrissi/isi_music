@@ -139,7 +139,9 @@ impl Ui {
     }
 
     pub fn render_main_area_logic(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        if state.search_results.is_some() {
+        if state.add_to_playlist_mode {
+            self.render_add_to_playlist(frame, state, area);
+        } else if state.search_results.is_some() {
             self.render_search_panels(frame, state, area);
         } else {
             match &state.active_content {

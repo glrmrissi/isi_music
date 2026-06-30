@@ -42,3 +42,23 @@ impl Default for PlaybackState {
         }
     }
 }
+
+impl PlaybackState {
+    pub fn merge_from_api(&mut self, from_api: PlaybackState) {
+        let lyrics = self.lyrics.take();
+        let lyrics_loading = self.lyrics_loading;
+        let lyrics_scroll = self.lyrics_scroll;
+        let radio_mode = self.radio_mode;
+        let art_url = self.art_url.clone();
+        let cover_path = self.cover_path.clone();
+
+        *self = from_api;
+
+        self.lyrics = lyrics;
+        self.lyrics_loading = lyrics_loading;
+        self.lyrics_scroll = lyrics_scroll;
+        self.radio_mode = radio_mode;
+        self.art_url = art_url;
+        self.cover_path = cover_path;
+    }
+}

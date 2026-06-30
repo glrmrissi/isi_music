@@ -1,3 +1,4 @@
+// TODO: modularize this file (~560 lines) into smaller modules
 use crate::config::AppOptionsConfig;
 use crate::utils::cache::{CacheManager, CacheStats};
 use crossterm::event::KeyCode;

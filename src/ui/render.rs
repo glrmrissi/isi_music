@@ -382,7 +382,7 @@ impl Ui {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(
-                if state.search_active || state.quick_search_active {
+                if state.search_active || state.quick_search_active || state.command_mode {
                     self.theme.border_active
                 } else {
                     self.theme.border_inactive
@@ -403,7 +403,24 @@ impl Ui {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let content = if state.quick_search_active {
+        let content = if state.command_mode {
+            Line::from(vec![
+                Span::styled(
+                    "   :",
+                    Style::default().fg(self.theme.border_active),
+                ),
+                Span::styled(
+                    &state.command_buffer,
+                    Style::default().fg(self.theme.text_primary),
+                ),
+                Span::styled(
+                    "█",
+                    Style::default()
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                ),
+            ])
+        } else if state.quick_search_active {
             Line::from(vec![
                 Span::styled(
                     "   Quick Search: ",
@@ -1743,5 +1760,46 @@ impl Ui {
         );
 
         self.render_progress(frame, &state.playback, progress_area);
+    }
+
+    pub fn render_add_to_playlist(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(vec![Span::raw(" Add to Playlist ")]).alignment(Alignment::Left))
+            .border_style(Style::default().fg(self.theme.border_active));
+
+        let mut items: Vec<ListItem> = state
+            .playlists
+            .iter()
+            .map(|p| {
+                ListItem::new(Line::from(vec![
+                    Span::raw(format!(" {} ", p.name)),
+                    Span::styled(
+                        format!("({})", p.total_tracks),
+                        Style::default().fg(self.theme.border_inactive),
+                    ),
+                ]))
+            })
+            .collect();
+
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            " + Create new playlist",
+            Style::default()
+                .fg(self.theme.accent_color)
+                .add_modifier(Modifier::BOLD),
+        )])));
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .bg(self.theme.highlight_bg)
+                    .fg(self.theme.border_active)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("  ");
+
+        frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
     }
 }
