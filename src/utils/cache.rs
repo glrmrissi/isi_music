@@ -257,40 +257,52 @@ impl CacheManager {
     }
 
     pub async fn get_stats(&self) -> CacheStats {
-        let search_guard = self.search_cache.read().await;
-        let lyrics_guard = self.lyrics_cache.read().await;
-        let lib_guard = self.library_cache.lock().unwrap();
+        let db_path = self.db_path.clone();
+        spawn_blocking(move || {
+            let Ok(conn) = rusqlite::Connection::open(&db_path) else {
+                return CacheStats {
+                    search_cache_entries: 0,
+                    library_cache_entries: 0,
+                    lyrics_cache_entries: 0,
+                    search_cache_size: 0,
+                    library_cache_size: 0,
+                    lyrics_cache_size: 0,
+                    last_cleanup: None,
+                };
+            };
 
-        let now = Self::unix_now();
-        let keep_seconds = self.options.keep_days * 24 * 3600;
+            let search_entries: usize = conn
+                .query_row("SELECT COUNT(*) FROM search_cache", [], |r| r.get(0))
+                .unwrap_or(0);
 
-        let search_entries = search_guard
-            .store
-            .values()
-            .filter(|(ts, _)| now - (*ts as u64) < keep_seconds.into())
-            .count();
+            let library_entries: usize = conn
+                .query_row("SELECT COUNT(*) FROM library_cache", [], |r| r.get(0))
+                .unwrap_or(0);
 
-        let lyrics_entries = lyrics_guard
-            .store
-            .values()
-            .filter(|l| now - l.saved_at < keep_seconds.into())
-            .count();
+            let lyrics_entries: usize = conn
+                .query_row("SELECT COUNT(*) FROM lyrics_cache", [], |r| r.get(0))
+                .unwrap_or(0);
 
-        let library_entries = lib_guard.liked.len()
-            + lib_guard.playlists.values().map(|v| v.len()).sum::<usize>()
-            + lib_guard.albums.values().map(|v| v.len()).sum::<usize>()
-            + lib_guard.artists.values().map(|v| v.len()).sum::<usize>()
-            + lib_guard.shows.values().map(|v| v.len()).sum::<usize>();
-
-        CacheStats {
-            search_cache_entries: search_entries,
-            library_cache_entries: library_entries,
-            lyrics_cache_entries: lyrics_entries,
+            CacheStats {
+                search_cache_entries: search_entries,
+                library_cache_entries: library_entries,
+                lyrics_cache_entries: lyrics_entries,
+                search_cache_size: 0,
+                library_cache_size: 0,
+                lyrics_cache_size: 0,
+                last_cleanup: None,
+            }
+        })
+        .await
+        .unwrap_or(CacheStats {
+            search_cache_entries: 0,
+            library_cache_entries: 0,
+            lyrics_cache_entries: 0,
             search_cache_size: 0,
             library_cache_size: 0,
             lyrics_cache_size: 0,
             last_cleanup: None,
-        }
+        })
     }
 
     pub async fn cleanup_expired(&self) -> Result<()> {

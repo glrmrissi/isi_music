@@ -60,20 +60,28 @@ async fn cleanup_expired_on_empty_is_ok() {
 #[tokio::test]
 async fn stats_after_library_update() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let path = tmp.path().to_str().unwrap().to_string();
 
-    let mut lib = cm.library_cache.lock().unwrap();
-    lib.liked.push(LikedTrack {
-        uri: "spotify:track:test".into(),
-        name: "Test Track".into(),
-        artist: "Test Artist".into(),
-        album: "Test Album".into(),
-        duration_ms: 200000,
-        cover_path: None,
-        saved_at: 0,
-    });
-    drop(lib);
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE IF NOT EXISTS library_cache (
+                 key      TEXT PRIMARY KEY,
+                 data     TEXT NOT NULL,
+                 total    INTEGER NOT NULL,
+                 saved_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO library_cache (key, data, total, saved_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params!["test_key", "[]", 1, 0],
+        )
+        .unwrap();
+    }
 
+    let cm = CacheManager::new_with_path(&path);
     let stats = cm.get_stats().await;
     assert_eq!(stats.library_cache_entries, 1);
 }
