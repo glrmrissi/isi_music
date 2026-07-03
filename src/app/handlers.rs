@@ -750,6 +750,18 @@ impl App {
             A::OptionsPanel => {
                 if let Some(ref mut panel) = self.options_panel {
                     panel.toggle().await;
+                    if panel.visible {
+                        let raw = self.keybinds.format_help_text();
+                        let mut lines = Vec::new();
+                        for (cat, entries) in &raw {
+                            lines.push(format!("#{}", cat));
+                            for entry in entries {
+                                lines.push(format!("  {}", entry));
+                            }
+                            lines.push(String::new());
+                        }
+                        panel.set_help_text(lines);
+                    }
                     self.state.status_msg = Some(if panel.visible {
                         "Options panel opened".to_string()
                     } else {
@@ -1543,31 +1555,25 @@ impl App {
                         .as_ref()
                         .map(|p| p.user_queue().len())
                         .unwrap_or(0);
-                    let queued = if idx < active_len {
+                    let is_active = idx < active_len;
+                    let queue_idx = if is_active { idx } else { idx - active_len };
+
+                    let played = if is_active {
                         self.player
                             .as_mut()
-                            .and_then(|p| p.user_queue().get(idx).cloned())
+                            .map(|p| p.play_from_user_queue(queue_idx))
+                            .unwrap_or(false)
                     } else {
-                        let parked_idx = idx - active_len;
                         self.parked_player
                             .as_mut()
-                            .and_then(|p| p.user_queue().get(parked_idx).cloned())
+                            .map(|p| p.play_from_user_queue(queue_idx))
+                            .unwrap_or(false)
                     };
-                    if let Some(qt) = queued {
-                        let is_local = qt.uri.starts_with("file://");
-                        if is_local {
-                            self.activate_local_player();
-                        } else if !self.local_active {
-                            // já está no spotify player
-                        } else {
-                            self.activate_spotify_player();
-                        }
-                        if let Some(player) = &mut self.player {
-                            player.set_queue(vec![qt.uri.clone()], 0);
-                            self.playing_tracks = vec![];
-                            self.sync_track_selection();
-                            self.sync_queue_display();
-                        }
+
+                    if played {
+                        self.playing_tracks = vec![];
+                        self.sync_track_selection();
+                        self.sync_queue_display();
                     }
                 }
             }
