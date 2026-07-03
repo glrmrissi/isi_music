@@ -542,11 +542,11 @@ impl App {
                     match notif {
                         PlayerNotification::TrackEnded => {
                             self.consecutive_unavailable = 0;
-                            if parked_has_queue {
+                            if player.next() {
+                                needs_sync = true;
+                            } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if player.next() {
-                                needs_sync = true;
                             } else if self.radio_mode && !self.local_active {
                                 needs_radio_refill = true;
                             } else {
@@ -567,11 +567,11 @@ impl App {
                             self.consecutive_unavailable += 1;
                             self.state.status_msg =
                                 Some("Track unavailable, skipping...".to_string());
-                            if parked_has_queue {
+                            if player.next() {
+                                needs_sync = true;
+                            } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if player.next() {
-                                needs_sync = true;
                             } else if self.radio_mode && !self.local_active {
                                 needs_radio_refill = true;
                             } else {
