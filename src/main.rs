@@ -547,6 +547,7 @@ fn main() -> Result<()> {
             execute!(stdout, EnterAlternateScreen)?;
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
+            terminal.clear()?;
 
             let mut app = App::new(
                 #[cfg(feature = "album-art")]
