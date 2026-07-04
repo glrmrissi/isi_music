@@ -1,3 +1,4 @@
+use crate::app::metadata::sanitize_control_chars;
 use crate::spotify::RepeatState;
 use ratatui::{
     Frame,
@@ -47,13 +48,15 @@ impl Ui {
                             } else {
                                 Style::default().fg(self.theme.text_primary)
                             };
+                            let clean_name = sanitize_control_chars(&track.name);
+                            let clean_artist = sanitize_control_chars(&track.artist);
                             ListItem::new(Line::from(vec![
                                 Span::raw(indent),
                                 Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
-                                Span::styled(track.name.clone(), title_style),
-                                if !track.artist.is_empty() {
+                                Span::styled(clean_name, title_style),
+                                if !clean_artist.is_empty() {
                                     Span::styled(
-                                        format!("  {}", track.artist),
+                                        format!("  {}", clean_artist),
                                         Style::default().fg(self.theme.border_inactive),
                                     )
                                 } else {
@@ -72,7 +75,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(list, area, &mut state.local_tree_list);
             return;
         }
@@ -144,14 +147,16 @@ impl Ui {
                         } else {
                             Style::default().fg(self.theme.text_primary)
                         };
+                        let clean_name = sanitize_control_chars(&track.name);
+                        let clean_artist = sanitize_control_chars(&track.artist);
                         let dur = fmt_duration(track.duration_ms);
                         ListItem::new(Line::from(vec![
                             Span::raw(indent),
                             Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
-                            Span::styled(track.name.clone(), title_style),
-                            if !track.artist.is_empty() {
+                            Span::styled(clean_name, title_style),
+                            if !clean_artist.is_empty() {
                                 Span::styled(
-                                    format!(" - {}", track.artist),
+                                    format!(" - {}", clean_artist),
                                     Style::default().fg(self.theme.border_inactive),
                                 )
                             } else {
@@ -250,11 +255,12 @@ impl Ui {
                 }
 
                 let ch = char::from_u32(0x2800 | bits as u32).unwrap_or(' ');
-                if let Some(cell) = frame
-                    .buffer_mut()
-                    .cell_mut((inner.x + bar as u16, inner.y + cell_y as u16))
-                {
-                    cell.set_char(ch).set_fg(color);
+                let bx = inner.x + bar as u16;
+                let by = inner.y + cell_y as u16;
+                if bx < inner.x + inner.width && by < inner.y + inner.height {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((bx, by)) {
+                        cell.set_char(ch).set_fg(color);
+                    }
                 }
             }
         }
@@ -504,7 +510,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.library_list);
     }
@@ -563,7 +569,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.playlist_list);
     }
@@ -608,7 +614,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(list, area, &mut state.library_list);
             return;
         }
@@ -840,7 +846,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(list, area, &mut state.track_list);
             return;
         }
@@ -922,7 +928,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.track_list);
     }
@@ -954,7 +960,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(list, area, &mut state.album_list);
             return;
         }
@@ -1014,7 +1020,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.album_list);
     }
@@ -1042,7 +1048,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(list, area, &mut state.artist_list);
             return;
         }
@@ -1094,7 +1100,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.artist_list);
     }
@@ -1122,7 +1128,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(list, area, &mut state.show_list);
             return;
         }
@@ -1182,7 +1188,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.show_list);
     }
@@ -1290,7 +1296,7 @@ impl Ui {
                             .fg(self.theme.border_active)
                             .add_modifier(Modifier::BOLD),
                     )
-                    .highlight_symbol("  ");
+                    .highlight_symbol("> ");
                 let list_area = Rect {
                     x: area.x,
                     y: area.y + 1,
@@ -1374,7 +1380,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
             let artist_items: Vec<ListItem> = sr
@@ -1409,7 +1415,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
             let album_items: Vec<ListItem> = sr
@@ -1440,7 +1446,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
             let pl_items: Vec<ListItem> = sr
@@ -1471,7 +1477,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol("> ");
             frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
         }
     }
@@ -1483,8 +1489,8 @@ impl Ui {
             0.0
         };
         let shuffle_label = if pb.shuffle { " Shuf" } else { "" };
-        let shuffle_width = if pb.shuffle { 9u16 } else { 0u16 };
-        let width = area.width.saturating_sub(14 + shuffle_width) as usize;
+        let shuffle_display_width = unicode_width::UnicodeWidthStr::width(shuffle_label);
+        let width = area.width.saturating_sub(14 + shuffle_display_width as u16) as usize;
         let filled = (width as f64 * ratio) as usize;
 
         let bar = format!(
@@ -1516,19 +1522,41 @@ impl Ui {
     }
 
     pub fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
+        use unicode_width::UnicodeWidthStr;
         let text = if pb.title.is_empty() {
             format!("isi-music v{}", env!("CARGO_PKG_VERSION"))
         } else {
-            format!("{} • {} ", pb.title, pb.artist)
+            let t = sanitize_control_chars(&pb.title);
+            let a = sanitize_control_chars(&pb.artist);
+            format!("{} • {} ", t, a)
         };
-        let display = if text.len() < area.width as usize {
+        let display = if text.width() < area.width as usize {
             text
         } else {
             let combined = format!("{}   •   ", text);
             let chars: Vec<char> = combined.chars().collect();
-            (0..area.width as usize)
-                .map(|i| chars[(offset + i) % chars.len()])
-                .collect()
+            if chars.is_empty() {
+                return;
+            }
+            let area_w = area.width as usize;
+            let mut result = String::with_capacity(area_w);
+            let mut col = 0usize;
+            let mut i = offset % chars.len();
+            while col < area_w {
+                let ch = chars[i % chars.len()];
+                let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if w == 0 {
+                    i += 1;
+                    continue;
+                }
+                if col + w > area_w {
+                    break;
+                }
+                result.push(ch);
+                col += w;
+                i += 1;
+            }
+            result
         };
         frame.render_widget(
             Paragraph::new(display).style(Style::default().fg(self.theme.border_inactive)),
@@ -1637,7 +1665,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.queue_list);
     }
@@ -1798,7 +1826,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol("> ");
 
         frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
     }

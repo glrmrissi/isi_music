@@ -298,9 +298,9 @@ impl App {
                             track_data = s
                                 .query_row([path_str], |row| {
                                     Ok(crate::spotify::TrackSummary {
-                                        name: row.get(0)?,
-                                        artist: row.get(1)?,
-                                        album: row.get(2)?,
+                                        name: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(0)?),
+                                        artist: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(1)?),
+                                        album: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(2)?),
                                         duration_ms: row.get(3)?,
                                         uri: uri.clone(),
                                         cover_path: row.get(4).ok(),
@@ -348,9 +348,9 @@ impl App {
                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                                 rusqlite::params![
                                     path_str,
-                                    name,
-                                    artist,
-                                    album,
+                                    crate::app::metadata::sanitize_control_chars(&name),
+                                    crate::app::metadata::sanitize_control_chars(&artist),
+                                    crate::app::metadata::sanitize_control_chars(&album),
                                     duration_ms as i64,
                                     cover_path
                                 ],

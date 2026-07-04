@@ -1,6 +1,19 @@
 use id3::TagLike;
 use std::path::Path;
 
+/// Strip control characters from a string, keeping only printable chars, tab, and newline.
+/// Removes C0 controls (0x00-0x08, 0x0B-0x1F), DEL (0x7F), and C1 controls (0x80-0x9F).
+pub fn sanitize_control_chars(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            let code = *c as u32;
+            code == 0x09        // TAB
+                || code == 0x0A // LF (newline)
+                || (code >= 0x20 && code != 0x7F && !(0x80..0xA0).contains(&code))
+        })
+        .collect()
+}
+
 pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<Vec<u8>>) {
     use symphonia::core::{
         formats::FormatOptions,
@@ -146,7 +159,13 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
         }
     }
 
-    (title, artist, album, duration_ms, cover_art)
+    (
+        sanitize_control_chars(&title),
+        sanitize_control_chars(&artist),
+        sanitize_control_chars(&album),
+        duration_ms,
+        cover_art,
+    )
 }
 
 pub fn unix_now() -> u64 {
