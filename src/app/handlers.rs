@@ -1229,13 +1229,22 @@ impl App {
                             self.state.local_tree.toggle_folder(actual_vi);
                             self.state.apply_quick_filter();
                             let new_len = self.state.sorted_track_indices.len();
-                            let cur = self.state.local_tree_list.selected().unwrap_or(0);
+                            let new_pos = self.state
+                                .sorted_track_indices
+                                .iter()
+                                .position(|&idx| idx == actual_vi)
+                                .unwrap_or(0);
                             self.state
                                 .local_tree_list
-                                .select(Some(cur.min(new_len.saturating_sub(1))));
+                                .select(Some(new_pos.min(new_len.saturating_sub(1))));
                         }
                         crate::ui::LocalNode::Track { track, .. } => {
                             self.activate_local_player();
+                            if !self.ensure_local_player().await {
+                                self.state.status_msg =
+                                    Some("Failed to initialize local player".to_string());
+                                return;
+                            }
                             let all_tracks = self.state.local_tree.all_tracks_flat();
                             let start_idx = all_tracks
                                 .iter()
@@ -1251,6 +1260,7 @@ impl App {
                                 self.state.playback.progress_ms = 0;
                                 self.state.playback.is_playing = true;
                                 self.state.playback.is_local = true;
+                                self.state.playback.cover_path = track.cover_path.clone();
                                 self.current_track_uri = track.uri.clone();
                                 self.on_track_started();
 
