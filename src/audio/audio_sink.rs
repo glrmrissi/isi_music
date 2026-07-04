@@ -156,14 +156,16 @@ pub struct AnalyzerHandle {
     bands: Arc<Mutex<Vec<f32>>>,
     producer: Arc<Mutex<AnalyzerProducer>>,
     enabled: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
 }
 
 impl AnalyzerHandle {
-    pub fn spawn_with_enabled(bands: Arc<Mutex<Vec<f32>>>, enabled: Arc<AtomicBool>) -> Self {
+    pub fn spawn_with_enabled(
+        bands: Arc<Mutex<Vec<f32>>>,
+        enabled: Arc<AtomicBool>,
+        shutdown: Arc<AtomicBool>,
+    ) -> Self {
         let rb = HeapRb::<f32>::new(RING_CAP);
         let (prod, mut cons) = rb.split();
-        let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
         let bands_clone = Arc::clone(&bands);
         let enabled_clone = Arc::clone(&enabled);
@@ -194,7 +196,6 @@ impl AnalyzerHandle {
             bands,
             producer: Arc::new(Mutex::new(prod)),
             enabled,
-            shutdown,
         }
     }
 
@@ -212,16 +213,11 @@ impl AnalyzerHandle {
     }
 }
 
-impl Drop for AnalyzerHandle {
-    fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
-    }
-}
-
 pub struct SharedAnalyzerState {
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     handle: Mutex<Option<AnalyzerHandle>>,
     enabled: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl SharedAnalyzerState {
@@ -230,6 +226,7 @@ impl SharedAnalyzerState {
             band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
             handle: Mutex::new(None),
             enabled: Arc::new(AtomicBool::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -237,11 +234,14 @@ impl SharedAnalyzerState {
         self.enabled.store(on, Ordering::Relaxed);
         let mut handle = self.handle.lock().unwrap();
         if on && handle.is_none() {
+            self.shutdown.store(false, Ordering::Relaxed);
             *handle = Some(AnalyzerHandle::spawn_with_enabled(
                 Arc::clone(&self.band_energies),
                 Arc::clone(&self.enabled),
+                Arc::clone(&self.shutdown),
             ));
         } else if !on {
+            self.shutdown.store(true, Ordering::Relaxed);
             *handle = None;
         }
     }
@@ -267,6 +267,7 @@ pub struct AnalyzerSink {
     inner: Box<dyn Sink>,
     pub handle: AnalyzerHandle,
     sink_factory: Option<Box<dyn Fn() -> Box<dyn Sink> + Send>>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl AnalyzerSink {
@@ -276,10 +277,16 @@ impl AnalyzerSink {
         enabled: Arc<AtomicBool>,
         sink_factory: Box<dyn Fn() -> Box<dyn Sink> + Send>,
     ) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
         Self {
             inner,
-            handle: AnalyzerHandle::spawn_with_enabled(bands, enabled),
+            handle: AnalyzerHandle::spawn_with_enabled(
+                bands,
+                enabled,
+                Arc::clone(&shutdown),
+            ),
             sink_factory: Some(sink_factory),
+            shutdown,
         }
     }
 
@@ -288,6 +295,12 @@ impl AnalyzerSink {
             let mono = ((ch[0] + ch[1]) * 0.5) as f32;
             self.handle.push_mono(mono);
         }
+    }
+}
+
+impl Drop for AnalyzerSink {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 }
 
