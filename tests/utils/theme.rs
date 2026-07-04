@@ -504,3 +504,46 @@ widget = "help"
         }
     }
 }
+
+#[test]
+fn default_highlight_symbols() {
+    let t = Theme::default();
+    assert_eq!(t.highlight_symbol, "> ");
+    assert_eq!(t.options_panel_symbol, "▶ ");
+}
+
+#[test]
+fn highlight_symbols_roundtrip() {
+    let toml_str = r#"
+border_active = "red"
+border_inactive = "gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+background = "rgb(20,20,20)"
+text_secondary = "gray"
+status_bar = "rgb(30,30,30)"
+highlight_symbol = "→ "
+options_panel_symbol = "◆ "
+"#;
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+    assert_eq!(theme.highlight_symbol, "→ ");
+    assert_eq!(theme.options_panel_symbol, "◆ ");
+}
+
+#[test]
+fn highlight_symbols_omit_uses_defaults() {
+    let toml_str = r#"
+border_active = "red"
+border_inactive = "gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+background = "rgb(20,20,20)"
+text_secondary = "gray"
+status_bar = "rgb(30,30,30)"
+"#;
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+    assert_eq!(theme.highlight_symbol, "> ");
+    assert_eq!(theme.options_panel_symbol, "▶ ");
+}

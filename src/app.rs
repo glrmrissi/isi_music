@@ -197,7 +197,7 @@ impl App {
         };
 
         let cache_manager = crate::utils::cache::CacheManager::new();
-        let options_panel = crate::ui::OptionsPanel::new(cache_manager);
+        let options_panel = crate::ui::OptionsPanel::new(cache_manager, theme.clone());
 
         Ok(Self {
             seek_tx,
@@ -324,7 +324,7 @@ impl App {
             progress_at_play_start: 0,
             initial_sync_done: false,
             trim_counter: 0,
-            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
+            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager, Theme::default())),
         }
     }
 

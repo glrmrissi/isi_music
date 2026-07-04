@@ -33,6 +33,7 @@ pub struct OptionsPanel {
     pub loading: bool,
     pub help_text: Vec<String>,
     pub help_scroll: usize,
+    pub theme: super::Theme,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,7 +64,7 @@ fn section_block(title: &str) -> Block<'static> {
 }
 
 impl OptionsPanel {
-    pub fn new(cache_manager: CacheManager) -> Self {
+    pub fn new(cache_manager: CacheManager, theme: super::Theme) -> Self {
         Self {
             visible: false,
             focused_section: OptionsSection::Features,
@@ -74,6 +75,7 @@ impl OptionsPanel {
             loading: false,
             help_text: Vec::new(),
             help_scroll: 0,
+            theme,
         }
     }
 
@@ -312,7 +314,7 @@ impl OptionsPanel {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("\u{25b6} ");
+            .highlight_symbol(&self.theme.options_panel_symbol);
 
         frame.render_stateful_widget(list, area, &mut list_state);
     }
@@ -342,7 +344,7 @@ impl OptionsPanel {
             .enumerate()
             .map(|(i, &(label, _, enabled))| {
                 let is_selected = i == self.selected_item;
-                let prefix = if is_selected { "\u{25b6} " } else { "  " };
+                let prefix = if is_selected { self.theme.options_panel_symbol.as_str() } else { "  " };
                 let status_str = if enabled { "On" } else { "Off" };
                 let status_color = if enabled { Color::Green } else { Color::Red };
                 let line_style = if is_selected {
@@ -431,7 +433,7 @@ impl OptionsPanel {
 
         for (i, line) in stats_items.iter().enumerate() {
             let is_sel = i == self.selected_item && i < 3;
-            let prefix = if is_sel { "\u{25b6} " } else { "  " };
+            let prefix = if is_sel { self.theme.options_panel_symbol.as_str() } else { "  " };
             let style = if is_sel {
                 Style::default()
                     .fg(Color::Yellow)
@@ -457,7 +459,7 @@ impl OptionsPanel {
         for (i, (label, key)) in actions.iter().enumerate() {
             let idx = i + 4;
             let is_sel = idx == self.selected_item && idx >= 4;
-            let prefix = if is_sel { "\u{25b6} " } else { "  " };
+            let prefix = if is_sel { self.theme.options_panel_symbol.as_str() } else { "  " };
             let style = if is_sel {
                 Style::default()
                     .fg(Color::Yellow)

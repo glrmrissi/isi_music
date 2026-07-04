@@ -75,7 +75,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.local_tree_list);
             return;
         }
@@ -183,7 +183,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.local_tree_list);
     }
@@ -510,7 +510,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.library_list);
     }
@@ -569,7 +569,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.playlist_list);
     }
@@ -614,7 +614,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.library_list);
             return;
         }
@@ -846,7 +846,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.track_list);
             return;
         }
@@ -928,7 +928,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.track_list);
     }
@@ -960,7 +960,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.album_list);
             return;
         }
@@ -1020,7 +1020,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.album_list);
     }
@@ -1048,7 +1048,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.artist_list);
             return;
         }
@@ -1100,7 +1100,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.artist_list);
     }
@@ -1128,7 +1128,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.show_list);
             return;
         }
@@ -1188,7 +1188,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.show_list);
     }
@@ -1296,7 +1296,7 @@ impl Ui {
                             .fg(self.theme.border_active)
                             .add_modifier(Modifier::BOLD),
                     )
-                    .highlight_symbol("> ");
+                    .highlight_symbol(&self.theme.highlight_symbol);
                 let list_area = Rect {
                     x: area.x,
                     y: area.y + 1,
@@ -1380,7 +1380,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
             let artist_items: Vec<ListItem> = sr
@@ -1415,7 +1415,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
             let album_items: Vec<ListItem> = sr
@@ -1446,7 +1446,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
             let pl_items: Vec<ListItem> = sr
@@ -1477,7 +1477,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("> ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
         }
     }
@@ -1665,7 +1665,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.queue_list);
     }
@@ -1826,7 +1826,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
     }
