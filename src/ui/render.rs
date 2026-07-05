@@ -626,31 +626,44 @@ impl Ui {
         frame.render_widget(&block, area);
         let inner = block.inner(area);
 
-        let lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                " isi-music",
-                Style::default()
-                    .fg(self.theme.border_active)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Select a playlist from the Library or Playlists panel,",
-                Style::default().fg(self.theme.border_inactive),
-            )),
-            Line::from(Span::styled(
-                "or press / to search Spotify.",
-                Style::default().fg(self.theme.border_inactive),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "[TAB] navigate panels   [ENTER] select   [/] search   [Ctrl+F] quick search",
-                Style::default()
-                    .fg(self.theme.border_inactive)
-                    .add_modifier(Modifier::DIM),
-            )),
-        ];
+        let lines = if state.loading {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    " Loading...",
+                    Style::default()
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                )),
+                Line::from(""),
+            ]
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    " isi-music",
+                    Style::default()
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Select a playlist from the Library or Playlists panel,",
+                    Style::default().fg(self.theme.border_inactive),
+                )),
+                Line::from(Span::styled(
+                    "or press / to search Spotify.",
+                    Style::default().fg(self.theme.border_inactive),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "[TAB] navigate panels   [ENTER] select   [/] search   [Ctrl+F] quick search",
+                    Style::default()
+                        .fg(self.theme.border_inactive)
+                        .add_modifier(Modifier::DIM),
+                )),
+            ]
+        };
 
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
     }

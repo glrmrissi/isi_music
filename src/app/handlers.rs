@@ -1,10 +1,12 @@
 // TODO: modularize this file (~1580 lines) into smaller modules
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
 use crate::App;
+use crate::app::FetchResult;
 use crate::player::RepeatMode;
 use crate::ui::{ActiveContent, CompactItem, Focus, SearchPanel, SearchResults};
 use crate::utils::debug_overlay::LogLevel;
@@ -1080,89 +1082,47 @@ impl App {
                 ActiveContent::Albums => {
                     if let Some(idx) = self.state.selected_album_index() {
                         if let Some(album) = self.state.albums.get(idx) {
+                            if self.pending_fetch.is_some() {
+                                return;
+                            }
                             let id = album.id.clone();
                             let name = album.name.clone();
                             self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading {name}…"));
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            match self.spotify.fetch_album_tracks(&id, 0).await {
-                                Ok((tracks, total)) => {
-                                    self.state.tracks = tracks;
-                                    self.state.tracks_total = total;
-                                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                                    self.state.active_playlist_uri = Some(format!("album:{id}"));
-                                    self.state.active_playlist_id = Some(format!("album:{id}"));
-                                    self.state
-                                        .track_list
-                                        .select(if self.state.tracks.is_empty() {
-                                            None
-                                        } else {
-                                            Some(0)
-                                        });
-                                    self.state.active_content = ActiveContent::Tracks;
-                                    self.state.rebuild_sort_indices();
-                                    self.state.status_msg = None;
-                                }
-                                Err(e) => {
-                                    let err_str = e.to_string();
-                                    if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                        || err_str.contains("401")
-                                    {
-                                        warn!("Got 401 - triggering reconnect");
-                                        needs_reconnect = true;
-                                        self.state.status_msg = Some(
-                                            "Authorization expired, reconnecting...".to_string(),
-                                        );
-                                    } else {
-                                        self.state.status_msg = Some(format!("Error: {e}"));
-                                    }
-                                }
-                            }
+                            self.state.loading = true;
+                            self.state.active_playlist_uri = Some(format!("album:{id}"));
+                            self.state.active_playlist_id = Some(format!("album:{id}"));
+                            let spotify = Arc::clone(&self.spotify);
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            self.pending_fetch = Some(rx);
+                            tokio::spawn(async move {
+                                let result = spotify.fetch_album_tracks(&id, 0).await.map_err(|e| e.to_string());
+                                let _ = tx.send(FetchResult::AlbumTracks(result));
+                            });
                         }
                     }
                 }
                 ActiveContent::Artists => {
                     if let Some(idx) = self.state.selected_artist_index() {
                         if let Some(artist) = self.state.artists.get(idx) {
+                            if self.pending_fetch.is_some() {
+                                return;
+                            }
                             let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                             let name = artist.name.clone();
                             self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            match self.spotify.fetch_artist_tracks(&name, 0).await {
-                                Ok((tracks, total)) => {
-                                    self.state.tracks = tracks;
-                                    self.state.tracks_total = total;
-                                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                                    self.state.active_artist_name = Some(name.clone());
-                                    self.state.active_playlist_uri = Some(format!("artist:{id}"));
-                                    self.state.active_playlist_id = Some(format!("artist:{id}"));
-                                    self.state
-                                        .track_list
-                                        .select(if self.state.tracks.is_empty() {
-                                            None
-                                        } else {
-                                            Some(0)
-                                        });
-                                    self.state.active_content = ActiveContent::Tracks;
-                                    self.state.rebuild_sort_indices();
-                                    self.state.status_msg = None;
-                                }
-                                Err(e) => {
-                                    let err_str = e.to_string();
-                                    if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                        || err_str.contains("401")
-                                    {
-                                        warn!("Got 401 - triggering reconnect");
-                                        needs_reconnect = true;
-                                        self.state.status_msg = Some(
-                                            "Authorization expired, reconnecting...".to_string(),
-                                        );
-                                    } else {
-                                        self.state.status_msg = Some(format!("Error: {e}"));
-                                    }
-                                }
-                            }
+                            self.state.loading = true;
+                            self.state.active_artist_name = Some(name.clone());
+                            self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                            self.state.active_playlist_id = Some(format!("artist:{id}"));
+                            let spotify = Arc::clone(&self.spotify);
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            self.pending_fetch = Some(rx);
+                            tokio::spawn(async move {
+                                let result = spotify.fetch_artist_tracks(&name, 0).await.map_err(|e| e.to_string());
+                                let _ = tx.send(FetchResult::ArtistTracks(result));
+                            });
                         }
                     }
                 }

@@ -160,6 +160,7 @@ pub struct UiState {
     pub add_to_playlist_list: ListState,
     pub command_mode: bool,
     pub command_buffer: String,
+    pub loading: bool,
 }
 
 impl UiState {
@@ -223,6 +224,7 @@ impl UiState {
             add_to_playlist_list: ListState::default(),
             command_mode: false,
             command_buffer: String::new(),
+            loading: false,
         }
     }
 

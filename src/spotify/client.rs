@@ -537,8 +537,8 @@ pub struct FullSearchResults {
 pub struct SpotifyClient {
     token_manager: TokenManager,
     pub http: reqwest::Client,
-    shuffle_state: bool,
-    repeat_state: super::RepeatState,
+    shuffle_state: std::sync::atomic::AtomicBool,
+    repeat_state: std::sync::RwLock<super::RepeatState>,
     pub authenticated: bool,
     search_cache: SearchCache,
     pub library_cache: LibraryCache,
@@ -550,8 +550,8 @@ impl SpotifyClient {
         Self {
             token_manager: dummy_token,
             http: reqwest::Client::new(),
-            shuffle_state: false,
-            repeat_state: super::RepeatState::Off,
+            shuffle_state: std::sync::atomic::AtomicBool::new(false),
+            repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
             authenticated: false,
             search_cache: SearchCache::new(600),
             library_cache: LibraryCache::new().await,
@@ -581,8 +581,8 @@ impl SpotifyClient {
                     return Ok(Self {
                         token_manager,
                         http: reqwest::Client::new(),
-                        shuffle_state: false,
-                        repeat_state: super::RepeatState::Off,
+            shuffle_state: std::sync::atomic::AtomicBool::new(false),
+            repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
                         authenticated: true,
                         search_cache: SearchCache::new(600),
                         library_cache: LibraryCache::new().await,
@@ -603,8 +603,8 @@ impl SpotifyClient {
         Ok(Self {
             token_manager,
             http: reqwest::Client::new(),
-            shuffle_state: false,
-            repeat_state: super::RepeatState::Off,
+            shuffle_state: std::sync::atomic::AtomicBool::new(false),
+            repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
             authenticated: true,
             search_cache: SearchCache::new(600),
             library_cache: LibraryCache::new().await,
@@ -966,7 +966,7 @@ impl SpotifyClient {
         Ok(())
     }
 
-    pub async fn fetch_playback(&mut self) -> Result<PlaybackState> {
+    pub async fn fetch_playback(&self) -> Result<PlaybackState> {
         if !self.authenticated {
             return Ok(PlaybackState::default());
         }
@@ -1009,13 +1009,15 @@ impl SpotifyClient {
             return Ok(PlaybackState::default());
         }
 
-        self.shuffle_state = json["shuffle_state"].as_bool().unwrap_or(false);
+        self.shuffle_state.store(json["shuffle_state"].as_bool().unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
         let repeat = json["repeat_state"].as_str().unwrap_or("off");
-        self.repeat_state = match repeat {
-            "context" => super::RepeatState::Context,
-            "track" => super::RepeatState::Track,
-            _ => super::RepeatState::Off,
-        };
+        if let Ok(mut rp) = self.repeat_state.write() {
+            *rp = match repeat {
+                "context" => super::RepeatState::Context,
+                "track" => super::RepeatState::Track,
+                _ => super::RepeatState::Off,
+            };
+        }
 
         let is_playing = json["is_playing"].as_bool().unwrap_or(false);
         let progress_ms = json["progress_ms"].as_u64().unwrap_or(0);
@@ -1077,8 +1079,8 @@ impl SpotifyClient {
             artist,
             album,
             is_playing,
-            shuffle: self.shuffle_state,
-            repeat: self.repeat_state,
+            shuffle: self.shuffle_state.load(std::sync::atomic::Ordering::Relaxed),
+            repeat: self.repeat_state.read().map(|r| *r).unwrap_or(super::RepeatState::Off),
             progress_ms,
             duration_ms,
             volume: 100,

@@ -1,8 +1,9 @@
-use std::time::Duration;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::App;
+use crate::app::FetchResult;
 use crate::ui::{ActiveContent, Focus, LocalNode};
 
 impl App {
@@ -12,109 +13,45 @@ impl App {
                 Some("Spotify not connected — only Local Files available".to_string());
             return false;
         }
+        if self.pending_fetch.is_some() {
+            return false;
+        }
         match idx {
             0 => {
                 self.state.push_nav();
                 self.state.status_msg = Some("Loading Liked Songs…".to_string());
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                match self.spotify.fetch_liked_tracks(0).await {
-                    Ok((tracks, total)) => {
-                        self.state.tracks = tracks;
-                        self.state.tracks_total = total;
-                        self.state.tracks_offset = self.state.tracks.len() as u32;
-                        self.state.active_playlist_uri = Some("liked_songs".to_string());
-                        self.state.active_playlist_id = Some("liked_songs".to_string());
-                        self.state
-                            .track_list
-                            .select(if self.state.tracks.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            });
-                        self.state.active_content = ActiveContent::Tracks;
-                        self.state.search_results = None;
-                        self.state.rebuild_sort_indices();
-                        self.state.status_msg = None;
-                        self.state.focus = Focus::Tracks;
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                            warn!("Got 401 - triggering reconnect");
-                            self.state.status_msg =
-                                Some("Authorization expired, reconnecting...".to_string());
-                            return true;
-                        } else {
-                            self.state.status_msg = Some(format!("Error: {e}"));
-                        }
-                    }
-                }
+                self.state.loading = true;
+                let spotify = Arc::clone(&self.spotify);
+                let (tx, rx) = oneshot::channel();
+                self.pending_fetch = Some(rx);
+                tokio::spawn(async move {
+                    let result = spotify.fetch_liked_tracks(0).await.map_err(|e| e.to_string());
+                    let _ = tx.send(FetchResult::LikedTracks(result));
+                });
             }
             1 => {
                 self.state.push_nav();
                 self.state.status_msg = Some("Loading saved albums…".to_string());
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                match self.spotify.fetch_saved_albums(0).await {
-                    Ok((albums, total)) => {
-                        self.state.albums = albums;
-                        self.state.albums_total = total;
-                        self.state.albums_offset = self.state.albums.len() as u32;
-                        self.state
-                            .album_list
-                            .select(if self.state.albums.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            });
-                        self.state.active_content = ActiveContent::Albums;
-                        self.state.search_results = None;
-                        self.state.status_msg = None;
-                        self.state.focus = Focus::Tracks;
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                            warn!("Got 401 - triggering reconnect");
-                            self.state.status_msg =
-                                Some("Authorization expired, reconnecting...".to_string());
-                            return true;
-                        } else {
-                            self.state.status_msg = Some(format!("Error: {e}"));
-                        }
-                    }
-                }
+                self.state.loading = true;
+                let spotify = Arc::clone(&self.spotify);
+                let (tx, rx) = oneshot::channel();
+                self.pending_fetch = Some(rx);
+                tokio::spawn(async move {
+                    let result = spotify.fetch_saved_albums(0).await.map_err(|e| e.to_string());
+                    let _ = tx.send(FetchResult::Albums(result));
+                });
             }
             2 => {
                 self.state.push_nav();
                 self.state.status_msg = Some("Loading followed artists…".to_string());
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                match self.spotify.fetch_followed_artists().await {
-                    Ok(artists) => {
-                        self.state.artists = artists;
-                        self.state
-                            .artist_list
-                            .select(if self.state.artists.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            });
-                        self.state.active_content = ActiveContent::Artists;
-                        self.state.search_results = None;
-                        self.state.status_msg = None;
-                        self.state.focus = Focus::Tracks;
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                            warn!("Got 401 - triggering reconnect");
-                            self.state.status_msg =
-                                Some("Authorization expired, reconnecting...".to_string());
-                            return true;
-                        } else {
-                            self.state.status_msg = Some(format!("Error: {e}"));
-                        }
-                    }
-                }
+                self.state.loading = true;
+                let spotify = Arc::clone(&self.spotify);
+                let (tx, rx) = oneshot::channel();
+                self.pending_fetch = Some(rx);
+                tokio::spawn(async move {
+                    let result = spotify.fetch_followed_artists().await.map_err(|e| e.to_string());
+                    let _ = tx.send(FetchResult::Artists(result));
+                });
             }
             3 => {
                 self.state.status_msg = Some("Podcasts — coming soon".to_string());
@@ -132,41 +69,22 @@ impl App {
             Some(p) => p.clone(),
             None => return false,
         };
+        if self.pending_fetch.is_some() {
+            return false;
+        }
         self.state.push_nav();
         self.state.status_msg = Some(format!("Loading {}…", playlist.name));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        match self.spotify.fetch_playlist_tracks(&playlist.id, 0).await {
-            Ok((tracks, total)) => {
-                self.state.tracks = tracks;
-                self.state.tracks_total = total;
-                self.state.tracks_offset = self.state.tracks.len() as u32;
-                self.state.active_playlist_uri = Some(playlist.uri.clone());
-                self.state.active_playlist_id = Some(playlist.id.clone());
-                self.state
-                    .track_list
-                    .select(if self.state.tracks.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    });
-                self.state.active_content = ActiveContent::Tracks;
-                self.state.search_results = None;
-                self.state.rebuild_sort_indices();
-                self.state.status_msg = None;
-                self.state.focus = Focus::Tracks;
-            }
-            Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
-                    warn!("Got 401 - triggering reconnect");
-                    self.state.status_msg =
-                        Some("Authorization expired, reconnecting...".to_string());
-                    return true;
-                } else {
-                    self.state.status_msg = Some(format!("Error: {e}"));
-                }
-            }
-        }
+        self.state.loading = true;
+        self.state.active_playlist_uri = Some(playlist.uri.clone());
+        self.state.active_playlist_id = Some(playlist.id.clone());
+        let spotify = Arc::clone(&self.spotify);
+        let playlist_id = playlist.id.clone();
+        let (tx, rx) = oneshot::channel();
+        self.pending_fetch = Some(rx);
+        tokio::spawn(async move {
+            let result = spotify.fetch_playlist_tracks(&playlist_id, 0).await.map_err(|e| e.to_string());
+            let _ = tx.send(FetchResult::PlaylistTracks(result));
+        });
         false
     }
 
