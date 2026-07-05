@@ -25,7 +25,7 @@ impl App {
                 let (tx, rx) = oneshot::channel();
                 self.pending_fetch = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify.fetch_liked_tracks(0).await.map_err(|e| e.to_string());
+                    let result = spotify.sync_liked_tracks().await.map_err(|e| e.to_string());
                     let _ = tx.send(FetchResult::LikedTracks(result));
                 });
             }

@@ -381,6 +381,11 @@ impl App {
                     self.state.rebuild_sort_indices();
                     self.state.status_msg = None;
                     self.state.focus = crate::ui::Focus::Tracks;
+                    self.state.tracks_cursor = self
+                        .spotify
+                        .library_cache
+                        .get_liked_tracks_page(None, 50)
+                        .and_then(|(_, _, next)| next);
                 }
                 FetchResult::LikedTracks(Err(e)) => {
                     if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {

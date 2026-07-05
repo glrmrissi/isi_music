@@ -143,8 +143,22 @@ impl App {
             let offset = self.state.tracks_offset;
             let id = self.state.active_playlist_id.clone();
 
+            if id.as_deref() == Some("liked_songs") && self.state.tracks_cursor.is_none() {
+                self.state.tracks_loading = false;
+                return;
+            }
+
             let result = match id.as_deref() {
-                Some("liked_songs") => self.spotify.fetch_liked_tracks(offset).await,
+                Some("liked_songs") => {
+                    let after = self.state.tracks_cursor.clone();
+                    self.spotify
+                        .fetch_liked_tracks_page(after.as_deref(), offset)
+                        .await
+                        .map(|(t, total, next)| {
+                            self.state.tracks_cursor = next;
+                            (t, total)
+                        })
+                }
                 Some(id) if id.starts_with("album:") => {
                     let album_id = &id["album:".len()..];
                     self.spotify.fetch_album_tracks(album_id, offset).await
@@ -159,7 +173,9 @@ impl App {
 
             match result {
                 Ok((mut new_tracks, total)) => {
-                    self.state.tracks_total = total;
+                    if id.as_deref() != Some("liked_songs") || total > self.state.tracks_total {
+                        self.state.tracks_total = total;
+                    }
                     self.state.tracks_offset += new_tracks.len() as u32;
                     self.state.tracks.append(&mut new_tracks);
 

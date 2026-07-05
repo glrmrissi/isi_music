@@ -3,6 +3,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use chrono::Utc;
 use tracing::warn;
 
 use crate::App;
@@ -309,6 +310,7 @@ impl App {
                     },
                     PanelAction::ClearAllCache => {
                         let _ = panel.cache_manager.clear_all().await;
+                        self.spotify.library_cache.clear_liked_tracks_cache();
                         panel.cache_stats = Some(panel.cache_manager.get_stats().await);
                         self.state.status_msg = Some("All caches cleared".to_string());
                     }
@@ -524,8 +526,28 @@ impl App {
                     {
                         Ok(_) => {
                             self.state.status_msg = Some("Liked".to_string());
-                            self.spotify.library_cache.delete_key_pattern("liked:%");
-                            tracing::info!("LikeTrack: saved successfully — liked cache cleared");
+                            let new_track = crate::spotify::TrackSummary {
+                                name: self.state.playback.title.clone(),
+                                artist: self.state.playback.artist.clone(),
+                                album: self.state.playback.album.clone(),
+                                duration_ms: self.state.playback.duration_ms,
+                                uri: self.current_track_uri.clone(),
+                                cover_path: self.state.playback.cover_path.clone(),
+                            };
+                            if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                                self.state.tracks.insert(0, new_track.clone());
+                                self.state.tracks_offset += 1;
+                                self.state.tracks_total += 1;
+                                self.state.rebuild_sort_indices();
+                            }
+                            let library_cache = self.spotify.library_cache.clone();
+                            let added_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                            tokio::task::spawn_blocking(move || {
+                                library_cache.insert_liked_track(&added_at, &new_track);
+                            })
+                            .await
+                            .ok();
+                            tracing::info!("LikeTrack: saved successfully");
                         }
                         Err(e) => {
                             self.state.status_msg = Some(format!("Like failed: {e}"));
@@ -963,11 +985,23 @@ impl App {
                                     Ok(_) => {
                                         self.state.status_msg =
                                             Some("Unliked".to_string());
-                                        self.spotify
-                                            .library_cache
-                                            .delete_key_pattern("liked:%");
+                                        let uri = self.current_track_uri.clone();
+                                        if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                                            if let Some(pos) = self.state.tracks.iter().position(|t| t.uri == uri) {
+                                                self.state.tracks.remove(pos);
+                                                self.state.tracks_offset = self.state.tracks_offset.saturating_sub(1);
+                                                self.state.tracks_total = self.state.tracks_total.saturating_sub(1);
+                                                self.state.rebuild_sort_indices();
+                                            }
+                                        }
+                                        let library_cache = self.spotify.library_cache.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            library_cache.delete_liked_track(&uri);
+                                        })
+                                        .await
+                                        .ok();
                                         tracing::info!(
-                                            "UnlikeTrack: removed from library — liked cache cleared"
+                                            "UnlikeTrack: removed from library"
                                         );
                                     }
                                     Err(e) => {

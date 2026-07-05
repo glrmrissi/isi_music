@@ -313,6 +313,16 @@ impl LibraryCache {
                     data     TEXT NOT NULL,
                     total    INTEGER NOT NULL,
                     saved_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS liked_tracks_cache (
+                    added_at    TEXT NOT NULL,
+                    uri         TEXT NOT NULL,
+                    name        TEXT NOT NULL DEFAULT '',
+                    artist      TEXT NOT NULL DEFAULT '',
+                    album       TEXT NOT NULL DEFAULT '',
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    cover_path  TEXT,
+                    PRIMARY KEY (added_at, uri)
                 );",
             )
         })
@@ -454,6 +464,185 @@ impl LibraryCache {
             "DELETE FROM library_cache WHERE key LIKE ?1",
             params![pattern],
         );
+    }
+
+    pub fn insert_liked_track(&self, added_at: &str, track: &TrackSummary) {
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                added_at,
+                track.uri,
+                track.name,
+                track.artist,
+                track.album,
+                track.duration_ms as i64,
+                track.cover_path,
+            ],
+        );
+    }
+
+    pub fn delete_liked_track(&self, track_uri: &str) {
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute(
+            "DELETE FROM liked_tracks_cache WHERE uri = ?1",
+            params![track_uri],
+        );
+    }
+
+    pub fn get_liked_tracks_page(
+        &self,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Option<(Vec<TrackSummary>, u32, Option<String>)> {
+        let Ok(conn) = self.open() else { return None };
+        let total: u32 = conn
+            .query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
+            .unwrap_or(0);
+        if total == 0 {
+            return None;
+        }
+        if let Some(cursor) = after {
+            let (added_at, uri) = cursor.split_once('\t').unwrap_or((cursor, ""));
+            let mut s = conn
+                .prepare(
+                    "SELECT added_at, uri, name, artist, album, duration_ms, cover_path
+                     FROM liked_tracks_cache
+                     WHERE (added_at, uri) < (?1, ?2)
+                     ORDER BY added_at DESC, uri DESC
+                     LIMIT ?3",
+                )
+                .ok()?;
+            let rows = s
+                .query_map(params![added_at, uri, limit], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        TrackSummary {
+                            name: r.get(2)?,
+                            artist: r.get(3)?,
+                            album: r.get(4)?,
+                            duration_ms: r.get::<_, i64>(5)? as u64,
+                            uri: r.get(1)?,
+                            cover_path: r.get(6)?,
+                        },
+                    ))
+                })
+                .ok()?;
+            let mut tracks: Vec<(String, String, TrackSummary)> = Vec::new();
+            for row in rows.flatten() {
+                tracks.push(row);
+            }
+            if tracks.is_empty() {
+                return None;
+            }
+            let next_cursor = {
+                let last = tracks.last().unwrap();
+                Some(format!("{}\t{}", last.0, last.1))
+            };
+            let summaries: Vec<TrackSummary> =
+                tracks.into_iter().map(|(_, _, t)| t).collect();
+            Some((summaries, total, next_cursor))
+        } else {
+            let mut s = conn
+                .prepare(
+                    "SELECT added_at, uri, name, artist, album, duration_ms, cover_path
+                     FROM liked_tracks_cache
+                     ORDER BY added_at DESC, uri DESC
+                     LIMIT ?1",
+                )
+                .ok()?;
+            let rows = s
+                .query_map(params![limit], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        TrackSummary {
+                            name: r.get(2)?,
+                            artist: r.get(3)?,
+                            album: r.get(4)?,
+                            duration_ms: r.get::<_, i64>(5)? as u64,
+                            uri: r.get(1)?,
+                            cover_path: r.get(6)?,
+                        },
+                    ))
+                })
+                .ok()?;
+            let mut tracks: Vec<(String, String, TrackSummary)> = Vec::new();
+            for row in rows.flatten() {
+                tracks.push(row);
+            }
+            if tracks.is_empty() {
+                return None;
+            }
+            let next_cursor = {
+                let last = tracks.last().unwrap();
+                Some(format!("{}\t{}", last.0, last.1))
+            };
+            let summaries: Vec<TrackSummary> =
+                tracks.into_iter().map(|(_, _, t)| t).collect();
+            Some((summaries, total, next_cursor))
+        }
+    }
+
+    pub fn reset_liked_tracks_cache(
+        &self,
+        tracks: &[TrackSummary],
+        added_ats: &[String],
+    ) {
+        let Ok(conn) = self.open() else { return };
+        let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
+        let mut stmt = match conn.prepare(
+            "INSERT INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        ) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (track, added_at) in tracks.iter().zip(added_ats.iter()) {
+            let _ = stmt.execute(params![
+                added_at,
+                track.uri,
+                track.name,
+                track.artist,
+                track.album,
+                track.duration_ms as i64,
+                track.cover_path,
+            ]);
+        }
+    }
+
+    pub fn append_liked_tracks_batch(
+        &self,
+        tracks: &[TrackSummary],
+        added_ats: &[String],
+    ) {
+        let Ok(conn) = self.open() else { return };
+        let mut stmt = match conn.prepare(
+            "INSERT OR IGNORE INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        ) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (track, added_at) in tracks.iter().zip(added_ats.iter()) {
+            let _ = stmt.execute(params![
+                added_at,
+                track.uri,
+                track.name,
+                track.artist,
+                track.album,
+                track.duration_ms as i64,
+                track.cover_path,
+            ]);
+        }
+    }
+
+    pub fn clear_liked_tracks_cache(&self) {
+        if let Ok(conn) = self.open() {
+            let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
+        }
     }
 
     pub fn save_artists(&self, artists: &[ArtistSummary]) {
@@ -654,15 +843,21 @@ impl SpotifyClient {
         Ok((access_token, expires_in, new_rt))
     }
 
-    pub async fn fetch_liked_tracks(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+    pub async fn fetch_liked_tracks(
+        &self,
+        offset: u32,
+        force_refresh: bool,
+    ) -> Result<(Vec<TrackSummary>, u32)> {
         if !self.authenticated {
             return Ok((Vec::new(), 0));
         }
 
         let key = format!("liked:{offset}");
-        if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: liked songs offset={offset}");
-            return Ok(cached);
+        if !force_refresh {
+            if let Some(cached) = self.library_cache.get_tracks(&key) {
+                info!("Library cache hit: liked songs offset={offset}");
+                return Ok(cached);
+            }
         }
 
         let token = self
@@ -697,9 +892,11 @@ impl SpotifyClient {
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
         let mut tracks = Vec::new();
+        let mut added_ats = Vec::new();
 
         if let Some(items) = json["items"].as_array() {
             for saved in items {
+                let added_at = saved["added_at"].as_str().unwrap_or("").to_string();
                 let track = &saved["track"];
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
                 let artist = track["artists"]
@@ -717,6 +914,7 @@ impl SpotifyClient {
                 let cover_path = None;
 
                 if !uri.is_empty() {
+                    added_ats.push(added_at);
                     tracks.push(TrackSummary {
                         name,
                         artist,
@@ -730,7 +928,126 @@ impl SpotifyClient {
         }
 
         self.library_cache.save_tracks(&key, &tracks, total);
+        if !tracks.is_empty() && added_ats.len() == tracks.len() {
+            self.library_cache.append_liked_tracks_batch(&tracks, &added_ats);
+        }
         Ok((tracks, total))
+    }
+
+    pub async fn fetch_liked_tracks_page(
+        &self,
+        after: Option<&str>,
+        fallback_offset: u32,
+    ) -> Result<(Vec<TrackSummary>, u32, Option<String>)> {
+        if !self.authenticated {
+            return Ok((Vec::new(), 0, None));
+        }
+
+        if let Some((tracks, total, next_cursor)) =
+            self.library_cache.get_liked_tracks_page(after, 50)
+        {
+            info!("Cursor cache hit: liked songs after={:?}", after);
+            return Ok((tracks, total, next_cursor));
+        }
+
+        let (_, total) = self.fetch_liked_tracks(fallback_offset, true).await?;
+        let (tracks, _, next_cursor) = self
+            .library_cache
+            .get_liked_tracks_page(after, 50)
+            .unwrap_or_default();
+        Ok((tracks, total, next_cursor))
+    }
+
+    pub async fn sync_liked_tracks(&self) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated {
+            return Ok((Vec::new(), 0));
+        }
+
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        spotify_rate_limit().await;
+        let response = self
+            .http
+            .get("https://api.spotify.com/v1/me/tracks")
+            .bearer_auth(&token)
+            .query(&[("limit", "50"), ("offset", "0")])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(if status.as_u16() == 401 {
+                anyhow::anyhow!("SPOTIFY_UNAUTHORIZED")
+            } else if status.as_u16() == 429 {
+                anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
+            } else {
+                anyhow::anyhow!("Spotify {status}: {body}")
+            });
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        let mut api_tracks = Vec::new();
+        let mut added_ats = Vec::new();
+
+        if let Some(items) = json["items"].as_array() {
+            for saved in items {
+                let added_at = saved["added_at"].as_str().unwrap_or("").to_string();
+                let track = &saved["track"];
+                let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                let artist = track["artists"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x["name"].as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                let uri = track["uri"].as_str().unwrap_or("").to_string();
+                let cover_path = None;
+
+                if !uri.is_empty() {
+                    added_ats.push(added_at);
+                    api_tracks.push(TrackSummary {
+                        name,
+                        artist,
+                        album,
+                        duration_ms,
+                        uri,
+                        cover_path,
+                    });
+                }
+            }
+        }
+
+        let cached = self.library_cache.get_liked_tracks_page(None, 50);
+
+        if let Some((cached_tracks, _cached_total, _)) = &cached {
+            if cached_tracks.len() == api_tracks.len() {
+                let api_uris: Vec<&str> = api_tracks.iter().map(|t| t.uri.as_str()).collect();
+                let cached_uris: Vec<&str> =
+                    cached_tracks.iter().map(|t| t.uri.as_str()).collect();
+                if api_uris == cached_uris {
+                    info!("sync_liked_tracks: no changes detected, using cache");
+                    return Ok((cached_tracks.clone(), total));
+                }
+            }
+        }
+
+        info!(
+            "sync_liked_tracks: changes detected, resetting cache with {} tracks",
+            api_tracks.len()
+        );
+        self.library_cache
+            .reset_liked_tracks_cache(&api_tracks, &added_ats);
+        Ok((api_tracks, total))
     }
 
     pub async fn play_track_uri(&self, track_uri: &str) -> Result<()> {
