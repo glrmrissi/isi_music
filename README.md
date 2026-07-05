@@ -133,6 +133,8 @@ background = "#141414"
 text_secondary = "#888888"
 status_bar = "#1e1e1e"
 show_ascii_art = false
+highlight_symbol = "> "
+options_panel_symbol = "▶ "
 ```
 
 **Color reference:**
@@ -147,6 +149,8 @@ show_ascii_art = false
 | `background` | Root background fill |
 | `text_secondary` | Subtle text, timestamps, metadata |
 | `status_bar` | Bottom status bar background |
+| `highlight_symbol` | List selection indicator (default: `"> "`) |
+| `options_panel_symbol` | Options panel selection indicator (default: `"▶ "`) |
 
 Colors can be specified as hex (`#rrggbb`), named (`white`, `red`, `green`, etc.), or RGB function (`rgb(r,g,b)`).
 
