@@ -7,10 +7,38 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
+use unicode_width::UnicodeWidthStr;
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
+
+fn clamp_text(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        text.to_string()
+    } else {
+        let mut result = String::new();
+        let mut w = 0;
+        for ch in text.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+            if w + cw + 3 > max_width {
+                break;
+            }
+            result.push(ch);
+            w += cw;
+        }
+        format!("{}...", result)
+    }
+}
+
+fn pad_right(text: &str, width: usize) -> String {
+    let current = text.width();
+    if current >= width {
+        text.to_string()
+    } else {
+        format!("{}{}", text, " ".repeat(width - current))
+    }
+}
 
 impl Ui {
     pub fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -50,18 +78,29 @@ impl Ui {
                             };
                             let clean_name = sanitize_control_chars(&track.name);
                             let clean_artist = sanitize_control_chars(&track.artist);
+                            let dur = fmt_duration(track.duration_ms);
+                            let right_w = dur.width();
+                            let content_w = area.width as usize;
+                            let indent_w = indent.width() + 2;
+                            let left_budget = content_w.saturating_sub(indent_w + 2 + right_w);
+                            let artist_w = (left_budget / 3).min(22);
+                            let name_w = left_budget.saturating_sub(artist_w + 2);
+                            let name_text = pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
+                            let artist_text = pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
                             ListItem::new(Line::from(vec![
                                 Span::raw(indent),
                                 Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
-                                Span::styled(clean_name, title_style),
-                                if !clean_artist.is_empty() {
-                                    Span::styled(
-                                        format!("  {}", clean_artist),
-                                        Style::default().fg(self.theme.border_inactive),
-                                    )
-                                } else {
-                                    Span::raw("")
-                                },
+                                Span::styled(name_text, title_style),
+                                Span::styled(
+                                    format!("  {artist_text}"),
+                                    Style::default().fg(self.theme.border_inactive),
+                                ),
+                                Span::styled(
+                                    dur,
+                                    Style::default()
+                                        .fg(self.theme.border_inactive)
+                                        .add_modifier(Modifier::DIM),
+                                ),
                             ]))
                         }
                     };
@@ -150,20 +189,25 @@ impl Ui {
                         let clean_name = sanitize_control_chars(&track.name);
                         let clean_artist = sanitize_control_chars(&track.artist);
                         let dur = fmt_duration(track.duration_ms);
+                        let right_w = dur.width();
+                        let inner = block.inner(area);
+                        let content_w = inner.width as usize;
+                        let indent_w = indent.width() + 2;
+                        let left_budget = content_w.saturating_sub(indent_w + 2 + right_w);
+                        let artist_w = (left_budget / 3).min(28);
+                        let name_w = left_budget.saturating_sub(artist_w + 2);
+                        let name_text = pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
+                        let artist_text = pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
                         ListItem::new(Line::from(vec![
                             Span::raw(indent),
                             Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
-                            Span::styled(clean_name, title_style),
-                            if !clean_artist.is_empty() {
-                                Span::styled(
-                                    format!(" - {}", clean_artist),
-                                    Style::default().fg(self.theme.border_inactive),
-                                )
-                            } else {
-                                Span::raw("")
-                            },
+                            Span::styled(name_text, title_style),
                             Span::styled(
-                                format!("  {}", dur),
+                                format!("  {artist_text}"),
+                                Style::default().fg(self.theme.border_inactive),
+                            ),
+                            Span::styled(
+                                dur,
                                 Style::default()
                                     .fg(self.theme.border_inactive)
                                     .add_modifier(Modifier::DIM),
@@ -839,15 +883,36 @@ impl Ui {
                     } else {
                         Style::default().fg(self.theme.text_primary)
                     };
+                    let dur = fmt_duration(t.duration_ms);
+                    let added = match &t.added_at {
+                        Some(dt) if dt.len() >= 10 => format!(" {}", &dt[..10]),
+                        _ => String::new(),
+                    };
+                    let right_w = added.width() + 1 + dur.width();
+                    let content_w = area.width as usize;
+                    let left_budget = content_w.saturating_sub(5 + 2 + right_w);
+                    let artist_w = (left_budget / 3).min(22);
+                    let name_w = left_budget.saturating_sub(artist_w + 2);
+                    let name_text = pad_right(&clamp_text(&t.name, name_w.max(8)), name_w.max(8));
+                    let artist_text = pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
                     Some(ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>3}. ", display_idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::styled(t.name.clone(), style),
+                        Span::styled(name_text, style),
                         Span::styled(
-                            format!("  {}", t.artist),
+                            format!("  {artist_text}"),
                             Style::default().fg(self.theme.border_inactive),
+                        ),
+                        Span::styled(
+                            added,
+                            Style::default().fg(self.theme.border_inactive),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            dur,
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ])))
                 })
@@ -905,6 +970,8 @@ impl Ui {
                 Style::default().fg(self.theme.border_inactive)
             });
 
+        let inner = block.inner(area);
+
         let items: Vec<ListItem> = state
             .sorted_track_indices
             .iter()
@@ -919,15 +986,36 @@ impl Ui {
                 } else {
                     Style::default().fg(self.theme.text_primary)
                 };
+                let dur = fmt_duration(t.duration_ms);
+                let added = match &t.added_at {
+                    Some(dt) if dt.len() >= 10 => format!(" {}", &dt[..10]),
+                    _ => String::new(),
+                };
+                let right_w = added.width() + 1 + dur.width();
+                let content_w = inner.width as usize;
+                let left_budget = content_w.saturating_sub(5 + 2 + right_w);
+                let artist_w = (left_budget / 3).min(28);
+                let name_w = left_budget.saturating_sub(artist_w + 2);
+                let name_text = pad_right(&clamp_text(&t.name, name_w.max(8)), name_w.max(8));
+                let artist_text = pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
                 Some(ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("{:>3}. ", display_idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::styled(t.name.clone(), style),
+                    Span::styled(name_text, style),
                     Span::styled(
-                        format!(" - {}", t.artist),
+                        format!("  {artist_text}"),
                         Style::default().fg(self.theme.border_inactive),
+                    ),
+                    Span::styled(
+                        added,
+                        Style::default().fg(self.theme.border_inactive),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        dur,
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                 ])))
             })
@@ -958,9 +1046,9 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::raw(a.name.clone()),
+                        Span::raw(clamp_text(&a.name, 30)),
                         Span::styled(
-                            format!("  {}", a.artist),
+                            format!("  {}", clamp_text(&a.artist, 20)),
                             Style::default().fg(self.theme.border_inactive),
                         ),
                     ]))
@@ -1010,9 +1098,9 @@ impl Ui {
                         format!("{:>3}. ", idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::raw(a.name.clone()),
+                    Span::raw(clamp_text(&a.name, 35)),
                     Span::styled(
-                        format!(" - {}", a.artist),
+                        format!(" - {}", clamp_text(&a.artist, 25)),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(
@@ -1050,7 +1138,7 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::raw(a.name.clone()),
+                        Span::raw(clamp_text(&a.name, 30)),
                     ]))
                 })
                 .collect();
@@ -1092,12 +1180,12 @@ impl Ui {
                         format!("{:>3}. ", idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::raw(a.name.clone()),
+                    Span::raw(clamp_text(&a.name, 35)),
                     Span::styled(
                         if a.genres.is_empty() {
                             String::new()
                         } else {
-                            format!("  {}", a.genres)
+                            format!("  {}", clamp_text(&a.genres, 25))
                         },
                         Style::default().fg(self.theme.border_inactive),
                     ),
@@ -1130,7 +1218,7 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::raw(s.name.clone()),
+                        Span::raw(clamp_text(&s.name, 30)),
                     ]))
                 })
                 .collect();
@@ -1178,9 +1266,9 @@ impl Ui {
                         format!("{:>3}. ", idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::raw(s.name.clone()),
+                    Span::raw(clamp_text(&s.name, 35)),
                     Span::styled(
-                        format!("  {}", s.publisher),
+                        format!("  {}", clamp_text(&s.publisher, 25)),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(
@@ -1686,7 +1774,7 @@ impl Ui {
 
 fn fmt_duration(ms: u64) -> String {
     let s = ms / 1000;
-    format!("{}:{:02}", s / 60, s % 60)
+    format!("{:>2}:{:02}", s / 60, s % 60)
 }
 
 impl Ui {

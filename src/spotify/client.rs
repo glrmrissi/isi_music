@@ -250,6 +250,7 @@ impl From<CachedSearch> for FullSearchResults {
                     duration_ms: t.duration_ms,
                     uri: t.uri,
                     cover_path: t.cover_path,
+                    added_at: None,
                 })
                 .collect(),
             artists: c
@@ -362,8 +363,9 @@ impl LibraryCache {
                 album: t.album,
                 duration_ms: t.duration_ms,
                 uri: t.uri,
-                cover_path: t.cover_path,
-            })
+                    cover_path: t.cover_path,
+                    added_at: None,
+                })
             .collect();
         Some((tracks, total))
     }
@@ -526,6 +528,7 @@ impl LibraryCache {
                             duration_ms: r.get::<_, i64>(5)? as u64,
                             uri: r.get(1)?,
                             cover_path: r.get(6)?,
+                            added_at: r.get(0)?,
                         },
                     ))
                 })
@@ -565,6 +568,7 @@ impl LibraryCache {
                             duration_ms: r.get::<_, i64>(5)? as u64,
                             uri: r.get(1)?,
                             cover_path: r.get(6)?,
+                            added_at: r.get(0)?,
                         },
                     ))
                 })
@@ -684,6 +688,7 @@ pub struct TrackSummary {
     pub duration_ms: u64,
     pub uri: String,
     pub cover_path: Option<String>,
+    pub added_at: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -896,7 +901,8 @@ impl SpotifyClient {
 
         if let Some(items) = json["items"].as_array() {
             for saved in items {
-                let added_at = saved["added_at"].as_str().unwrap_or("").to_string();
+                let added_at_val = saved["added_at"].as_str().unwrap_or("").to_string();
+                let added_at = Some(added_at_val.clone()).filter(|s| !s.is_empty());
                 let track = &saved["track"];
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
                 let artist = track["artists"]
@@ -914,7 +920,7 @@ impl SpotifyClient {
                 let cover_path = None;
 
                 if !uri.is_empty() {
-                    added_ats.push(added_at);
+                    added_ats.push(added_at_val);
                     tracks.push(TrackSummary {
                         name,
                         artist,
@@ -922,6 +928,7 @@ impl SpotifyClient {
                         duration_ms,
                         uri,
                         cover_path,
+                        added_at,
                     });
                 }
             }
@@ -1014,7 +1021,7 @@ impl SpotifyClient {
                 let cover_path = None;
 
                 if !uri.is_empty() {
-                    added_ats.push(added_at);
+                    added_ats.push(added_at.clone());
                     api_tracks.push(TrackSummary {
                         name,
                         artist,
@@ -1022,6 +1029,7 @@ impl SpotifyClient {
                         duration_ms,
                         uri,
                         cover_path,
+                        added_at: Some(added_at),
                     });
                 }
             }
@@ -1221,6 +1229,10 @@ impl SpotifyClient {
                     continue;
                 }
 
+                let added_at = item_wrapper["added_at"]
+                    .as_str()
+                    .map(|s| s.to_string());
+
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
                 let artist = track["artists"]
                     .as_array()
@@ -1244,6 +1256,7 @@ impl SpotifyClient {
                         duration_ms,
                         uri,
                         cover_path,
+                        added_at,
                     });
                 }
             }
@@ -1635,6 +1648,7 @@ impl SpotifyClient {
                         duration_ms,
                         uri,
                         cover_path,
+                        added_at: None,
                     });
                 }
             }
@@ -1819,6 +1833,7 @@ impl SpotifyClient {
                     duration_ms,
                     uri,
                     cover_path,
+                    added_at: None,
                 });
             }
         }
@@ -2057,6 +2072,7 @@ impl SpotifyClient {
                     duration_ms,
                     uri,
                     cover_path,
+                    added_at: None,
                 });
             }
         }
@@ -2199,6 +2215,7 @@ impl SpotifyClient {
                     duration_ms,
                     uri,
                     cover_path,
+                    added_at: None,
                 });
             }
         }
@@ -2399,6 +2416,7 @@ impl SpotifyClient {
                                     duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
                                     uri,
                                     cover_path: None,
+                                    added_at: None,
                                 });
                             }
                         }

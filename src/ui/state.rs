@@ -79,6 +79,7 @@ pub enum TrackSortBy {
     Artist,
     Album,
     Duration,
+    DateAdded,
 }
 
 impl TrackSortBy {
@@ -88,7 +89,8 @@ impl TrackSortBy {
             TrackSortBy::Title => TrackSortBy::Artist,
             TrackSortBy::Artist => TrackSortBy::Album,
             TrackSortBy::Album => TrackSortBy::Duration,
-            TrackSortBy::Duration => TrackSortBy::Default,
+            TrackSortBy::Duration => TrackSortBy::DateAdded,
+            TrackSortBy::DateAdded => TrackSortBy::Default,
         }
     }
 
@@ -99,6 +101,7 @@ impl TrackSortBy {
             TrackSortBy::Artist => "Artist",
             TrackSortBy::Album => "Album",
             TrackSortBy::Duration => "Duration",
+            TrackSortBy::DateAdded => "Date Added",
         }
     }
 }
@@ -357,7 +360,9 @@ impl UiState {
 
                 self.sorted_track_indices = (0..self.tracks.len()).collect();
 
-                if self.track_sort_by != TrackSortBy::Default {
+                let is_liked_songs = self.active_playlist_id.as_deref() == Some("liked_songs");
+
+                if self.track_sort_by != TrackSortBy::Default || is_liked_songs {
                     self.sorted_track_indices.sort_by(|&a, &b| {
                         let track_a = &self.tracks[a];
                         let track_b = &self.tracks[b];
@@ -367,7 +372,14 @@ impl UiState {
                             TrackSortBy::Artist => track_a.artist.cmp(&track_b.artist),
                             TrackSortBy::Album => track_a.album.cmp(&track_b.album),
                             TrackSortBy::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
-                            TrackSortBy::Default => std::cmp::Ordering::Equal,
+                            TrackSortBy::DateAdded | TrackSortBy::Default => {
+                                match (&track_a.added_at, &track_b.added_at) {
+                                    (Some(a), Some(b)) => b.cmp(a),
+                                    (Some(_), None) => std::cmp::Ordering::Less,
+                                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                                    (None, None) => std::cmp::Ordering::Equal,
+                                }
+                            }
                         }
                     });
                 }

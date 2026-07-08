@@ -222,6 +222,7 @@ impl App {
                                         duration_ms: row.get(3)?,
                                         uri: uri.clone(),
                                         cover_path: row.get(4).ok(),
+                                        added_at: None,
                                     })
                                 })
                                 .ok();
@@ -282,6 +283,7 @@ impl App {
                             duration_ms,
                             uri,
                             cover_path,
+                            added_at: None,
                         }
                     };
 

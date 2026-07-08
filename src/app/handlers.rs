@@ -533,6 +533,7 @@ impl App {
                                 duration_ms: self.state.playback.duration_ms,
                                 uri: self.current_track_uri.clone(),
                                 cover_path: self.state.playback.cover_path.clone(),
+                                added_at: None,
                             };
                             if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
                                 self.state.tracks.insert(0, new_track.clone());
@@ -1388,6 +1389,7 @@ impl App {
                                                     album: t.album.clone(),
                                                     duration_ms: t.duration_ms,
                                                     cover_path: t.cover_path.clone(),
+                                                    added_at: None,
                                                 }];
                                             self.on_track_started();
                                         }
