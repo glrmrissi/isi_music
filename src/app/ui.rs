@@ -1,5 +1,7 @@
 use crate::App;
+use crate::app::FetchResult;
 use crate::ui::{ActiveContent, Focus, SearchPanel};
+use std::sync::Arc;
 
 impl App {
     pub async fn maybe_load_more(&mut self) {
@@ -139,53 +141,72 @@ impl App {
         if (self.state.tracks_offset as usize) >= track_len
             && track_len < self.state.tracks_total as usize
         {
+            if self.pending_pagination.is_some() {
+                return;
+            }
+
             self.state.tracks_loading = true;
+            self.state.status_msg = Some("Loading more tracks…".to_string());
             let offset = self.state.tracks_offset;
             let id = self.state.active_playlist_id.clone();
 
             if id.as_deref() == Some("liked_songs") && self.state.tracks_cursor.is_none() {
                 self.state.tracks_loading = false;
+                self.state.status_msg = None;
                 return;
             }
 
-            let result = match id.as_deref() {
+            let spotify = Arc::clone(&self.spotify);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.pending_pagination = Some(rx);
+
+            match id.as_deref() {
                 Some("liked_songs") => {
                     let after = self.state.tracks_cursor.clone();
-                    self.spotify
-                        .fetch_liked_tracks_page(after.as_deref(), offset)
-                        .await
-                        .map(|(t, total, next)| {
-                            self.state.tracks_cursor = next;
-                            (t, total)
-                        })
+                    tokio::spawn(async move {
+                        let result = spotify
+                            .fetch_liked_tracks_page(after.as_deref(), offset)
+                            .await
+                            .map(|(t, total, next)| (t, total, next))
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(FetchResult::MoreTracks(result));
+                    });
                 }
                 Some(id) if id.starts_with("album:") => {
-                    let album_id = &id["album:".len()..];
-                    self.spotify.fetch_album_tracks(album_id, offset).await
+                    let album_id = id["album:".len()..].to_string();
+                    tokio::spawn(async move {
+                        let result = spotify
+                            .fetch_album_tracks(&album_id, offset)
+                            .await
+                            .map(|(t, total)| (t, total, None))
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(FetchResult::MoreTracks(result));
+                    });
                 }
                 Some(id) if id.starts_with("artist:") => {
                     let name = self.state.active_artist_name.clone().unwrap_or_default();
-                    self.spotify.fetch_artist_tracks(&name, offset).await
+                    tokio::spawn(async move {
+                        let result = spotify
+                            .fetch_artist_tracks(&name, offset)
+                            .await
+                            .map(|(t, total)| (t, total, None))
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(FetchResult::MoreTracks(result));
+                    });
                 }
-                Some(id) => self.spotify.fetch_playlist_tracks(id, offset).await,
+                Some(id) => {
+                    let playlist_id = id.to_string();
+                    tokio::spawn(async move {
+                        let result = spotify
+                            .fetch_playlist_tracks(&playlist_id, offset)
+                            .await
+                            .map(|(t, total)| (t, total, None))
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(FetchResult::MoreTracks(result));
+                    });
+                }
                 None => return,
-            };
-
-            match result {
-                Ok((mut new_tracks, total)) => {
-                    if id.as_deref() != Some("liked_songs") || total > self.state.tracks_total {
-                        self.state.tracks_total = total;
-                    }
-                    self.state.tracks_offset += new_tracks.len() as u32;
-                    self.state.tracks.append(&mut new_tracks);
-
-                    self.state.rebuild_sort_indices();
-                }
-                Err(e) => {
-                    self.state.status_msg = Some(format!("Load more error: {e}"));
-                }
             }
-            self.state.tracks_loading = false;
         }
     }
 

@@ -21,7 +21,7 @@ static SPOTIFY_RATE_LIMITER: LazyLock<Mutex<Instant>> =
 async fn spotify_rate_limit() {
     let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
     let elapsed = last_request.elapsed();
-    let min_interval = Duration::from_millis(500);
+    let min_interval = Duration::from_millis(250);
 
     if elapsed < min_interval {
         let sleep_time = min_interval - elapsed;

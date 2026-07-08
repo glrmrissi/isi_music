@@ -947,15 +947,13 @@ impl Ui {
         } else {
             state.sorted_track_indices.len().to_string()
         };
-        let loading = if state.tracks_loading { " …" } else { "" };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_bottom(Line::from(vec![
                 Span::styled(
-                    format!(" {count}{loading} ",),
+                    format!(" {count} ",),
                     Style::default().fg(self.theme.border_inactive),
                 ),
                 Span::styled(sort_label, Style::default().fg(self.theme.accent_color)),

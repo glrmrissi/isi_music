@@ -40,6 +40,7 @@ pub enum FetchResult {
     PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    MoreTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, Option<String>), String>),
 }
 
 pub struct App {
@@ -96,6 +97,7 @@ pub struct App {
     options_panel: Option<crate::ui::OptionsPanel>,
     trim_counter: u64,
     pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
+    pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
 }
 
 impl App {
@@ -263,6 +265,7 @@ impl App {
             options_panel: Some(options_panel),
             trim_counter: 0,
             pending_fetch: None,
+            pending_pagination: None,
         })
     }
 
@@ -355,14 +358,23 @@ impl App {
     }
 
     fn poll_pending_fetch(&mut self) {
-        let rx = match &mut self.pending_fetch {
-            Some(r) => r,
-            None => return,
-        };
+        if let Some(rx) = &mut self.pending_fetch {
+            if let Ok(result) = rx.try_recv() {
+                self.pending_fetch = None;
+                self.state.loading = false;
+                self.handle_fetch_result(result);
+            }
+        }
 
-        if let Ok(result) = rx.try_recv() {
-            self.pending_fetch = None;
-            self.state.loading = false;
+        if let Some(rx) = &mut self.pending_pagination {
+            if let Ok(result) = rx.try_recv() {
+                self.pending_pagination = None;
+                self.handle_fetch_result(result);
+            }
+        }
+    }
+
+    fn handle_fetch_result(&mut self, result: FetchResult) {
 
             match result {
                 FetchResult::LikedTracks(Ok((tracks, total))) => {
@@ -500,8 +512,26 @@ impl App {
                 FetchResult::ArtistTracks(Err(e)) => {
                     self.state.status_msg = Some(format!("Error: {e}"));
                 }
+                FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor))) => {
+                    self.state.tracks_loading = false;
+                    self.state.status_msg = None;
+                    if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                        if total > self.state.tracks_total {
+                            self.state.tracks_total = total;
+                        }
+                        self.state.tracks_cursor = cursor;
+                    } else {
+                        self.state.tracks_total = total;
+                    }
+                    self.state.tracks_offset += new_tracks.len() as u32;
+                    self.state.tracks.append(&mut new_tracks);
+                    self.state.rebuild_sort_indices();
+                }
+                FetchResult::MoreTracks(Err(e)) => {
+                    self.state.tracks_loading = false;
+                    self.state.status_msg = Some(format!("Load more error: {e}"));
+                }
             }
-        }
     }
 
     async fn ensure_spotify_player(&mut self) -> bool {
