@@ -340,6 +340,7 @@ impl App {
             trim_counter: 0,
             options_panel: Some(crate::ui::OptionsPanel::new(cache_manager, Theme::default())),
             pending_fetch: None,
+            pending_pagination: None,
         }
     }
 
