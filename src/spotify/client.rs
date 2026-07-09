@@ -2524,6 +2524,33 @@ impl SpotifyClient {
         }
     }
 
+    pub async fn unfollow_playlist(&self, playlist_id: &str) -> Result<()> {
+        spotify_rate_limit().await;
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let resp = self
+            .http
+            .delete(format!(
+                "https://api.spotify.com/v1/playlists/{playlist_id}/followers"
+            ))
+            .bearer_auth(&token)
+            .send()
+            .await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Unfollow playlist failed ({}): {}",
+                status.as_u16(),
+                text
+            );
+        }
+    }
+
     pub async fn check_track_saved(&self, track_id: &str) -> Result<bool> {
         spotify_rate_limit().await;
         let token = self

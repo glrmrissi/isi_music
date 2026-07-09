@@ -165,6 +165,8 @@ pub struct UiState {
     pub command_mode: bool,
     pub command_buffer: String,
     pub loading: bool,
+    pub delete_playlist_confirm: bool,
+    pub delete_playlist_target: Option<String>,
 }
 
 impl UiState {
@@ -230,6 +232,8 @@ impl UiState {
             command_mode: false,
             command_buffer: String::new(),
             loading: false,
+            delete_playlist_confirm: false,
+            delete_playlist_target: None,
         }
     }
 

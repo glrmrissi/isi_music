@@ -49,6 +49,7 @@ pub enum Action {
     ToggleBreadcrumb,
     AddToPlaylist,
     RemoveFromPlaylist,
+    DeletePlaylist,
     CommandPrompt,
 }
 
@@ -95,6 +96,7 @@ impl Action {
             ("toggle_breadcrumb", &["shift+b"], ToggleBreadcrumb),
             ("add_to_playlist", &["A"], AddToPlaylist),
             ("remove_from_playlist", &["D"], RemoveFromPlaylist),
+            ("delete_playlist", &["alt+d"], DeletePlaylist),
             ("command_prompt", &[":"], CommandPrompt),
         ]
     }
@@ -471,6 +473,7 @@ impl Keybinds {
                     Action::CopyTrackLink,
                     Action::AddToPlaylist,
                     Action::RemoveFromPlaylist,
+                    Action::DeletePlaylist,
                     Action::CommandPrompt,
                     Action::Quit,
                 ],
@@ -567,6 +570,7 @@ impl KeybindsTomlOutput {
                 | Action::CopyTrackLink
                 |                 Action::AddToPlaylist
                 | Action::RemoveFromPlaylist
+                | Action::DeletePlaylist
                 | Action::CommandPrompt
                 | Action::Quit => actions.push(entry),
             }

@@ -74,6 +74,67 @@ impl App {
         Ok(())
     }
 
+    pub async fn handle_delete_playlist_confirm_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let playlist_id = self
+                    .state
+                    .playlist_list
+                    .selected()
+                    .and_then(|i| self.state.playlists.get(i))
+                    .map(|p| p.id.clone());
+
+                let playlist_id = match playlist_id {
+                    Some(id) => id,
+                    None => {
+                        self.state.delete_playlist_confirm = false;
+                        self.state.delete_playlist_target = None;
+                        return;
+                    }
+                };
+
+                self.state.status_msg = Some("Deleting playlist...".to_string());
+                match self.spotify.unfollow_playlist(&playlist_id).await {
+                    Ok(_) => {
+                        self.state.playlists.retain(|p| p.id != playlist_id);
+                        self.spotify.library_cache.delete_key_pattern(
+                            &format!("playlist:{}:%", playlist_id),
+                        );
+                        if self.state.active_playlist_id.as_deref() == Some(&playlist_id) {
+                            self.state.active_playlist_id = None;
+                            self.state.active_playlist_uri = None;
+                            self.state.tracks.clear();
+                            self.state.sorted_track_indices.clear();
+                            self.state.track_list.select(None);
+                            if let Some(entry) = self.state.pop_nav() {
+                                self.state.active_content = entry.active_content;
+                                self.state.focus = entry.focus;
+                            }
+                        }
+                        let new_len = self.state.playlists.len();
+                        let sel = self.state.playlist_list.selected().unwrap_or(0);
+                        if sel >= new_len && new_len > 0 {
+                            self.state.playlist_list.select(Some(new_len - 1));
+                        }
+                        self.state.status_msg = Some("Playlist deleted".to_string());
+                    }
+                    Err(e) => {
+                        self.state.status_msg =
+                            Some(format!("Delete failed: {e}"));
+                    }
+                }
+                self.state.delete_playlist_confirm = false;
+                self.state.delete_playlist_target = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.state.delete_playlist_confirm = false;
+                self.state.delete_playlist_target = None;
+                self.state.status_msg = Some("Cancelled".to_string());
+            }
+            _ => {}
+        }
+    }
+
     pub async fn handle_add_to_playlist_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Up | KeyCode::Char('k') => {
@@ -222,6 +283,11 @@ impl App {
 
     pub async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
+
+        if self.state.delete_playlist_confirm {
+            self.handle_delete_playlist_confirm_key(code).await;
+            return Ok(());
+        }
 
         if self.state.add_to_playlist_mode {
             self.handle_add_to_playlist_key(code).await;
@@ -1026,6 +1092,26 @@ impl App {
             A::CommandPrompt => {
                 self.state.command_mode = true;
                 self.state.command_buffer.clear();
+            }
+            A::DeletePlaylist => {
+                if !self.spotify.authenticated {
+                    self.state.status_msg = Some("Spotify not connected".to_string());
+                } else if self.state.focus == crate::ui::Focus::Playlists {
+                    let idx = self.state.playlist_list.selected();
+                    let name = idx
+                        .and_then(|i| self.state.playlists.get(i))
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    if name.is_empty() {
+                        self.state.status_msg = Some("No playlist selected".to_string());
+                    } else {
+                        self.state.delete_playlist_confirm = true;
+                        self.state.delete_playlist_target = Some(name);
+                    }
+                } else {
+                    self.state.status_msg =
+                        Some("Focus on Playlists tab to delete".to_string());
+                }
             }
             A::ToggleDebug => {
                 self.debug_overlay.toggle_visible();

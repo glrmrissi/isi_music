@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 #[cfg(feature = "album-art")]
@@ -1928,5 +1928,42 @@ impl Ui {
             .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
+    }
+
+    pub fn render_delete_playlist_confirm(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let name = state.delete_playlist_target.as_deref().unwrap_or("this playlist");
+        let title = format!(" Delete Playlist — {name}? ");
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(Span::raw(title)).alignment(Alignment::Left))
+            .border_style(Style::default().fg(self.theme.border_active));
+
+        let items = vec![
+            ListItem::new(Line::from(Span::styled(
+                "  Yes (y)",
+                Style::default().fg(self.theme.text_primary),
+            ))),
+            ListItem::new(Line::from(Span::styled(
+                "  No (n)",
+                Style::default().fg(self.theme.text_primary),
+            ))),
+        ];
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .bg(self.theme.highlight_bg)
+                    .fg(self.theme.border_active)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(&self.theme.highlight_symbol);
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+
+        frame.render_stateful_widget(list, area, &mut list_state);
     }
 }
