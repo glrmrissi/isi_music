@@ -1,10 +1,13 @@
 // TODO: modularize this file (~1580 lines) into smaller modules
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use chrono::Utc;
 use tracing::warn;
 
 use crate::App;
+use crate::app::FetchResult;
 use crate::player::RepeatMode;
 use crate::ui::{ActiveContent, CompactItem, Focus, SearchPanel, SearchResults};
 use crate::utils::debug_overlay::LogLevel;
@@ -69,6 +72,67 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    pub async fn handle_delete_playlist_confirm_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let playlist_id = self
+                    .state
+                    .playlist_list
+                    .selected()
+                    .and_then(|i| self.state.playlists.get(i))
+                    .map(|p| p.id.clone());
+
+                let playlist_id = match playlist_id {
+                    Some(id) => id,
+                    None => {
+                        self.state.delete_playlist_confirm = false;
+                        self.state.delete_playlist_target = None;
+                        return;
+                    }
+                };
+
+                self.state.status_msg = Some("Deleting playlist...".to_string());
+                match self.spotify.unfollow_playlist(&playlist_id).await {
+                    Ok(_) => {
+                        self.state.playlists.retain(|p| p.id != playlist_id);
+                        self.spotify.library_cache.delete_key_pattern(
+                            &format!("playlist:{}:%", playlist_id),
+                        );
+                        if self.state.active_playlist_id.as_deref() == Some(&playlist_id) {
+                            self.state.active_playlist_id = None;
+                            self.state.active_playlist_uri = None;
+                            self.state.tracks.clear();
+                            self.state.sorted_track_indices.clear();
+                            self.state.track_list.select(None);
+                            if let Some(entry) = self.state.pop_nav() {
+                                self.state.active_content = entry.active_content;
+                                self.state.focus = entry.focus;
+                            }
+                        }
+                        let new_len = self.state.playlists.len();
+                        let sel = self.state.playlist_list.selected().unwrap_or(0);
+                        if sel >= new_len && new_len > 0 {
+                            self.state.playlist_list.select(Some(new_len - 1));
+                        }
+                        self.state.status_msg = Some("Playlist deleted".to_string());
+                    }
+                    Err(e) => {
+                        self.state.status_msg =
+                            Some(format!("Delete failed: {e}"));
+                    }
+                }
+                self.state.delete_playlist_confirm = false;
+                self.state.delete_playlist_target = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.state.delete_playlist_confirm = false;
+                self.state.delete_playlist_target = None;
+                self.state.status_msg = Some("Cancelled".to_string());
+            }
+            _ => {}
+        }
     }
 
     pub async fn handle_add_to_playlist_key(&mut self, code: KeyCode) {
@@ -220,6 +284,11 @@ impl App {
     pub async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
 
+        if self.state.delete_playlist_confirm {
+            self.handle_delete_playlist_confirm_key(code).await;
+            return Ok(());
+        }
+
         if self.state.add_to_playlist_mode {
             self.handle_add_to_playlist_key(code).await;
             return Ok(());
@@ -307,6 +376,7 @@ impl App {
                     },
                     PanelAction::ClearAllCache => {
                         let _ = panel.cache_manager.clear_all().await;
+                        self.spotify.library_cache.clear_liked_tracks_cache();
                         panel.cache_stats = Some(panel.cache_manager.get_stats().await);
                         self.state.status_msg = Some("All caches cleared".to_string());
                     }
@@ -522,8 +592,29 @@ impl App {
                     {
                         Ok(_) => {
                             self.state.status_msg = Some("Liked".to_string());
-                            self.spotify.library_cache.delete_key_pattern("liked:%");
-                            tracing::info!("LikeTrack: saved successfully — liked cache cleared");
+                            let new_track = crate::spotify::TrackSummary {
+                                name: self.state.playback.title.clone(),
+                                artist: self.state.playback.artist.clone(),
+                                album: self.state.playback.album.clone(),
+                                duration_ms: self.state.playback.duration_ms,
+                                uri: self.current_track_uri.clone(),
+                                cover_path: self.state.playback.cover_path.clone(),
+                                added_at: None,
+                            };
+                            if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                                self.state.tracks.insert(0, new_track.clone());
+                                self.state.tracks_offset += 1;
+                                self.state.tracks_total += 1;
+                                self.state.rebuild_sort_indices();
+                            }
+                            let library_cache = self.spotify.library_cache.clone();
+                            let added_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                            tokio::task::spawn_blocking(move || {
+                                library_cache.insert_liked_track(&added_at, &new_track);
+                            })
+                            .await
+                            .ok();
+                            tracing::info!("LikeTrack: saved successfully");
                         }
                         Err(e) => {
                             self.state.status_msg = Some(format!("Like failed: {e}"));
@@ -750,6 +841,18 @@ impl App {
             A::OptionsPanel => {
                 if let Some(ref mut panel) = self.options_panel {
                     panel.toggle().await;
+                    if panel.visible {
+                        let raw = self.keybinds.format_help_text();
+                        let mut lines = Vec::new();
+                        for (cat, entries) in &raw {
+                            lines.push(format!("#{}", cat));
+                            for entry in entries {
+                                lines.push(format!("  {}", entry));
+                            }
+                            lines.push(String::new());
+                        }
+                        panel.set_help_text(lines);
+                    }
                     self.state.status_msg = Some(if panel.visible {
                         "Options panel opened".to_string()
                     } else {
@@ -949,11 +1052,23 @@ impl App {
                                     Ok(_) => {
                                         self.state.status_msg =
                                             Some("Unliked".to_string());
-                                        self.spotify
-                                            .library_cache
-                                            .delete_key_pattern("liked:%");
+                                        let uri = self.current_track_uri.clone();
+                                        if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                                            if let Some(pos) = self.state.tracks.iter().position(|t| t.uri == uri) {
+                                                self.state.tracks.remove(pos);
+                                                self.state.tracks_offset = self.state.tracks_offset.saturating_sub(1);
+                                                self.state.tracks_total = self.state.tracks_total.saturating_sub(1);
+                                                self.state.rebuild_sort_indices();
+                                            }
+                                        }
+                                        let library_cache = self.spotify.library_cache.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            library_cache.delete_liked_track(&uri);
+                                        })
+                                        .await
+                                        .ok();
                                         tracing::info!(
-                                            "UnlikeTrack: removed from library — liked cache cleared"
+                                            "UnlikeTrack: removed from library"
                                         );
                                     }
                                     Err(e) => {
@@ -977,6 +1092,26 @@ impl App {
             A::CommandPrompt => {
                 self.state.command_mode = true;
                 self.state.command_buffer.clear();
+            }
+            A::DeletePlaylist => {
+                if !self.spotify.authenticated {
+                    self.state.status_msg = Some("Spotify not connected".to_string());
+                } else if self.state.focus == crate::ui::Focus::Playlists {
+                    let idx = self.state.playlist_list.selected();
+                    let name = idx
+                        .and_then(|i| self.state.playlists.get(i))
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    if name.is_empty() {
+                        self.state.status_msg = Some("No playlist selected".to_string());
+                    } else {
+                        self.state.delete_playlist_confirm = true;
+                        self.state.delete_playlist_target = Some(name);
+                    }
+                } else {
+                    self.state.status_msg =
+                        Some("Focus on Playlists tab to delete".to_string());
+                }
             }
             A::ToggleDebug => {
                 self.debug_overlay.toggle_visible();
@@ -1068,89 +1203,47 @@ impl App {
                 ActiveContent::Albums => {
                     if let Some(idx) = self.state.selected_album_index() {
                         if let Some(album) = self.state.albums.get(idx) {
+                            if self.pending_fetch.is_some() {
+                                return;
+                            }
                             let id = album.id.clone();
                             let name = album.name.clone();
                             self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading {name}…"));
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            match self.spotify.fetch_album_tracks(&id, 0).await {
-                                Ok((tracks, total)) => {
-                                    self.state.tracks = tracks;
-                                    self.state.tracks_total = total;
-                                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                                    self.state.active_playlist_uri = Some(format!("album:{id}"));
-                                    self.state.active_playlist_id = Some(format!("album:{id}"));
-                                    self.state
-                                        .track_list
-                                        .select(if self.state.tracks.is_empty() {
-                                            None
-                                        } else {
-                                            Some(0)
-                                        });
-                                    self.state.active_content = ActiveContent::Tracks;
-                                    self.state.rebuild_sort_indices();
-                                    self.state.status_msg = None;
-                                }
-                                Err(e) => {
-                                    let err_str = e.to_string();
-                                    if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                        || err_str.contains("401")
-                                    {
-                                        warn!("Got 401 - triggering reconnect");
-                                        needs_reconnect = true;
-                                        self.state.status_msg = Some(
-                                            "Authorization expired, reconnecting...".to_string(),
-                                        );
-                                    } else {
-                                        self.state.status_msg = Some(format!("Error: {e}"));
-                                    }
-                                }
-                            }
+                            self.state.loading = true;
+                            self.state.active_playlist_uri = Some(format!("album:{id}"));
+                            self.state.active_playlist_id = Some(format!("album:{id}"));
+                            let spotify = Arc::clone(&self.spotify);
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            self.pending_fetch = Some(rx);
+                            tokio::spawn(async move {
+                                let result = spotify.fetch_album_tracks(&id, 0).await.map_err(|e| e.to_string());
+                                let _ = tx.send(FetchResult::AlbumTracks(result));
+                            });
                         }
                     }
                 }
                 ActiveContent::Artists => {
                     if let Some(idx) = self.state.selected_artist_index() {
                         if let Some(artist) = self.state.artists.get(idx) {
+                            if self.pending_fetch.is_some() {
+                                return;
+                            }
                             let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                             let name = artist.name.clone();
                             self.state.push_nav();
                             self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            match self.spotify.fetch_artist_tracks(&name, 0).await {
-                                Ok((tracks, total)) => {
-                                    self.state.tracks = tracks;
-                                    self.state.tracks_total = total;
-                                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                                    self.state.active_artist_name = Some(name.clone());
-                                    self.state.active_playlist_uri = Some(format!("artist:{id}"));
-                                    self.state.active_playlist_id = Some(format!("artist:{id}"));
-                                    self.state
-                                        .track_list
-                                        .select(if self.state.tracks.is_empty() {
-                                            None
-                                        } else {
-                                            Some(0)
-                                        });
-                                    self.state.active_content = ActiveContent::Tracks;
-                                    self.state.rebuild_sort_indices();
-                                    self.state.status_msg = None;
-                                }
-                                Err(e) => {
-                                    let err_str = e.to_string();
-                                    if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                        || err_str.contains("401")
-                                    {
-                                        warn!("Got 401 - triggering reconnect");
-                                        needs_reconnect = true;
-                                        self.state.status_msg = Some(
-                                            "Authorization expired, reconnecting...".to_string(),
-                                        );
-                                    } else {
-                                        self.state.status_msg = Some(format!("Error: {e}"));
-                                    }
-                                }
-                            }
+                            self.state.loading = true;
+                            self.state.active_artist_name = Some(name.clone());
+                            self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                            self.state.active_playlist_id = Some(format!("artist:{id}"));
+                            let spotify = Arc::clone(&self.spotify);
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            self.pending_fetch = Some(rx);
+                            tokio::spawn(async move {
+                                let result = spotify.fetch_artist_tracks(&name, 0).await.map_err(|e| e.to_string());
+                                let _ = tx.send(FetchResult::ArtistTracks(result));
+                            });
                         }
                     }
                 }
@@ -1217,13 +1310,22 @@ impl App {
                             self.state.local_tree.toggle_folder(actual_vi);
                             self.state.apply_quick_filter();
                             let new_len = self.state.sorted_track_indices.len();
-                            let cur = self.state.local_tree_list.selected().unwrap_or(0);
+                            let new_pos = self.state
+                                .sorted_track_indices
+                                .iter()
+                                .position(|&idx| idx == actual_vi)
+                                .unwrap_or(0);
                             self.state
                                 .local_tree_list
-                                .select(Some(cur.min(new_len.saturating_sub(1))));
+                                .select(Some(new_pos.min(new_len.saturating_sub(1))));
                         }
                         crate::ui::LocalNode::Track { track, .. } => {
                             self.activate_local_player();
+                            if !self.ensure_local_player().await {
+                                self.state.status_msg =
+                                    Some("Failed to initialize local player".to_string());
+                                return;
+                            }
                             let all_tracks = self.state.local_tree.all_tracks_flat();
                             let start_idx = all_tracks
                                 .iter()
@@ -1239,6 +1341,7 @@ impl App {
                                 self.state.playback.progress_ms = 0;
                                 self.state.playback.is_playing = true;
                                 self.state.playback.is_local = true;
+                                self.state.playback.cover_path = track.cover_path.clone();
                                 self.current_track_uri = track.uri.clone();
                                 self.on_track_started();
 
@@ -1372,6 +1475,7 @@ impl App {
                                                     album: t.album.clone(),
                                                     duration_ms: t.duration_ms,
                                                     cover_path: t.cover_path.clone(),
+                                                    added_at: None,
                                                 }];
                                             self.on_track_started();
                                         }
@@ -1543,31 +1647,25 @@ impl App {
                         .as_ref()
                         .map(|p| p.user_queue().len())
                         .unwrap_or(0);
-                    let queued = if idx < active_len {
+                    let is_active = idx < active_len;
+                    let queue_idx = if is_active { idx } else { idx - active_len };
+
+                    let played = if is_active {
                         self.player
                             .as_mut()
-                            .and_then(|p| p.user_queue().get(idx).cloned())
+                            .map(|p| p.play_from_user_queue(queue_idx))
+                            .unwrap_or(false)
                     } else {
-                        let parked_idx = idx - active_len;
                         self.parked_player
                             .as_mut()
-                            .and_then(|p| p.user_queue().get(parked_idx).cloned())
+                            .map(|p| p.play_from_user_queue(queue_idx))
+                            .unwrap_or(false)
                     };
-                    if let Some(qt) = queued {
-                        let is_local = qt.uri.starts_with("file://");
-                        if is_local {
-                            self.activate_local_player();
-                        } else if !self.local_active {
-                            // já está no spotify player
-                        } else {
-                            self.activate_spotify_player();
-                        }
-                        if let Some(player) = &mut self.player {
-                            player.set_queue(vec![qt.uri.clone()], 0);
-                            self.playing_tracks = vec![];
-                            self.sync_track_selection();
-                            self.sync_queue_display();
-                        }
+
+                    if played {
+                        self.playing_tracks = vec![];
+                        self.sync_track_selection();
+                        self.sync_queue_display();
                     }
                 }
             }

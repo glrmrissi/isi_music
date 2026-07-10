@@ -33,10 +33,20 @@ use crate::utils::theme::Theme;
 #[cfg(target_os = "linux")]
 use libc;
 
+pub enum FetchResult {
+    LikedTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    Albums(Result<(Vec<crate::spotify::AlbumSummary>, u32), String>),
+    Artists(Result<Vec<crate::spotify::ArtistSummary>, String>),
+    PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    MoreTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, Option<String>), String>),
+}
+
 pub struct App {
     pub seek_tx: mpsc::Sender<u32>,
     pub seek_rx: mpsc::Receiver<u32>,
-    spotify: SpotifyClient,
+    spotify: Arc<SpotifyClient>,
     player: Option<Box<dyn AudioPlayer>>,
     parked_player: Option<Box<dyn AudioPlayer>>,
     local_active: bool,
@@ -86,6 +96,8 @@ pub struct App {
     initial_sync_done: bool,
     options_panel: Option<crate::ui::OptionsPanel>,
     trim_counter: u64,
+    pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
+    pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
 }
 
 impl App {
@@ -117,7 +129,7 @@ impl App {
 
         let mut startup_warning: Option<String> = None;
 
-        let mut spotify = match SpotifyClient::new().await {
+        let spotify = match SpotifyClient::new().await {
             Ok(s) => s,
             Err(e) => {
                 let msg = e.to_string();
@@ -197,12 +209,12 @@ impl App {
         };
 
         let cache_manager = crate::utils::cache::CacheManager::new();
-        let options_panel = crate::ui::OptionsPanel::new(cache_manager);
+        let options_panel = crate::ui::OptionsPanel::new(cache_manager, theme.clone());
 
         Ok(Self {
             seek_tx,
             seek_rx,
-            spotify,
+            spotify: Arc::new(spotify),
             player: None,
             parked_player: None,
             local_active: false,
@@ -252,6 +264,8 @@ impl App {
             initial_sync_done: false,
             options_panel: Some(options_panel),
             trim_counter: 0,
+            pending_fetch: None,
+            pending_pagination: None,
         })
     }
 
@@ -275,7 +289,7 @@ impl App {
         Self {
             seek_tx,
             seek_rx,
-            spotify,
+            spotify: Arc::new(spotify),
             player: None,
             parked_player: None,
             local_active: false,
@@ -324,7 +338,9 @@ impl App {
             progress_at_play_start: 0,
             initial_sync_done: false,
             trim_counter: 0,
-            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
+            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager, Theme::default())),
+            pending_fetch: None,
+            pending_pagination: None,
         }
     }
 
@@ -340,6 +356,183 @@ impl App {
             )
             .ok();
         }
+    }
+
+    fn poll_pending_fetch(&mut self) {
+        if let Some(rx) = &mut self.pending_fetch {
+            if let Ok(result) = rx.try_recv() {
+                self.pending_fetch = None;
+                self.state.loading = false;
+                self.handle_fetch_result(result);
+            }
+        }
+
+        if let Some(rx) = &mut self.pending_pagination {
+            if let Ok(result) = rx.try_recv() {
+                self.pending_pagination = None;
+                self.handle_fetch_result(result);
+            }
+        }
+    }
+
+    fn handle_fetch_result(&mut self, result: FetchResult) {
+
+            match result {
+                FetchResult::LikedTracks(Ok((tracks, total))) => {
+                    self.state.tracks = tracks;
+                    self.state.tracks_total = total;
+                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                    self.state.active_playlist_uri = Some("liked_songs".to_string());
+                    self.state.active_playlist_id = Some("liked_songs".to_string());
+                    self.state.track_list.select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    self.state.active_content = crate::ui::ActiveContent::Tracks;
+                    self.state.search_results = None;
+                    self.state.rebuild_sort_indices();
+                    self.state.status_msg = None;
+                    self.state.focus = crate::ui::Focus::Tracks;
+                    self.state.tracks_cursor = self
+                        .spotify
+                        .library_cache
+                        .get_liked_tracks_page(None, 50)
+                        .and_then(|(_, _, next)| next);
+                }
+                FetchResult::LikedTracks(Err(e)) => {
+                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                        self.state.status_msg =
+                            Some("Authorization expired, reconnecting...".to_string());
+                        self.session_reconnecting = true;
+                    } else {
+                        self.state.status_msg = Some(format!("Error: {e}"));
+                    }
+                }
+                FetchResult::Albums(Ok((albums, total))) => {
+                    self.state.albums = albums;
+                    self.state.albums_total = total;
+                    self.state.albums_offset = self.state.albums.len() as u32;
+                    self.state.album_list.select(if self.state.albums.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    self.state.active_content = crate::ui::ActiveContent::Albums;
+                    self.state.search_results = None;
+                    self.state.status_msg = None;
+                    self.state.focus = crate::ui::Focus::Tracks;
+                }
+                FetchResult::Albums(Err(e)) => {
+                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                        self.state.status_msg =
+                            Some("Authorization expired, reconnecting...".to_string());
+                        self.session_reconnecting = true;
+                    } else {
+                        self.state.status_msg = Some(format!("Error: {e}"));
+                    }
+                }
+                FetchResult::Artists(Ok(artists)) => {
+                    self.state.artists = artists;
+                    self.state.artist_list.select(if self.state.artists.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    self.state.active_content = crate::ui::ActiveContent::Artists;
+                    self.state.search_results = None;
+                    self.state.status_msg = None;
+                    self.state.focus = crate::ui::Focus::Tracks;
+                }
+                FetchResult::Artists(Err(e)) => {
+                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                        self.state.status_msg =
+                            Some("Authorization expired, reconnecting...".to_string());
+                        self.session_reconnecting = true;
+                    } else {
+                        self.state.status_msg = Some(format!("Error: {e}"));
+                    }
+                }
+                FetchResult::PlaylistTracks(Ok((tracks, total))) => {
+                    self.state.tracks = tracks;
+                    self.state.tracks_total = total;
+                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                    self.state.track_list.select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    self.state.active_content = crate::ui::ActiveContent::Tracks;
+                    self.state.search_results = None;
+                    self.state.rebuild_sort_indices();
+                    self.state.status_msg = None;
+                    self.state.focus = crate::ui::Focus::Tracks;
+                }
+                FetchResult::PlaylistTracks(Err(e)) => {
+                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                        self.state.status_msg =
+                            Some("Authorization expired, reconnecting...".to_string());
+                        self.session_reconnecting = true;
+                    } else {
+                        self.state.status_msg = Some(format!("Error: {e}"));
+                    }
+                }
+                FetchResult::AlbumTracks(Ok((tracks, total))) => {
+                    self.state.tracks = tracks;
+                    self.state.tracks_total = total;
+                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                    self.state.track_list.select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    self.state.active_content = crate::ui::ActiveContent::Tracks;
+                    self.state.search_results = None;
+                    self.state.rebuild_sort_indices();
+                    self.state.status_msg = None;
+                    self.state.focus = crate::ui::Focus::Tracks;
+                }
+                FetchResult::AlbumTracks(Err(e)) => {
+                    self.state.status_msg = Some(format!("Error: {e}"));
+                }
+                FetchResult::ArtistTracks(Ok((tracks, total))) => {
+                    self.state.tracks = tracks;
+                    self.state.tracks_total = total;
+                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                    self.state.track_list.select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    self.state.active_content = crate::ui::ActiveContent::Tracks;
+                    self.state.search_results = None;
+                    self.state.rebuild_sort_indices();
+                    self.state.status_msg = None;
+                    self.state.focus = crate::ui::Focus::Tracks;
+                }
+                FetchResult::ArtistTracks(Err(e)) => {
+                    self.state.status_msg = Some(format!("Error: {e}"));
+                }
+                FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor))) => {
+                    self.state.tracks_loading = false;
+                    self.state.status_msg = None;
+                    if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                        if total > self.state.tracks_total {
+                            self.state.tracks_total = total;
+                        }
+                        self.state.tracks_cursor = cursor;
+                    } else {
+                        self.state.tracks_total = total;
+                    }
+                    self.state.tracks_offset += new_tracks.len() as u32;
+                    self.state.tracks.append(&mut new_tracks);
+                    self.state.rebuild_sort_indices();
+                }
+                FetchResult::MoreTracks(Err(e)) => {
+                    self.state.tracks_loading = false;
+                    self.state.status_msg = Some(format!("Load more error: {e}"));
+                }
+            }
     }
 
     async fn ensure_spotify_player(&mut self) -> bool {
@@ -429,6 +622,7 @@ impl App {
             self.last_tick = now;
 
             self.poll_local_scan();
+            self.poll_pending_fetch();
 
             if let Some(player) = &self.player {
                 if let Some(pb) = player.current_playback_state() {
@@ -542,11 +736,11 @@ impl App {
                     match notif {
                         PlayerNotification::TrackEnded => {
                             self.consecutive_unavailable = 0;
-                            if parked_has_queue {
+                            if player.next() {
+                                needs_sync = true;
+                            } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if player.next() {
-                                needs_sync = true;
                             } else if self.radio_mode && !self.local_active {
                                 needs_radio_refill = true;
                             } else {
@@ -567,11 +761,11 @@ impl App {
                             self.consecutive_unavailable += 1;
                             self.state.status_msg =
                                 Some("Track unavailable, skipping...".to_string());
-                            if parked_has_queue {
+                            if player.next() {
+                                needs_sync = true;
+                            } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if player.next() {
-                                needs_sync = true;
                             } else if self.radio_mode && !self.local_active {
                                 needs_radio_refill = true;
                             } else {

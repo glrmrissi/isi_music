@@ -1,15 +1,44 @@
+use crate::app::metadata::sanitize_control_chars;
 use crate::spotify::RepeatState;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
+use unicode_width::UnicodeWidthStr;
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
+
+fn clamp_text(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        text.to_string()
+    } else {
+        let mut result = String::new();
+        let mut w = 0;
+        for ch in text.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+            if w + cw + 3 > max_width {
+                break;
+            }
+            result.push(ch);
+            w += cw;
+        }
+        format!("{}...", result)
+    }
+}
+
+fn pad_right(text: &str, width: usize) -> String {
+    let current = text.width();
+    if current >= width {
+        text.to_string()
+    } else {
+        format!("{}{}", text, " ".repeat(width - current))
+    }
+}
 
 impl Ui {
     pub fn render_local_tree(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -47,18 +76,31 @@ impl Ui {
                             } else {
                                 Style::default().fg(self.theme.text_primary)
                             };
+                            let clean_name = sanitize_control_chars(&track.name);
+                            let clean_artist = sanitize_control_chars(&track.artist);
+                            let dur = fmt_duration(track.duration_ms);
+                            let right_w = dur.width();
+                            let content_w = area.width as usize;
+                            let indent_w = indent.width() + 2;
+                            let left_budget = content_w.saturating_sub(indent_w + 2 + right_w);
+                            let artist_w = (left_budget / 3).min(22);
+                            let name_w = left_budget.saturating_sub(artist_w + 2);
+                            let name_text = pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
+                            let artist_text = pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
                             ListItem::new(Line::from(vec![
                                 Span::raw(indent),
                                 Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
-                                Span::styled(track.name.clone(), title_style),
-                                if !track.artist.is_empty() {
-                                    Span::styled(
-                                        format!("  {}", track.artist),
-                                        Style::default().fg(self.theme.border_inactive),
-                                    )
-                                } else {
-                                    Span::raw("")
-                                },
+                                Span::styled(name_text, title_style),
+                                Span::styled(
+                                    format!("  {artist_text}"),
+                                    Style::default().fg(self.theme.border_inactive),
+                                ),
+                                Span::styled(
+                                    dur,
+                                    Style::default()
+                                        .fg(self.theme.border_inactive)
+                                        .add_modifier(Modifier::DIM),
+                                ),
                             ]))
                         }
                     };
@@ -72,7 +114,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.local_tree_list);
             return;
         }
@@ -144,21 +186,28 @@ impl Ui {
                         } else {
                             Style::default().fg(self.theme.text_primary)
                         };
+                        let clean_name = sanitize_control_chars(&track.name);
+                        let clean_artist = sanitize_control_chars(&track.artist);
                         let dur = fmt_duration(track.duration_ms);
+                        let right_w = dur.width();
+                        let inner = block.inner(area);
+                        let content_w = inner.width as usize;
+                        let indent_w = indent.width() + 2;
+                        let left_budget = content_w.saturating_sub(indent_w + 2 + right_w);
+                        let artist_w = (left_budget / 3).min(28);
+                        let name_w = left_budget.saturating_sub(artist_w + 2);
+                        let name_text = pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
+                        let artist_text = pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
                         ListItem::new(Line::from(vec![
                             Span::raw(indent),
                             Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
-                            Span::styled(track.name.clone(), title_style),
-                            if !track.artist.is_empty() {
-                                Span::styled(
-                                    format!(" - {}", track.artist),
-                                    Style::default().fg(self.theme.border_inactive),
-                                )
-                            } else {
-                                Span::raw("")
-                            },
+                            Span::styled(name_text, title_style),
                             Span::styled(
-                                format!("  {}", dur),
+                                format!("  {artist_text}"),
+                                Style::default().fg(self.theme.border_inactive),
+                            ),
+                            Span::styled(
+                                dur,
                                 Style::default()
                                     .fg(self.theme.border_inactive)
                                     .add_modifier(Modifier::DIM),
@@ -178,7 +227,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.local_tree_list);
     }
@@ -250,11 +299,12 @@ impl Ui {
                 }
 
                 let ch = char::from_u32(0x2800 | bits as u32).unwrap_or(' ');
-                if let Some(cell) = frame
-                    .buffer_mut()
-                    .cell_mut((inner.x + bar as u16, inner.y + cell_y as u16))
-                {
-                    cell.set_char(ch).set_fg(color);
+                let bx = inner.x + bar as u16;
+                let by = inner.y + cell_y as u16;
+                if bx < inner.x + inner.width && by < inner.y + inner.height {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((bx, by)) {
+                        cell.set_char(ch).set_fg(color);
+                    }
                 }
             }
         }
@@ -504,7 +554,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.library_list);
     }
@@ -563,7 +613,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.playlist_list);
     }
@@ -608,7 +658,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.library_list);
             return;
         }
@@ -620,31 +670,44 @@ impl Ui {
         frame.render_widget(&block, area);
         let inner = block.inner(area);
 
-        let lines = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                " isi-music",
-                Style::default()
-                    .fg(self.theme.border_active)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Select a playlist from the Library or Playlists panel,",
-                Style::default().fg(self.theme.border_inactive),
-            )),
-            Line::from(Span::styled(
-                "or press / to search Spotify.",
-                Style::default().fg(self.theme.border_inactive),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "[TAB] navigate panels   [ENTER] select   [/] search   [Ctrl+F] quick search",
-                Style::default()
-                    .fg(self.theme.border_inactive)
-                    .add_modifier(Modifier::DIM),
-            )),
-        ];
+        let lines = if state.loading {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    " Loading...",
+                    Style::default()
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                )),
+                Line::from(""),
+            ]
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    " isi-music",
+                    Style::default()
+                        .fg(self.theme.border_active)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Select a playlist from the Library or Playlists panel,",
+                    Style::default().fg(self.theme.border_inactive),
+                )),
+                Line::from(Span::styled(
+                    "or press / to search Spotify.",
+                    Style::default().fg(self.theme.border_inactive),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "[TAB] navigate panels   [ENTER] select   [/] search   [Ctrl+F] quick search",
+                    Style::default()
+                        .fg(self.theme.border_inactive)
+                        .add_modifier(Modifier::DIM),
+                )),
+            ]
+        };
 
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
     }
@@ -820,15 +883,36 @@ impl Ui {
                     } else {
                         Style::default().fg(self.theme.text_primary)
                     };
+                    let dur = fmt_duration(t.duration_ms);
+                    let added = match &t.added_at {
+                        Some(dt) if dt.len() >= 10 => format!(" {}", &dt[..10]),
+                        _ => String::new(),
+                    };
+                    let right_w = added.width() + 1 + dur.width();
+                    let content_w = area.width as usize;
+                    let left_budget = content_w.saturating_sub(5 + 2 + right_w);
+                    let artist_w = (left_budget / 3).min(22);
+                    let name_w = left_budget.saturating_sub(artist_w + 2);
+                    let name_text = pad_right(&clamp_text(&t.name, name_w.max(8)), name_w.max(8));
+                    let artist_text = pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
                     Some(ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>3}. ", display_idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::styled(t.name.clone(), style),
+                        Span::styled(name_text, style),
                         Span::styled(
-                            format!("  {}", t.artist),
+                            format!("  {artist_text}"),
                             Style::default().fg(self.theme.border_inactive),
+                        ),
+                        Span::styled(
+                            added,
+                            Style::default().fg(self.theme.border_inactive),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            dur,
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ])))
                 })
@@ -840,7 +924,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.track_list);
             return;
         }
@@ -863,15 +947,13 @@ impl Ui {
         } else {
             state.sorted_track_indices.len().to_string()
         };
-        let loading = if state.tracks_loading { " …" } else { "" };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_bottom(Line::from(vec![
                 Span::styled(
-                    format!(" {count}{loading} ",),
+                    format!(" {count} ",),
                     Style::default().fg(self.theme.border_inactive),
                 ),
                 Span::styled(sort_label, Style::default().fg(self.theme.accent_color)),
@@ -885,6 +967,8 @@ impl Ui {
             } else {
                 Style::default().fg(self.theme.border_inactive)
             });
+
+        let inner = block.inner(area);
 
         let items: Vec<ListItem> = state
             .sorted_track_indices
@@ -900,15 +984,36 @@ impl Ui {
                 } else {
                     Style::default().fg(self.theme.text_primary)
                 };
+                let dur = fmt_duration(t.duration_ms);
+                let added = match &t.added_at {
+                    Some(dt) if dt.len() >= 10 => format!(" {}", &dt[..10]),
+                    _ => String::new(),
+                };
+                let right_w = added.width() + 1 + dur.width();
+                let content_w = inner.width as usize;
+                let left_budget = content_w.saturating_sub(5 + 2 + right_w);
+                let artist_w = (left_budget / 3).min(28);
+                let name_w = left_budget.saturating_sub(artist_w + 2);
+                let name_text = pad_right(&clamp_text(&t.name, name_w.max(8)), name_w.max(8));
+                let artist_text = pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
                 Some(ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("{:>3}. ", display_idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::styled(t.name.clone(), style),
+                    Span::styled(name_text, style),
                     Span::styled(
-                        format!(" - {}", t.artist),
+                        format!("  {artist_text}"),
                         Style::default().fg(self.theme.border_inactive),
+                    ),
+                    Span::styled(
+                        added,
+                        Style::default().fg(self.theme.border_inactive),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        dur,
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                 ])))
             })
@@ -922,7 +1027,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.track_list);
     }
@@ -939,9 +1044,9 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::raw(a.name.clone()),
+                        Span::raw(clamp_text(&a.name, 30)),
                         Span::styled(
-                            format!("  {}", a.artist),
+                            format!("  {}", clamp_text(&a.artist, 20)),
                             Style::default().fg(self.theme.border_inactive),
                         ),
                     ]))
@@ -954,7 +1059,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.album_list);
             return;
         }
@@ -991,9 +1096,9 @@ impl Ui {
                         format!("{:>3}. ", idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::raw(a.name.clone()),
+                    Span::raw(clamp_text(&a.name, 35)),
                     Span::styled(
-                        format!(" - {}", a.artist),
+                        format!(" - {}", clamp_text(&a.artist, 25)),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(
@@ -1014,7 +1119,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.album_list);
     }
@@ -1031,7 +1136,7 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::raw(a.name.clone()),
+                        Span::raw(clamp_text(&a.name, 30)),
                     ]))
                 })
                 .collect();
@@ -1042,7 +1147,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.artist_list);
             return;
         }
@@ -1073,12 +1178,12 @@ impl Ui {
                         format!("{:>3}. ", idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::raw(a.name.clone()),
+                    Span::raw(clamp_text(&a.name, 35)),
                     Span::styled(
                         if a.genres.is_empty() {
                             String::new()
                         } else {
-                            format!("  {}", a.genres)
+                            format!("  {}", clamp_text(&a.genres, 25))
                         },
                         Style::default().fg(self.theme.border_inactive),
                     ),
@@ -1094,7 +1199,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.artist_list);
     }
@@ -1111,7 +1216,7 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::raw(s.name.clone()),
+                        Span::raw(clamp_text(&s.name, 30)),
                     ]))
                 })
                 .collect();
@@ -1122,7 +1227,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(list, area, &mut state.show_list);
             return;
         }
@@ -1159,9 +1264,9 @@ impl Ui {
                         format!("{:>3}. ", idx + 1),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::raw(s.name.clone()),
+                    Span::raw(clamp_text(&s.name, 35)),
                     Span::styled(
-                        format!("  {}", s.publisher),
+                        format!("  {}", clamp_text(&s.publisher, 25)),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(
@@ -1182,7 +1287,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.show_list);
     }
@@ -1290,7 +1395,7 @@ impl Ui {
                             .fg(self.theme.border_active)
                             .add_modifier(Modifier::BOLD),
                     )
-                    .highlight_symbol("  ");
+                    .highlight_symbol(&self.theme.highlight_symbol);
                 let list_area = Rect {
                     x: area.x,
                     y: area.y + 1,
@@ -1374,7 +1479,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
 
             let artist_items: Vec<ListItem> = sr
@@ -1409,7 +1514,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
 
             let album_items: Vec<ListItem> = sr
@@ -1440,7 +1545,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
 
             let pl_items: Vec<ListItem> = sr
@@ -1471,7 +1576,7 @@ impl Ui {
                         .fg(self.theme.border_active)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("  ");
+                .highlight_symbol(&self.theme.highlight_symbol);
             frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
         }
     }
@@ -1483,8 +1588,8 @@ impl Ui {
             0.0
         };
         let shuffle_label = if pb.shuffle { " Shuf" } else { "" };
-        let shuffle_width = if pb.shuffle { 9u16 } else { 0u16 };
-        let width = area.width.saturating_sub(14 + shuffle_width) as usize;
+        let shuffle_display_width = unicode_width::UnicodeWidthStr::width(shuffle_label);
+        let width = area.width.saturating_sub(14 + shuffle_display_width as u16) as usize;
         let filled = (width as f64 * ratio) as usize;
 
         let bar = format!(
@@ -1516,19 +1621,41 @@ impl Ui {
     }
 
     pub fn render_marquee(&self, frame: &mut Frame, pb: &PlaybackState, offset: usize, area: Rect) {
+        use unicode_width::UnicodeWidthStr;
         let text = if pb.title.is_empty() {
             format!("isi-music v{}", env!("CARGO_PKG_VERSION"))
         } else {
-            format!("{} • {} ", pb.title, pb.artist)
+            let t = sanitize_control_chars(&pb.title);
+            let a = sanitize_control_chars(&pb.artist);
+            format!("{} • {} ", t, a)
         };
-        let display = if text.len() < area.width as usize {
+        let display = if text.width() < area.width as usize {
             text
         } else {
             let combined = format!("{}   •   ", text);
             let chars: Vec<char> = combined.chars().collect();
-            (0..area.width as usize)
-                .map(|i| chars[(offset + i) % chars.len()])
-                .collect()
+            if chars.is_empty() {
+                return;
+            }
+            let area_w = area.width as usize;
+            let mut result = String::with_capacity(area_w);
+            let mut col = 0usize;
+            let mut i = offset % chars.len();
+            while col < area_w {
+                let ch = chars[i % chars.len()];
+                let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if w == 0 {
+                    i += 1;
+                    continue;
+                }
+                if col + w > area_w {
+                    break;
+                }
+                result.push(ch);
+                col += w;
+                i += 1;
+            }
+            result
         };
         frame.render_widget(
             Paragraph::new(display).style(Style::default().fg(self.theme.border_inactive)),
@@ -1637,7 +1764,7 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.queue_list);
     }
@@ -1645,7 +1772,7 @@ impl Ui {
 
 fn fmt_duration(ms: u64) -> String {
     let s = ms / 1000;
-    format!("{}:{:02}", s / 60, s % 60)
+    format!("{:>2}:{:02}", s / 60, s % 60)
 }
 
 impl Ui {
@@ -1798,8 +1925,45 @@ impl Ui {
                     .fg(self.theme.border_active)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("  ");
+            .highlight_symbol(&self.theme.highlight_symbol);
 
         frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
+    }
+
+    pub fn render_delete_playlist_confirm(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
+        let name = state.delete_playlist_target.as_deref().unwrap_or("this playlist");
+        let title = format!(" Delete Playlist — {name}? ");
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(Line::from(Span::raw(title)).alignment(Alignment::Left))
+            .border_style(Style::default().fg(self.theme.border_active));
+
+        let items = vec![
+            ListItem::new(Line::from(Span::styled(
+                "  Yes (y)",
+                Style::default().fg(self.theme.text_primary),
+            ))),
+            ListItem::new(Line::from(Span::styled(
+                "  No (n)",
+                Style::default().fg(self.theme.text_primary),
+            ))),
+        ];
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .bg(self.theme.highlight_bg)
+                    .fg(self.theme.border_active)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(&self.theme.highlight_symbol);
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+
+        frame.render_stateful_widget(list, area, &mut list_state);
     }
 }

@@ -13,7 +13,7 @@ fn defaults_contains_all_actions() {
 fn defaults_no_duplicate_key_combos() {
     let k = Keybinds::defaults();
     let lookup: &HashMap<KeyCombo, Action> = &k.action_for;
-    assert_eq!(lookup.len(), 43);
+    assert_eq!(lookup.len(), 44);
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn format_help_text_key_strings() {
 #[test]
 fn action_variants_count() {
     let count = Action::all().len();
-    assert_eq!(count, 40, "Action::all() should have 40 entries");
+    assert_eq!(count, 41, "Action::all() should have 41 entries");
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn keybinds_toml_output_sections() {
     assert_eq!(output.playback.len(), 12);
     assert_eq!(output.navigation.len(), 8);
     assert_eq!(output.modes.len(), 12);
-    assert_eq!(output.actions.len(), 8);
+    assert_eq!(output.actions.len(), 9);
 }
 
 #[test]

@@ -376,6 +376,7 @@ async fn dispatch_add_to_queue_appends_to_player_queue() {
         album: "Test Album".into(),
         duration_ms: 200_000,
         cover_path: None,
+        added_at: None,
     }];
     app.state.track_list.select(Some(0));
     app.state.sorted_track_indices = vec![0];

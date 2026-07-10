@@ -50,7 +50,6 @@ impl PlaybackState {
         let lyrics_scroll = self.lyrics_scroll;
         let radio_mode = self.radio_mode;
         let art_url = self.art_url.clone();
-        let cover_path = self.cover_path.clone();
 
         *self = from_api;
 
@@ -59,6 +58,5 @@ impl PlaybackState {
         self.lyrics_scroll = lyrics_scroll;
         self.radio_mode = radio_mode;
         self.art_url = art_url;
-        self.cover_path = cover_path;
     }
 }

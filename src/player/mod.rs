@@ -57,6 +57,7 @@ pub trait AudioPlayer: Send {
     fn user_queue(&self) -> &[QueuedTrack];
     fn remove_from_user_queue(&mut self, index: usize);
     fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
+    fn play_from_user_queue(&mut self, index: usize) -> bool;
 
     fn set_queue_tracks(&mut self, tracks: Vec<TrackSummary>, start_index: usize) {
         let uris = tracks.iter().map(|t| t.uri.clone()).collect();
@@ -448,6 +449,26 @@ impl AudioPlayer for NativePlayer {
     }
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
         self.playing_queued.take()
+    }
+    fn play_from_user_queue(&mut self, index: usize) -> bool {
+        if index >= self.user_queue.len() {
+            return false;
+        }
+        let track = self.user_queue.remove(index);
+        match SpotifyUri::from_uri(&track.uri) {
+            Ok(spotify_uri) => {
+                info!("Playing from user queue: {}", track.uri);
+                self.player.stop();
+                self.player.load(spotify_uri, true, 0);
+                self.is_playing = true;
+                self.playing_queued = Some(track);
+                true
+            }
+            Err(e) => {
+                error!("Invalid URI in user queue: {e}");
+                false
+            }
+        }
     }
 
     fn play(&mut self) {

@@ -72,6 +72,7 @@ impl App {
             self.state.playback.is_playing = true;
 
             self.state.playback.art_url = None;
+            self.state.playback.cover_path = qt.cover_path.as_ref().map(|p| p.to_string_lossy().into_owned());
 
             self.current_track_uri = qt.uri;
             self.on_track_started();
@@ -85,10 +86,14 @@ impl App {
                     self.state.playback.artist = track.artist.clone();
                     self.state.playback.album = track.album.clone();
 
-                    self.state.playback.art_url = track.cover_path.clone();
+                    if self.local_active {
+                        self.state.playback.cover_path = track.cover_path.clone();
+                    } else {
+                        self.state.playback.art_url = track.cover_path.clone();
+                    }
                     self.debug_overlay.log(
                         crate::utils::debug_overlay::LogLevel::Info,
-                        format!("Loading cover from: {:?}", self.state.playback.art_url),
+                        format!("Loading cover from: {:?}", self.state.playback.cover_path),
                     );
 
                     self.state.playback.duration_ms = track.duration_ms;

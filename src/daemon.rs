@@ -331,7 +331,7 @@ async fn load_liked(
     let mut offset = 0u32;
 
     loop {
-        let (batch, total) = spotify.fetch_liked_tracks(offset).await?;
+        let (batch, total) = spotify.fetch_liked_tracks(offset, false).await?;
         let n = batch.len();
         if n == 0 {
             break;

@@ -255,6 +255,20 @@ pub struct Theme {
 
     #[serde(with = "color_serde")]
     pub status_bar: Color,
+
+    #[serde(default = "default_highlight_symbol")]
+    pub highlight_symbol: String,
+
+    #[serde(default = "default_options_panel_symbol")]
+    pub options_panel_symbol: String,
+}
+
+fn default_highlight_symbol() -> String {
+    "> ".to_string()
+}
+
+fn default_options_panel_symbol() -> String {
+    "▶ ".to_string()
 }
 
 fn default_true() -> bool {
@@ -364,6 +378,8 @@ impl Default for Theme {
             background: Color::Rgb(20, 20, 20),
             text_secondary: Color::Gray,
             status_bar: Color::Rgb(30, 30, 30),
+            highlight_symbol: default_highlight_symbol(),
+            options_panel_symbol: default_options_panel_symbol(),
         }
     }
 }

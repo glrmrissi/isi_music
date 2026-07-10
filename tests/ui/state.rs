@@ -151,7 +151,8 @@ fn sort_tracks_cycles() {
     assert_eq!(Title.next(), Artist);
     assert_eq!(Artist.next(), Album);
     assert_eq!(Album.next(), Duration);
-    assert_eq!(Duration.next(), Default);
+    assert_eq!(Duration.next(), DateAdded);
+    assert_eq!(DateAdded.next(), Default);
 }
 
 #[test]
@@ -162,6 +163,7 @@ fn sort_tracks_labels() {
     assert_eq!(Artist.label(), "Artist");
     assert_eq!(Album.label(), "Album");
     assert_eq!(Duration.label(), "Duration");
+    assert_eq!(DateAdded.label(), "Date Added");
 }
 
 #[test]

@@ -393,6 +393,27 @@ impl AudioPlayer for LocalPlayer {
         self.playing_queued.take()
     }
 
+    fn play_from_user_queue(&mut self, index: usize) -> bool {
+        if index >= self.user_queue.len() {
+            return false;
+        }
+        let track = self.user_queue.remove(index);
+        let path = LocalTrack::uri_to_path(&track.uri);
+        let lt = LocalTrack {
+            path,
+            uri: track.uri.clone(),
+            name: track.name.clone(),
+            artist: track.artist.clone(),
+            album: String::new(),
+            duration_ms: track.duration_ms,
+            cover_path: track.cover_path.clone(),
+        };
+        let idx = self.queue.len();
+        self.queue.push(lt);
+        self.playing_queued = Some(track);
+        self.try_load_track(idx)
+    }
+
     fn play(&mut self) {
         self.sink.play();
         self.is_playing = true;

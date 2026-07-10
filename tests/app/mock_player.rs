@@ -133,6 +133,15 @@ impl AudioPlayer for MockPlayer {
     fn take_playing_queued(&mut self) -> Option<QueuedTrack> {
         self.playing_queued.take()
     }
+    fn play_from_user_queue(&mut self, index: usize) -> bool {
+        if index < self.user_queue.len() {
+            let track = self.user_queue.remove(index);
+            self.playing_queued = Some(track);
+            true
+        } else {
+            false
+        }
+    }
     fn current_index(&self) -> Option<usize> {
         self.current_index
     }

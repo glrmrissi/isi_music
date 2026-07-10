@@ -139,7 +139,9 @@ impl Ui {
     }
 
     pub fn render_main_area_logic(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        if state.add_to_playlist_mode {
+        if state.delete_playlist_confirm {
+            self.render_delete_playlist_confirm(frame, state, area);
+        } else if state.add_to_playlist_mode {
             self.render_add_to_playlist(frame, state, area);
         } else if state.search_results.is_some() {
             self.render_search_panels(frame, state, area);
@@ -172,10 +174,11 @@ impl Ui {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let art_height = lines.len() as u16;
         if inner.width < 5 || inner.height < 1 {
             return;
         }
+
+        let art_height = lines.len() as u16;
 
         let vertical_start = if inner.height > art_height {
             (inner.height - art_height) / 2
@@ -189,7 +192,10 @@ impl Ui {
                 break;
             }
 
-            let line_width = line.chars().count() as u16;
+            let line_width: u16 = line
+                .chars()
+                .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as u16)
+                .sum();
             let horizontal_start = if inner.width > line_width {
                 (inner.width - line_width) / 2
             } else {
@@ -198,13 +204,17 @@ impl Ui {
 
             let mut x = inner.x + horizontal_start;
             for ch in line.chars() {
-                if x >= inner.x + inner.width {
+                let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+                if w == 0 {
+                    continue;
+                }
+                if x + w > inner.x + inner.width || y >= inner.y + inner.height {
                     break;
                 }
                 if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
                     cell.set_char(ch).set_fg(self.theme.accent_color);
                 }
-                x = x.saturating_add(1);
+                x += w;
             }
         }
     }

@@ -1,5 +1,5 @@
 use super::*;
-use ratatui::layout::Constraint;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 #[test]
 fn default_theme_has_correct_colors() {
@@ -204,4 +204,346 @@ fn color_to_string_roundtrip() {
 #[test]
 fn theme_default_show_ascii_art() {
     assert!(default_true());
+}
+
+fn print_node(node: &LayoutNode, depth: usize) {
+    let indent = "  ".repeat(depth);
+    println!("{}node: widget={:?} dir={:?} constraints={:?} children={}",
+        indent, node.widget, node.direction,
+        node.constraints.as_ref().map(|v| v.len()).unwrap_or(0),
+        node.children.as_ref().map(|v| v.len()).unwrap_or(0));
+    if let Some(children) = &node.children {
+        for child in children {
+            print_node(child, depth + 1);
+        }
+    }
+}
+
+fn collect_areas(node: &LayoutNode, area: Rect, areas: &mut Vec<(Option<UiWidget>, Rect)>) {
+    if let Some(widget) = &node.widget {
+        areas.push((Some(widget.clone()), area));
+        return;
+    }
+    if let (Some(dir), Some(raw_constraints), Some(children)) =
+        (node.direction, &node.constraints, &node.children)
+    {
+        if children.is_empty() {
+            return;
+        }
+        let parsed: Vec<Constraint> = raw_constraints.iter().map(|&c| c.into()).collect();
+        let chunks = Layout::default()
+            .direction(Direction::from(dir))
+            .constraints(parsed)
+            .split(area);
+        for (i, child) in children.iter().enumerate() {
+            if let Some(chunk) = chunks.get(i) {
+                collect_areas(child, *chunk, areas);
+            }
+        }
+    }
+}
+
+fn rects_overlap(a: &Rect, b: &Rect) -> bool {
+    a.x < b.x + b.width
+        && a.x + a.width > b.x
+        && a.y < b.y + b.height
+        && a.y + a.height > b.y
+}
+
+#[test]
+fn parse_user_theme_toml_nested_arrays() {
+    let toml_str = r##"
+border_active = "#8ec07c"
+border_inactive = "#504945"
+highlight_bg = "#3c3836"
+text_primary = "#ebdbb2"
+accent_color = "#fe8019"
+background = "#282828"
+text_secondary = "#a89984"
+status_bar = "#1d2021"
+show_ascii_art = true
+
+[layout_tree]
+direction = "vertical"
+[[layout_tree.constraints]]
+length = 3
+[[layout_tree.constraints]]
+fill = 1
+[[layout_tree.constraints]]
+length = 1
+[[layout_tree.constraints]]
+length = 1
+[[layout_tree.children]]
+widget = "header"
+[[layout_tree.children]]
+direction = "horizontal"
+[[layout_tree.children.constraints]]
+percentage = 12
+[[layout_tree.children.constraints]]
+fill = 1
+[[layout_tree.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.constraints]]
+length = 7
+[[layout_tree.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children]]
+widget = "library"
+[[layout_tree.children.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.children.constraints]]
+fill = 2
+[[layout_tree.children.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children.children]]
+widget = "playlists"
+[[layout_tree.children.children.children.children]]
+widget = "ascii_art"
+[[layout_tree.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children]]
+direction = "horizontal"
+[[layout_tree.children.children.children.constraints]]
+fill = 6
+[[layout_tree.children.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children.children]]
+widget = "main_content"
+[[layout_tree.children.children.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.children.children.constraints]]
+fill = 6
+[[layout_tree.children.children.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children.children.children]]
+widget = "queue"
+[[layout_tree.children.children.children.children.children]]
+widget = "lyrics"
+[[layout_tree.children]]
+direction = "horizontal"
+[[layout_tree.children.constraints]]
+percentage = 30
+[[layout_tree.children.constraints]]
+fill = 1
+[[layout_tree.children.children]]
+widget = "marquee"
+[[layout_tree.children.children]]
+widget = "progress"
+[[layout_tree.children]]
+widget = "help"
+    "##;
+
+    let result: Result<Theme, _> = toml::from_str(toml_str);
+    match &result {
+        Ok(theme) => {
+            println!("PARSE OK");
+            let lt = &theme.layout_tree;
+            println!("direction: {:?}", lt.direction);
+            println!("constraints: {:?}", lt.constraints);
+            println!("children count: {:?}", lt.children.as_ref().map(|c| c.len()));
+            print_node(lt, 0);
+        }
+        Err(e) => {
+            println!("PARSE ERROR: {}", e);
+        }
+    }
+    let theme = result.expect("Failed to parse user theme TOML");
+
+    let lt = &theme.layout_tree;
+    assert_eq!(lt.direction, Some(SerializableDirection::Vertical));
+    let constraints = lt.constraints.as_ref().unwrap();
+    assert_eq!(constraints.len(), 4);
+    assert_eq!(constraints[0], SerializableConstraint::Length(3));
+    assert_eq!(constraints[1], SerializableConstraint::Fill(1));
+    assert_eq!(constraints[2], SerializableConstraint::Length(1));
+    assert_eq!(constraints[3], SerializableConstraint::Length(1));
+
+    let children = lt.children.as_ref().unwrap();
+    assert_eq!(children.len(), 4);
+
+    assert_eq!(children[0].widget, Some(UiWidget::Header));
+    assert_eq!(children[3].widget, Some(UiWidget::Help));
+
+    let middle = &children[1];
+    assert_eq!(middle.direction, Some(SerializableDirection::Horizontal));
+    let middle_constraints = middle.constraints.as_ref().unwrap();
+    assert_eq!(middle_constraints.len(), 2);
+    assert_eq!(middle_constraints[0], SerializableConstraint::Percentage(12));
+    assert_eq!(middle_constraints[1], SerializableConstraint::Fill(1));
+
+    let middle_children = middle.children.as_ref().unwrap();
+    assert_eq!(middle_children.len(), 2);
+
+    let sidebar = &middle_children[0];
+    assert_eq!(sidebar.direction, Some(SerializableDirection::Vertical));
+    let sidebar_constraints = sidebar.constraints.as_ref().unwrap();
+    assert_eq!(sidebar_constraints.len(), 2);
+    assert_eq!(sidebar_constraints[0], SerializableConstraint::Length(7));
+    let sidebar_children = sidebar.children.as_ref().unwrap();
+    assert_eq!(sidebar_children.len(), 2);
+    assert_eq!(sidebar_children[0].widget, Some(UiWidget::Library));
+
+    let content = &middle_children[1];
+    assert_eq!(content.direction, Some(SerializableDirection::Vertical));
+    let content_children = content.children.as_ref().unwrap();
+    assert_eq!(content_children.len(), 1);
+    let content_horizontal = &content_children[0];
+    assert_eq!(content_horizontal.direction, Some(SerializableDirection::Horizontal));
+    let ch_children = content_horizontal.children.as_ref().unwrap();
+    assert_eq!(ch_children.len(), 2);
+    assert_eq!(ch_children[0].widget, Some(UiWidget::MainContent));
+}
+
+#[test]
+fn user_theme_layout_areas_do_not_overlap() {
+    let toml_str = r##"
+border_active = "#8ec07c"
+border_inactive = "#504945"
+highlight_bg = "#3c3836"
+text_primary = "#ebdbb2"
+accent_color = "#fe8019"
+background = "#282828"
+text_secondary = "#a89984"
+status_bar = "#1d2021"
+show_ascii_art = true
+
+[layout_tree]
+direction = "vertical"
+[[layout_tree.constraints]]
+length = 3
+[[layout_tree.constraints]]
+fill = 1
+[[layout_tree.constraints]]
+length = 1
+[[layout_tree.constraints]]
+length = 1
+[[layout_tree.children]]
+widget = "header"
+[[layout_tree.children]]
+direction = "horizontal"
+[[layout_tree.children.constraints]]
+percentage = 12
+[[layout_tree.children.constraints]]
+fill = 1
+[[layout_tree.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.constraints]]
+length = 7
+[[layout_tree.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children]]
+widget = "library"
+[[layout_tree.children.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.children.constraints]]
+fill = 2
+[[layout_tree.children.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children.children]]
+widget = "playlists"
+[[layout_tree.children.children.children.children]]
+widget = "ascii_art"
+[[layout_tree.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children]]
+direction = "horizontal"
+[[layout_tree.children.children.children.constraints]]
+fill = 6
+[[layout_tree.children.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children.children]]
+widget = "main_content"
+[[layout_tree.children.children.children.children]]
+direction = "vertical"
+[[layout_tree.children.children.children.children.constraints]]
+fill = 6
+[[layout_tree.children.children.children.children.constraints]]
+fill = 1
+[[layout_tree.children.children.children.children.children]]
+widget = "queue"
+[[layout_tree.children.children.children.children.children]]
+widget = "lyrics"
+[[layout_tree.children]]
+direction = "horizontal"
+[[layout_tree.children.constraints]]
+percentage = 30
+[[layout_tree.children.constraints]]
+fill = 1
+[[layout_tree.children.children]]
+widget = "marquee"
+[[layout_tree.children.children]]
+widget = "progress"
+[[layout_tree.children]]
+widget = "help"
+    "##;
+
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+
+    let test_area = Rect::new(1, 1, 120, 38);
+    let mut areas: Vec<(Option<UiWidget>, Rect)> = Vec::new();
+    collect_areas(&theme.layout_tree, test_area, &mut areas);
+
+    println!("Widget areas for {}x{} terminal:", test_area.width, test_area.height);
+    for (widget, area) in &areas {
+        println!("  {:?}: ({}, {}, {}, {})", widget, area.x, area.y, area.width, area.height);
+    }
+
+    for i in 0..areas.len() {
+        for j in (i + 1)..areas.len() {
+            if rects_overlap(&areas[i].1, &areas[j].1) {
+                panic!(
+                    "OVERLAP: {:?} at ({},{},{},{}) overlaps with {:?} at ({},{},{},{})",
+                    areas[i].0, areas[i].1.x, areas[i].1.y, areas[i].1.width, areas[i].1.height,
+                    areas[j].0, areas[j].1.x, areas[j].1.y, areas[j].1.width, areas[j].1.height
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn default_highlight_symbols() {
+    let t = Theme::default();
+    assert_eq!(t.highlight_symbol, "> ");
+    assert_eq!(t.options_panel_symbol, "▶ ");
+}
+
+#[test]
+fn highlight_symbols_roundtrip() {
+    let toml_str = r#"
+border_active = "red"
+border_inactive = "gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+background = "rgb(20,20,20)"
+text_secondary = "gray"
+status_bar = "rgb(30,30,30)"
+highlight_symbol = "→ "
+options_panel_symbol = "◆ "
+"#;
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+    assert_eq!(theme.highlight_symbol, "→ ");
+    assert_eq!(theme.options_panel_symbol, "◆ ");
+}
+
+#[test]
+fn highlight_symbols_omit_uses_defaults() {
+    let toml_str = r#"
+border_active = "red"
+border_inactive = "gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+background = "rgb(20,20,20)"
+text_secondary = "gray"
+status_bar = "rgb(30,30,30)"
+"#;
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+    assert_eq!(theme.highlight_symbol, "> ");
+    assert_eq!(theme.options_panel_symbol, "▶ ");
 }

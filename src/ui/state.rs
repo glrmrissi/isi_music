@@ -79,6 +79,7 @@ pub enum TrackSortBy {
     Artist,
     Album,
     Duration,
+    DateAdded,
 }
 
 impl TrackSortBy {
@@ -88,7 +89,8 @@ impl TrackSortBy {
             TrackSortBy::Title => TrackSortBy::Artist,
             TrackSortBy::Artist => TrackSortBy::Album,
             TrackSortBy::Album => TrackSortBy::Duration,
-            TrackSortBy::Duration => TrackSortBy::Default,
+            TrackSortBy::Duration => TrackSortBy::DateAdded,
+            TrackSortBy::DateAdded => TrackSortBy::Default,
         }
     }
 
@@ -99,6 +101,7 @@ impl TrackSortBy {
             TrackSortBy::Artist => "Artist",
             TrackSortBy::Album => "Album",
             TrackSortBy::Duration => "Duration",
+            TrackSortBy::DateAdded => "Date Added",
         }
     }
 }
@@ -118,6 +121,7 @@ pub struct UiState {
     pub tracks_offset: u32,
     pub tracks_total: u32,
     pub tracks_loading: bool,
+    pub tracks_cursor: Option<String>,
     pub albums: Vec<crate::spotify::AlbumSummary>,
     pub album_list: ListState,
     pub albums_offset: u32,
@@ -160,6 +164,9 @@ pub struct UiState {
     pub add_to_playlist_list: ListState,
     pub command_mode: bool,
     pub command_buffer: String,
+    pub loading: bool,
+    pub delete_playlist_confirm: bool,
+    pub delete_playlist_target: Option<String>,
 }
 
 impl UiState {
@@ -181,6 +188,7 @@ impl UiState {
             tracks_offset: 0,
             tracks_total: 0,
             tracks_loading: false,
+            tracks_cursor: None,
             albums: Vec::new(),
             album_list: ListState::default(),
             albums_offset: 0,
@@ -223,6 +231,9 @@ impl UiState {
             add_to_playlist_list: ListState::default(),
             command_mode: false,
             command_buffer: String::new(),
+            loading: false,
+            delete_playlist_confirm: false,
+            delete_playlist_target: None,
         }
     }
 
@@ -353,7 +364,9 @@ impl UiState {
 
                 self.sorted_track_indices = (0..self.tracks.len()).collect();
 
-                if self.track_sort_by != TrackSortBy::Default {
+                let is_liked_songs = self.active_playlist_id.as_deref() == Some("liked_songs");
+
+                if self.track_sort_by != TrackSortBy::Default || is_liked_songs {
                     self.sorted_track_indices.sort_by(|&a, &b| {
                         let track_a = &self.tracks[a];
                         let track_b = &self.tracks[b];
@@ -363,7 +376,14 @@ impl UiState {
                             TrackSortBy::Artist => track_a.artist.cmp(&track_b.artist),
                             TrackSortBy::Album => track_a.album.cmp(&track_b.album),
                             TrackSortBy::Duration => track_a.duration_ms.cmp(&track_b.duration_ms),
-                            TrackSortBy::Default => std::cmp::Ordering::Equal,
+                            TrackSortBy::DateAdded | TrackSortBy::Default => {
+                                match (&track_a.added_at, &track_b.added_at) {
+                                    (Some(a), Some(b)) => b.cmp(a),
+                                    (Some(_), None) => std::cmp::Ordering::Less,
+                                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                                    (None, None) => std::cmp::Ordering::Equal,
+                                }
+                            }
                         }
                     });
                 }
