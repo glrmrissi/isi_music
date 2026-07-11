@@ -14,13 +14,13 @@ pub struct TokenManager {
 }
 
 impl TokenManager {
-    pub fn new(client_id: String) -> Self {
+    pub fn new(client_id: String, http: reqwest::Client) -> Self {
         Self {
             access_token: RwLock::new(String::new()),
             refresh_token: RwLock::new(None),
             expires_at: RwLock::new(None),
             client_id,
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
