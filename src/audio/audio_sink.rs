@@ -323,16 +323,10 @@ impl Sink for AnalyzerSink {
     }
 
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
-        let samples = if let AudioPacket::Samples(ref s) = packet {
-            Some(s.clone())
-        } else {
-            None
-        };
-        let result = self.inner.write(packet, converter);
-        if let Some(samples) = samples {
-            self.push_stereo_f64(&samples);
+        if let AudioPacket::Samples(ref s) = packet {
+            self.push_stereo_f64(s);
         }
-        result
+        self.inner.write(packet, converter)
     }
 }
 
