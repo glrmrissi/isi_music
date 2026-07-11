@@ -10,8 +10,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{Receiver, channel},
 };
-use std::thread;
 use std::time::Duration;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::warn;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
@@ -386,6 +386,8 @@ impl Default for Theme {
 
 pub struct ThemeWatcher {
     rx: Receiver<Theme>,
+    #[allow(dead_code)]
+    _watcher: RecommendedWatcher,
     stop: Arc<AtomicBool>,
 }
 
@@ -412,8 +414,10 @@ impl std::ops::Deref for ThemeWatcher {
 impl ThemeWatcher {
     pub fn noop() -> Self {
         let (_, rx) = std::sync::mpsc::channel();
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
         Self {
             rx,
+            _watcher: watcher,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -461,33 +465,47 @@ impl Theme {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
 
-        thread::spawn(move || {
-            let mut last_content = fs::read_to_string(&path).unwrap_or_default();
-
-            loop {
-                if stop_clone.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                if let Ok(current_content) = fs::read_to_string(&path) {
-                    if current_content != last_content {
-                        thread::sleep(Duration::from_millis(50));
-
-                        if let Ok(new_theme) = toml::from_str::<Theme>(&current_content) {
-                            if tx.send(new_theme).is_ok() {
-                                last_content = current_content;
-                            }
-                        } else {
-                            warn!("Failed to parse theme.toml on reload");
-                        }
-                    }
-                }
-
-                thread::sleep(Duration::from_millis(500));
+        let watch_path = path.clone();
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
+            if stop_clone.load(Ordering::Relaxed) {
+                return;
             }
-        });
+            let Ok(event) = res else { return };
+            let relevant = matches!(
+                event.kind,
+                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+            );
+            if !relevant {
+                return;
+            }
+            let dominated = event.paths.iter().any(|p| {
+                p.to_string_lossy().contains("theme.toml")
+            });
+            if !dominated {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            if let Ok(current_content) = fs::read_to_string(&watch_path) {
+                if let Ok(new_theme) = toml::from_str::<Theme>(&current_content) {
+                    let _ = tx.send(new_theme);
+                } else {
+                    warn!("Error on theme.toml");
+                }
+            }
+        })
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        Ok(ThemeWatcher { rx, stop })
+        if let Some(parent) = path.parent() {
+            watcher
+                .watch(parent.as_ref(), RecursiveMode::NonRecursive)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        }
+
+        Ok(ThemeWatcher {
+            rx,
+            _watcher: watcher,
+            stop,
+        })
     }
 
     pub fn load_ascii_art(&self) -> Option<Vec<String>> {
