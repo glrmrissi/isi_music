@@ -72,6 +72,16 @@ pub struct App {
     discord_last_title: String,
     discord_last_playing: bool,
     discord_pending_since: Option<Instant>,
+    #[cfg(feature = "mpris")]
+    mpris_last_title: String,
+    #[cfg(feature = "mpris")]
+    mpris_last_artist: String,
+    #[cfg(feature = "mpris")]
+    mpris_last_album: String,
+    #[cfg(feature = "mpris")]
+    mpris_last_playing: bool,
+    #[cfg(feature = "mpris")]
+    mpris_last_art: Option<String>,
     band_energies: Option<Arc<Mutex<Vec<f32>>>>,
     art_url: Option<String>,
     session_reconnecting: bool,
@@ -240,6 +250,16 @@ impl App {
             discord_last_title: String::new(),
             discord_last_playing: false,
             discord_pending_since: None,
+            #[cfg(feature = "mpris")]
+            mpris_last_title: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_artist: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_album: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_playing: false,
+            #[cfg(feature = "mpris")]
+            mpris_last_art: None,
             band_energies: None,
             art_url: initial_art,
             session_reconnecting: false,
@@ -315,6 +335,16 @@ impl App {
             discord_last_title: String::new(),
             discord_last_playing: false,
             discord_pending_since: None,
+            #[cfg(feature = "mpris")]
+            mpris_last_title: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_artist: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_album: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_playing: false,
+            #[cfg(feature = "mpris")]
+            mpris_last_art: None,
             band_energies: None,
             art_url: None,
             session_reconnecting: false,
@@ -933,21 +963,43 @@ impl App {
             #[cfg(feature = "mpris")]
             if let Some(mpris) = &mut self.mpris {
                 let pb = &self.state.playback;
-                let _art_url = self.state.art_url.clone();
 
-                mpris.update(MprisState {
-                    title: pb.title.clone(),
-                    artist: pb.artist.clone(),
-                    album: pb.album.clone(),
-                    duration_us: pb.duration_ms as i64 * 1000,
-                    position_us: pb.progress_ms as i64 * 1000,
-                    volume: pb.volume as f64 / 100.0,
-                    is_playing: pb.is_playing,
-                    shuffle: pb.shuffle,
-                    repeat_track: pb.repeat == RepeatState::Track,
-                    repeat_queue: pb.repeat == RepeatState::Context,
-                    art_url: pb.art_url.clone(),
-                });
+                let changed = pb.title != self.mpris_last_title
+                    || pb.artist != self.mpris_last_artist
+                    || pb.album != self.mpris_last_album
+                    || pb.is_playing != self.mpris_last_playing
+                    || pb.art_url != self.mpris_last_art;
+
+                if changed {
+                    self.mpris_last_title = pb.title.clone();
+                    self.mpris_last_artist = pb.artist.clone();
+                    self.mpris_last_album = pb.album.clone();
+                    self.mpris_last_playing = pb.is_playing;
+                    self.mpris_last_art = pb.art_url.clone();
+
+                    mpris.update(MprisState {
+                        title: pb.title.clone(),
+                        artist: pb.artist.clone(),
+                        album: pb.album.clone(),
+                        duration_us: pb.duration_ms as i64 * 1000,
+                        position_us: pb.progress_ms as i64 * 1000,
+                        volume: pb.volume as f64 / 100.0,
+                        is_playing: pb.is_playing,
+                        shuffle: pb.shuffle,
+                        repeat_track: pb.repeat == RepeatState::Track,
+                        repeat_queue: pb.repeat == RepeatState::Context,
+                        art_url: pb.art_url.clone(),
+                    });
+                } else {
+                    // Update position without cloning strings
+                    let mut state = mpris.state.lock().unwrap();
+                    state.position_us = pb.progress_ms as i64 * 1000;
+                    state.volume = pb.volume as f64 / 100.0;
+                    state.is_playing = pb.is_playing;
+                    state.shuffle = pb.shuffle;
+                    state.repeat_track = pb.repeat == RepeatState::Track;
+                    state.repeat_queue = pb.repeat == RepeatState::Context;
+                }
 
                 let cmds: Vec<MprisCmd> = {
                     let mut v = Vec::new();
@@ -1013,17 +1065,25 @@ impl App {
             if let Some(rx) = &mut self.album_art_pending {
                 if let Ok(bytes) = rx.try_recv() {
                     self.album_art_pending = None;
-                    match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            let resized = img.thumbnail(256, 256);
-                            let image_state = self.picker.new_resize_protocol(resized);
+                    let decoded = tokio::task::spawn_blocking(move || {
+                        let img = image::load_from_memory(&bytes)?;
+                        Ok::<_, anyhow::Error>(img.thumbnail(256, 256))
+                    })
+                    .await;
+                    match decoded {
+                        Ok(Ok(img)) => {
+                            let image_state = self.picker.new_resize_protocol(img);
                             self.state.album_art = Some(AlbumArtData {
                                 image_state: Some(image_state),
                             });
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             self.debug_overlay
                                 .log(LogLevel::Error, format!("Failed to decode album art: {e}"));
+                        }
+                        Err(e) => {
+                            self.debug_overlay
+                                .log(LogLevel::Error, format!("Album art task failed: {e}"));
                         }
                     }
                 }
@@ -1150,7 +1210,7 @@ impl App {
             #[cfg(target_os = "linux")]
             {
                 self.trim_counter += 1;
-                if self.trim_counter % 50 == 0 {
+                if self.trim_counter % 300 == 0 {
                     unsafe {
                         libc::malloc_trim(0);
                     }
