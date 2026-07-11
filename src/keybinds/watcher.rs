@@ -1,4 +1,5 @@
 use super::{Keybinds, keybinds_path};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -8,6 +9,8 @@ use std::time::Duration;
 
 pub struct KeybindsWatcher {
     pub rx: mpsc::Receiver<Keybinds>,
+    #[allow(dead_code)]
+    _watcher: RecommendedWatcher,
     #[allow(dead_code)]
     stop: Arc<AtomicBool>,
 }
@@ -19,26 +22,41 @@ impl KeybindsWatcher {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
 
-        std::thread::spawn(move || {
-            let mut last_content = std::fs::read_to_string(&path).unwrap_or_default();
-            loop {
-                if stop_clone.load(Ordering::Relaxed) {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(500));
-                if let Ok(current_content) = std::fs::read_to_string(&path) {
-                    if current_content != last_content {
-                        std::thread::sleep(Duration::from_millis(50));
-                        let new = Keybinds::load();
-                        if tx.send(new).is_ok() {
-                            last_content = current_content;
-                        }
-                    }
-                }
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, _>| {
+            if stop_clone.load(Ordering::Relaxed) {
+                return;
             }
-        });
+            let Ok(event) = res else { return };
+            let relevant = matches!(
+                event.kind,
+                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+            );
+            if !relevant {
+                return;
+            }
+            let dominated = event.paths.iter().any(|p| {
+                p.to_string_lossy().contains("keybinds.toml")
+            });
+            if !dominated {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            let new = Keybinds::load();
+            let _ = tx.send(new);
+        })
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        Ok(KeybindsWatcher { rx, stop })
+        if let Some(parent) = path.parent() {
+            watcher
+                .watch(parent.as_ref(), RecursiveMode::NonRecursive)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        }
+
+        Ok(KeybindsWatcher {
+            rx,
+            _watcher: watcher,
+            stop,
+        })
     }
 
     #[allow(dead_code)]
@@ -51,8 +69,10 @@ impl KeybindsWatcher {
 impl KeybindsWatcher {
     pub fn noop() -> Self {
         let (_, rx) = std::sync::mpsc::channel();
-        Self {
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        KeybindsWatcher {
             rx,
+            _watcher: watcher,
             stop: Arc::new(AtomicBool::new(false)),
         }
     }
