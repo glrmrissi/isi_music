@@ -106,15 +106,34 @@ ringbuf = "0.5.0"
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 console   = "0.15"
 
+# Filesystem watcher (theme/keybinds hot-reload)
+notify = "7"
+
 [dev-dependencies]
 tempfile = "3"
 
+[profile.dev]
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[profile.release.package."*"]
+opt-level = 3
+
+[profile.release-dev]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+strip = false
+debug = true
 
 [features]
 mpris = ["mpris-server"]
