@@ -129,7 +129,9 @@ impl App {
             let db_path = crate::config::get_local_db_path();
             let conn = match rusqlite::Connection::open(&db_path) {
                 Ok(c) => {
-                    let _ = c.execute_batch("PRAGMA journal_mode=WAL;");
+                    let _ = c.execute_batch(
+                        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+                    );
                     Some(c)
                 }
                 Err(_) => None,
@@ -150,12 +152,14 @@ impl App {
                 );
             }
 
-            fn scan_dir(
+            fn scan_dir<'a>(
                 dir: &std::path::Path,
                 depth: usize,
                 nodes: &mut Vec<LocalNode>,
                 extensions: &[&str],
-                conn: &Option<rusqlite::Connection>,
+                conn: &'a Option<rusqlite::Connection>,
+                select_stmt: &mut Option<rusqlite::Statement<'a>>,
+                insert_stmt: &mut Option<rusqlite::Statement<'a>>,
             ) {
                 let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
                 let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -193,7 +197,15 @@ impl App {
                         children_count: 0,
                     });
                     let before = nodes.len();
-                    scan_dir(&subdir, depth + 1, nodes, extensions, conn);
+                    scan_dir(
+                        &subdir,
+                        depth + 1,
+                        nodes,
+                        extensions,
+                        conn,
+                        select_stmt,
+                        insert_stmt,
+                    );
                     let added = nodes.len() - before;
                     if let LocalNode::Folder { children_count, .. } = &mut nodes[folder_idx] {
                         *children_count = added;
@@ -209,10 +221,12 @@ impl App {
 
                     let mut track_data: Option<crate::spotify::TrackSummary> = None;
                     if let Some(c) = conn {
-                        let stmt = c
-                            .prepare("SELECT title, artist, album, duration_ms, cover_path FROM tracks WHERE path = ?1")
-                            .ok();
-                        if let Some(mut s) = stmt {
+                        if select_stmt.is_none() {
+                            *select_stmt = c
+                                .prepare("SELECT title, artist, album, duration_ms, cover_path FROM tracks WHERE path = ?1")
+                                .ok();
+                        }
+                        if let Some(s) = select_stmt.as_mut() {
                             track_data = s
                                 .query_row([path_str], |row| {
                                     Ok(crate::spotify::TrackSummary {
@@ -262,18 +276,24 @@ impl App {
                         };
 
                         if let Some(c) = conn {
-                            let _ = c.execute(
-                                "INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, cover_path)
-                                VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                                rusqlite::params![
+                            if insert_stmt.is_none() {
+                                *insert_stmt = c
+                                    .prepare(
+                                        "INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, cover_path)
+                                        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                    )
+                                    .ok();
+                            }
+                            if let Some(s) = insert_stmt.as_mut() {
+                                let _ = s.execute(rusqlite::params![
                                     path_str,
                                     crate::app::metadata::sanitize_control_chars(&name),
                                     crate::app::metadata::sanitize_control_chars(&artist),
                                     crate::app::metadata::sanitize_control_chars(&album),
                                     duration_ms as i64,
                                     cover_path
-                                ],
-                            );
+                                ]);
+                            }
                         }
 
                         crate::spotify::TrackSummary {
@@ -291,7 +311,25 @@ impl App {
                 }
             }
 
-            scan_dir(&dir, 0, &mut nodes, &extensions, &conn);
+            if let Some(ref c) = conn {
+                let _ = c.execute_batch("BEGIN TRANSACTION;");
+            }
+            let mut select_stmt: Option<rusqlite::Statement> = None;
+            let mut insert_stmt: Option<rusqlite::Statement> = None;
+            scan_dir(
+                &dir,
+                0,
+                &mut nodes,
+                &extensions,
+                &conn,
+                &mut select_stmt,
+                &mut insert_stmt,
+            );
+            drop(select_stmt);
+            drop(insert_stmt);
+            if let Some(ref c) = conn {
+                let _ = c.execute_batch("COMMIT;");
+            }
             let _ = tx.send(nodes);
         });
     }
