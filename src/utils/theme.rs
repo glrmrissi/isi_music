@@ -439,10 +439,20 @@ impl Theme {
             }
             return default_theme;
         }
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|content| toml::from_str(&content).ok())
-            .unwrap_or_default()
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to read theme file: {}", e);
+                return Self::default();
+            }
+        };
+        match toml::from_str::<Theme>(&content) {
+            Ok(theme) => theme,
+            Err(e) => {
+                warn!("Failed to parse theme.toml: {}", e);
+                Self::default()
+            }
+        }
     }
 
     pub fn watch() -> std::io::Result<ThemeWatcher> {
@@ -468,7 +478,7 @@ impl Theme {
                                 last_content = current_content;
                             }
                         } else {
-                            warn!("Error on theme.toml");
+                            warn!("Failed to parse theme.toml on reload");
                         }
                     }
                 }

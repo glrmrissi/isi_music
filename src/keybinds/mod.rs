@@ -59,7 +59,7 @@ impl Action {
         &[
             ("play_pause", &["space"], PlayPause),
             ("next_track", &["n"], NextTrack),
-            ("prev_track", &["p"], PrevTrack),
+            ("prev_track", &["P"], PrevTrack),
             ("volume_up", &["="], VolumeUp),
             ("volume_down", &["-"], VolumeDown),
             ("seek_forward", &["right"], SeekForward),
@@ -568,7 +568,7 @@ impl KeybindsTomlOutput {
                 | Action::RemoveFromQueue
                 | Action::SortTracks
                 | Action::CopyTrackLink
-                |                 Action::AddToPlaylist
+                | Action::AddToPlaylist
                 | Action::RemoveFromPlaylist
                 | Action::DeletePlaylist
                 | Action::CommandPrompt

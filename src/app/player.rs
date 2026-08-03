@@ -4,6 +4,7 @@ use tracing::{info, warn};
 use crate::App;
 use crate::player::{AudioPlayer, NativePlayer};
 use crate::ui::{Focus, SearchPanel};
+use librespot_playback::config::Bitrate;
 
 impl App {
     pub fn on_track_started(&mut self) {
@@ -72,7 +73,10 @@ impl App {
             self.state.playback.is_playing = true;
 
             self.state.playback.art_url = None;
-            self.state.playback.cover_path = qt.cover_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+            self.state.playback.cover_path = qt
+                .cover_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned());
 
             self.current_track_uri = qt.uri;
             self.on_track_started();
@@ -345,7 +349,7 @@ impl App {
             return;
         };
 
-        match NativePlayer::new(token, false).await {
+        match NativePlayer::new(token, false, Bitrate::Bitrate320).await {
             Ok(mut p) => {
                 p.set_volume(saved_volume);
                 if !saved_queue.is_empty() {

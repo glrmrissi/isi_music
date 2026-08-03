@@ -280,11 +280,7 @@ impl AnalyzerSink {
         let shutdown = Arc::new(AtomicBool::new(false));
         Self {
             inner,
-            handle: AnalyzerHandle::spawn_with_enabled(
-                bands,
-                enabled,
-                Arc::clone(&shutdown),
-            ),
+            handle: AnalyzerHandle::spawn_with_enabled(bands, enabled, Arc::clone(&shutdown)),
             sink_factory: Some(sink_factory),
             shutdown,
         }

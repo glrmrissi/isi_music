@@ -7,9 +7,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
+use unicode_width::UnicodeWidthStr;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
 
@@ -38,6 +38,13 @@ fn pad_right(text: &str, width: usize) -> String {
     } else {
         format!("{}{}", text, " ".repeat(width - current))
     }
+}
+
+fn calculate_number_width(total: usize) -> usize {
+    if total == 0 {
+        return 1;
+    }
+    total.to_string().len()
 }
 
 impl Ui {
@@ -85,8 +92,12 @@ impl Ui {
                             let left_budget = content_w.saturating_sub(indent_w + 2 + right_w);
                             let artist_w = (left_budget / 3).min(22);
                             let name_w = left_budget.saturating_sub(artist_w + 2);
-                            let name_text = pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
-                            let artist_text = pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
+                            let name_text =
+                                pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
+                            let artist_text = pad_right(
+                                &clamp_text(&clean_artist, artist_w.max(6)),
+                                artist_w.max(6),
+                            );
                             ListItem::new(Line::from(vec![
                                 Span::raw(indent),
                                 Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
@@ -196,8 +207,10 @@ impl Ui {
                         let left_budget = content_w.saturating_sub(indent_w + 2 + right_w);
                         let artist_w = (left_budget / 3).min(28);
                         let name_w = left_budget.saturating_sub(artist_w + 2);
-                        let name_text = pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
-                        let artist_text = pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
+                        let name_text =
+                            pad_right(&clamp_text(&clean_name, name_w.max(8)), name_w.max(8));
+                        let artist_text =
+                            pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
                         ListItem::new(Line::from(vec![
                             Span::raw(indent),
                             Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
@@ -455,10 +468,7 @@ impl Ui {
 
         let content = if state.command_mode {
             Line::from(vec![
-                Span::styled(
-                    "   :",
-                    Style::default().fg(self.theme.border_active),
-                ),
+                Span::styled("   ~", Style::default().fg(self.theme.border_active)),
                 Span::styled(
                     &state.command_buffer,
                     Style::default().fg(self.theme.text_primary),
@@ -869,6 +879,9 @@ impl Ui {
 
     pub fn render_tracks(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.compact_effective {
+            let total_tracks = state.tracks.len();
+            let num_width = calculate_number_width(total_tracks);
+
             let items: Vec<ListItem> = state
                 .sorted_track_indices
                 .iter()
@@ -890,14 +903,16 @@ impl Ui {
                     };
                     let right_w = added.width() + 1 + dur.width();
                     let content_w = area.width as usize;
-                    let left_budget = content_w.saturating_sub(5 + 2 + right_w);
+                    let num_prefix_width = num_width + 2; // número + ". "
+                    let left_budget = content_w.saturating_sub(num_prefix_width + 2 + right_w);
                     let artist_w = (left_budget / 3).min(22);
                     let name_w = left_budget.saturating_sub(artist_w + 2);
                     let name_text = pad_right(&clamp_text(&t.name, name_w.max(8)), name_w.max(8));
-                    let artist_text = pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
+                    let artist_text =
+                        pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
                     Some(ListItem::new(Line::from(vec![
                         Span::styled(
-                            format!("{:>3}. ", display_idx + 1),
+                            format!("{:>width$}. ", display_idx + 1, width = num_width),
                             Style::default().fg(self.theme.border_inactive),
                         ),
                         Span::styled(name_text, style),
@@ -905,15 +920,9 @@ impl Ui {
                             format!("  {artist_text}"),
                             Style::default().fg(self.theme.border_inactive),
                         ),
-                        Span::styled(
-                            added,
-                            Style::default().fg(self.theme.border_inactive),
-                        ),
+                        Span::styled(added, Style::default().fg(self.theme.border_inactive)),
                         Span::raw(" "),
-                        Span::styled(
-                            dur,
-                            Style::default().fg(self.theme.text_secondary),
-                        ),
+                        Span::styled(dur, Style::default().fg(self.theme.text_secondary)),
                     ])))
                 })
                 .collect();
@@ -969,6 +978,8 @@ impl Ui {
             });
 
         let inner = block.inner(area);
+        let total_tracks = state.tracks.len();
+        let num_width = calculate_number_width(total_tracks);
 
         let items: Vec<ListItem> = state
             .sorted_track_indices
@@ -991,14 +1002,16 @@ impl Ui {
                 };
                 let right_w = added.width() + 1 + dur.width();
                 let content_w = inner.width as usize;
-                let left_budget = content_w.saturating_sub(5 + 2 + right_w);
+                let num_prefix_width = num_width + 2; // número + ". "
+                let left_budget = content_w.saturating_sub(num_prefix_width + 2 + right_w);
                 let artist_w = (left_budget / 3).min(28);
                 let name_w = left_budget.saturating_sub(artist_w + 2);
                 let name_text = pad_right(&clamp_text(&t.name, name_w.max(8)), name_w.max(8));
-                let artist_text = pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
+                let artist_text =
+                    pad_right(&clamp_text(&t.artist, artist_w.max(6)), artist_w.max(6));
                 Some(ListItem::new(Line::from(vec![
                     Span::styled(
-                        format!("{:>3}. ", display_idx + 1),
+                        format!("{:>width$}. ", display_idx + 1, width = num_width),
                         Style::default().fg(self.theme.border_inactive),
                     ),
                     Span::styled(name_text, style),
@@ -1006,15 +1019,9 @@ impl Ui {
                         format!("  {artist_text}"),
                         Style::default().fg(self.theme.border_inactive),
                     ),
-                    Span::styled(
-                        added,
-                        Style::default().fg(self.theme.border_inactive),
-                    ),
+                    Span::styled(added, Style::default().fg(self.theme.border_inactive)),
                     Span::raw(" "),
-                    Span::styled(
-                        dur,
-                        Style::default().fg(self.theme.text_secondary),
-                    ),
+                    Span::styled(dur, Style::default().fg(self.theme.text_secondary)),
                 ])))
             })
             .collect();
@@ -1930,8 +1937,16 @@ impl Ui {
         frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
     }
 
-    pub fn render_delete_playlist_confirm(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        let name = state.delete_playlist_target.as_deref().unwrap_or("this playlist");
+    pub fn render_delete_playlist_confirm(
+        &self,
+        frame: &mut Frame,
+        state: &mut UiState,
+        area: Rect,
+    ) {
+        let name = state
+            .delete_playlist_target
+            .as_deref()
+            .unwrap_or("this playlist");
         let title = format!(" Delete Playlist — {name}? ");
 
         let block = Block::default()

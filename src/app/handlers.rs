@@ -1,10 +1,10 @@
 // TODO: modularize this file (~1580 lines) into smaller modules
 use anyhow::Result;
+use chrono::Utc;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use chrono::Utc;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::App;
 use crate::app::FetchResult;
@@ -97,9 +97,9 @@ impl App {
                 match self.spotify.unfollow_playlist(&playlist_id).await {
                     Ok(_) => {
                         self.state.playlists.retain(|p| p.id != playlist_id);
-                        self.spotify.library_cache.delete_key_pattern(
-                            &format!("playlist:{}:%", playlist_id),
-                        );
+                        self.spotify
+                            .library_cache
+                            .delete_key_pattern(&format!("playlist:{}:%", playlist_id));
                         if self.state.active_playlist_id.as_deref() == Some(&playlist_id) {
                             self.state.active_playlist_id = None;
                             self.state.active_playlist_uri = None;
@@ -119,8 +119,7 @@ impl App {
                         self.state.status_msg = Some("Playlist deleted".to_string());
                     }
                     Err(e) => {
-                        self.state.status_msg =
-                            Some(format!("Delete failed: {e}"));
+                        self.state.status_msg = Some(format!("Delete failed: {e}"));
                     }
                 }
                 self.state.delete_playlist_confirm = false;
@@ -191,6 +190,15 @@ impl App {
             return;
         }
         match parts[0] {
+            "play" | "open" => {
+                let input = parts[1..].join(" ");
+                if let Some((content_type, id)) = self.extract_spotify_content(&input) {
+                    self.play_spotify_content(&content_type, &id).await;
+                } else {
+                    self.state.status_msg =
+                        Some("Could not extract valid Spotify ID/URI from input".to_string());
+                }
+            }
             "ap" | "addtoplaylist" => {
                 let name = parts[1..].join(" ");
                 self.add_current_track_to_playlist_by_name(&name).await;
@@ -218,14 +226,22 @@ impl App {
                 }
             }
             _ => {
-                self.state.status_msg = Some(format!("Unknown command: {}", parts[0]));
+                if let Some((content_type, id)) = self.extract_spotify_content(cmd) {
+                    self.play_spotify_content(&content_type, &id).await;
+                } else {
+                    self.state.status_msg = Some(format!("Unknown command: {}", parts[0]));
+                }
             }
         }
     }
 
     async fn add_current_track_to_playlist_by_name(&mut self, name: &str) {
         let lower = name.to_lowercase();
-        let playlist = self.state.playlists.iter().find(|p| p.name.to_lowercase().contains(&lower));
+        let playlist = self
+            .state
+            .playlists
+            .iter()
+            .find(|p| p.name.to_lowercase().contains(&lower));
         let Some(playlist) = playlist else {
             self.state.status_msg = Some(format!("No playlist found matching '{name}'"));
             return;
@@ -235,7 +251,11 @@ impl App {
             self.state.status_msg = Some("No track playing".to_string());
             return;
         }
-        match self.spotify.add_tracks_to_playlist(&playlist.id, &[uri.clone()], None).await {
+        match self
+            .spotify
+            .add_tracks_to_playlist(&playlist.id, &[uri.clone()], None)
+            .await
+        {
             Ok(_) => {
                 self.state.status_msg = Some(format!("Added to '{}'", playlist.name));
             }
@@ -267,12 +287,16 @@ impl App {
         }
 
         if let Some(playlist) = self.state.playlists.get(idx) {
-            match self.spotify.add_tracks_to_playlist(&playlist.id, &[uri.clone()], None).await {
+            match self
+                .spotify
+                .add_tracks_to_playlist(&playlist.id, &[uri.clone()], None)
+                .await
+            {
                 Ok(_) => {
                     self.state.status_msg = Some(format!("Added to '{}'", playlist.name));
-                    self.spotify.library_cache.delete_key_pattern(
-                        &format!("playlist:{}:%", playlist.id),
-                    );
+                    self.spotify
+                        .library_cache
+                        .delete_key_pattern(&format!("playlist:{}:%", playlist.id));
                 }
                 Err(e) => {
                     self.state.status_msg = Some(format!("Failed: {e}"));
@@ -369,6 +393,9 @@ impl App {
                                         "Breadcrumb off".to_string()
                                     });
                                 }
+                                4 => {
+                                    self.toggle_lastfm_scrobbling().await;
+                                }
                                 _ => {}
                             }
                         }
@@ -376,7 +403,7 @@ impl App {
                     },
                     PanelAction::ClearAllCache => {
                         let _ = panel.cache_manager.clear_all().await;
-                        self.spotify.library_cache.clear_liked_tracks_cache();
+                        self.spotify.library_cache.clear_all_library_cache();
                         panel.cache_stats = Some(panel.cache_manager.get_stats().await);
                         self.state.status_msg = Some("All caches cleared".to_string());
                     }
@@ -955,30 +982,21 @@ impl App {
 
                     if is_playlist {
                         // Get the selected track from the tracks view
-                        let track_uri = self
-                            .state
-                            .track_list
-                            .selected()
-                            .and_then(|display_idx| {
-                                let actual_idx = self
-                                    .state
-                                    .sorted_track_indices
-                                    .get(display_idx)?;
-                                self.state.tracks.get(*actual_idx).map(|t| t.uri.clone())
-                            });
+                        let track_uri = self.state.track_list.selected().and_then(|display_idx| {
+                            let actual_idx = self.state.sorted_track_indices.get(display_idx)?;
+                            self.state.tracks.get(*actual_idx).map(|t| t.uri.clone())
+                        });
 
                         let (track_uri, playlist_id) =
                             match (track_uri, &self.state.active_playlist_id.clone()) {
                                 (Some(uri), Some(pid)) => (uri, pid.clone()),
                                 _ => {
-                                    self.state.status_msg =
-                                        Some("No track selected".to_string());
+                                    self.state.status_msg = Some("No track selected".to_string());
                                     return;
                                 }
                             };
 
-                        self.state.status_msg =
-                            Some("Removing from playlist...".to_string());
+                        self.state.status_msg = Some("Removing from playlist...".to_string());
                         match self
                             .spotify
                             .remove_tracks_from_playlist(&playlist_id, &[track_uri])
@@ -996,25 +1014,20 @@ impl App {
                                         self.state.tracks.remove(actual_idx);
                                     }
                                 }
-                                self.state.tracks_total =
-                                    self.state.tracks_total.saturating_sub(1);
+                                self.state.tracks_total = self.state.tracks_total.saturating_sub(1);
                                 self.state.rebuild_sort_indices();
                                 for pl in &mut self.state.playlists {
-                                    if Some(&pl.id) == self.state.active_playlist_id.as_ref()
-                                    {
-                                        pl.total_tracks =
-                                            pl.total_tracks.saturating_sub(1);
+                                    if Some(&pl.id) == self.state.active_playlist_id.as_ref() {
+                                        pl.total_tracks = pl.total_tracks.saturating_sub(1);
                                     }
                                 }
-                                self.state.status_msg =
-                                    Some("Removed from playlist".to_string());
-                                self.spotify.library_cache.delete_key_pattern(
-                                    &format!("playlist:{}:%", playlist_id),
-                                );
+                                self.state.status_msg = Some("Removed from playlist".to_string());
+                                self.spotify
+                                    .library_cache
+                                    .delete_key_pattern(&format!("playlist:{}:%", playlist_id));
                             }
                             Err(e) => {
-                                self.state.status_msg =
-                                    Some(format!("Remove failed: {e}"));
+                                self.state.status_msg = Some(format!("Remove failed: {e}"));
                             }
                         }
                     } else if self.current_track_uri.is_empty() {
@@ -1028,16 +1041,14 @@ impl App {
                             .unwrap_or("")
                             .to_string();
                         if track_id.is_empty() {
-                            self.state.status_msg =
-                                Some("Invalid track".to_string());
+                            self.state.status_msg = Some("Invalid track".to_string());
                             return;
                         }
 
                         self.state.status_msg = Some("Checking...".to_string());
                         match self.spotify.check_track_saved(&track_id).await {
                             Ok(true) => {
-                                let Some(token) = self.spotify.get_access_token().await
-                                else {
+                                let Some(token) = self.spotify.get_access_token().await else {
                                     self.state.status_msg =
                                         Some("Unlike failed: no token".to_string());
                                     return;
@@ -1050,14 +1061,19 @@ impl App {
                                 .await
                                 {
                                     Ok(_) => {
-                                        self.state.status_msg =
-                                            Some("Unliked".to_string());
+                                        self.state.status_msg = Some("Unliked".to_string());
                                         let uri = self.current_track_uri.clone();
-                                        if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
-                                            if let Some(pos) = self.state.tracks.iter().position(|t| t.uri == uri) {
+                                        if self.state.active_playlist_id.as_deref()
+                                            == Some("liked_songs")
+                                        {
+                                            if let Some(pos) =
+                                                self.state.tracks.iter().position(|t| t.uri == uri)
+                                            {
                                                 self.state.tracks.remove(pos);
-                                                self.state.tracks_offset = self.state.tracks_offset.saturating_sub(1);
-                                                self.state.tracks_total = self.state.tracks_total.saturating_sub(1);
+                                                self.state.tracks_offset =
+                                                    self.state.tracks_offset.saturating_sub(1);
+                                                self.state.tracks_total =
+                                                    self.state.tracks_total.saturating_sub(1);
                                                 self.state.rebuild_sort_indices();
                                             }
                                         }
@@ -1067,23 +1083,18 @@ impl App {
                                         })
                                         .await
                                         .ok();
-                                        tracing::info!(
-                                            "UnlikeTrack: removed from library"
-                                        );
+                                        tracing::info!("UnlikeTrack: removed from library");
                                     }
                                     Err(e) => {
-                                        self.state.status_msg =
-                                            Some(format!("Unlike failed: {e}"));
+                                        self.state.status_msg = Some(format!("Unlike failed: {e}"));
                                     }
                                 }
                             }
                             Ok(false) => {
-                                self.state.status_msg =
-                                    Some("Track is not liked".to_string());
+                                self.state.status_msg = Some("Track is not liked".to_string());
                             }
                             Err(e) => {
-                                self.state.status_msg =
-                                    Some(format!("Check failed: {e}"));
+                                self.state.status_msg = Some(format!("Check failed: {e}"));
                             }
                         }
                     }
@@ -1109,8 +1120,7 @@ impl App {
                         self.state.delete_playlist_target = Some(name);
                     }
                 } else {
-                    self.state.status_msg =
-                        Some("Focus on Playlists tab to delete".to_string());
+                    self.state.status_msg = Some("Focus on Playlists tab to delete".to_string());
                 }
             }
             A::ToggleDebug => {
@@ -1203,9 +1213,6 @@ impl App {
                 ActiveContent::Albums => {
                     if let Some(idx) = self.state.selected_album_index() {
                         if let Some(album) = self.state.albums.get(idx) {
-                            if self.pending_fetch.is_some() {
-                                return;
-                            }
                             let id = album.id.clone();
                             let name = album.name.clone();
                             self.state.push_nav();
@@ -1217,7 +1224,10 @@ impl App {
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             self.pending_fetch = Some(rx);
                             tokio::spawn(async move {
-                                let result = spotify.fetch_album_tracks(&id, 0).await.map_err(|e| e.to_string());
+                                let result = spotify
+                                    .fetch_album_tracks(&id, 0)
+                                    .await
+                                    .map_err(|e| e.to_string());
                                 let _ = tx.send(FetchResult::AlbumTracks(result));
                             });
                         }
@@ -1226,9 +1236,6 @@ impl App {
                 ActiveContent::Artists => {
                     if let Some(idx) = self.state.selected_artist_index() {
                         if let Some(artist) = self.state.artists.get(idx) {
-                            if self.pending_fetch.is_some() {
-                                return;
-                            }
                             let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                             let name = artist.name.clone();
                             self.state.push_nav();
@@ -1241,7 +1248,10 @@ impl App {
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             self.pending_fetch = Some(rx);
                             tokio::spawn(async move {
-                                let result = spotify.fetch_artist_tracks(&name, 0).await.map_err(|e| e.to_string());
+                                let result = spotify
+                                    .fetch_artist_tracks(&name, 0)
+                                    .await
+                                    .map_err(|e| e.to_string());
                                 let _ = tx.send(FetchResult::ArtistTracks(result));
                             });
                         }
@@ -1310,7 +1320,8 @@ impl App {
                             self.state.local_tree.toggle_folder(actual_vi);
                             self.state.apply_quick_filter();
                             let new_len = self.state.sorted_track_indices.len();
-                            let new_pos = self.state
+                            let new_pos = self
+                                .state
                                 .sorted_track_indices
                                 .iter()
                                 .position(|&idx| idx == actual_vi)
@@ -1675,6 +1686,327 @@ impl App {
             warn!("Triggering reconnect due to 401");
             self.session_reconnecting = true;
             self.reconnect_player().await;
+        }
+    }
+
+    fn extract_spotify_content(&self, input: &str) -> Option<(String, String)> {
+        let input = input.trim();
+
+        if let Some(start) = input.find("spotify:") {
+            let rest = &input[start + 8..];
+            if let Some(colon_pos) = rest.find(':') {
+                let content_type = &rest[..colon_pos];
+                let id_part = &rest[colon_pos + 1..];
+                let id = id_part.split(&['?', '/'][..]).next().unwrap_or(id_part);
+                if id.len() == 22 {
+                    return Some((content_type.to_string(), id.to_string()));
+                }
+            }
+        }
+
+        for content_type in &["track", "playlist", "album", "artist", "episode", "show"] {
+            let pattern = format!("{}/", content_type);
+            if let Some(start) = input.find(&pattern) {
+                let id_part = &input[start + pattern.len()..];
+                let id = id_part.split(&['?', '/'][..]).next().unwrap_or(id_part);
+                if id.len() == 22 {
+                    return Some((content_type.to_string(), id.to_string()));
+                }
+            }
+        }
+
+        if input.len() == 22 && input.chars().all(|c| c.is_alphanumeric()) {
+            return Some(("track".to_string(), input.to_string()));
+        }
+
+        None
+    }
+
+    pub async fn play_spotify_content(&mut self, content_type: &str, id: &str) {
+        match content_type {
+            "track" => self.play_track_by_id(id).await,
+            "playlist" => self.play_playlist_by_id(id).await,
+            "album" => self.play_album_by_id(id).await,
+            "artist" => self.play_artist_by_id(id).await,
+            _ => self.state.status_msg = Some(format!("Unsupported content type: {content_type}")),
+        }
+    }
+
+    async fn play_track_by_id(&mut self, track_id: &str) {
+        if !self.spotify.authenticated {
+            self.state.status_msg = Some("Spotify not connected".to_string());
+            return;
+        }
+
+        self.state.status_msg = Some(format!("Loading track {track_id}..."));
+        let track_uri = format!("spotify:track:{track_id}");
+
+        info!("Attempting to play track: {track_uri}");
+
+        self.activate_spotify_player();
+        if !self.ensure_spotify_player().await {
+            warn!("Failed to create Spotify player");
+            self.state.status_msg = Some("Failed to create Spotify player".to_string());
+            return;
+        }
+
+        let track_summary = self.spotify.fetch_track_summary(track_id).await.ok();
+
+        if let Some(player) = &mut self.player {
+            self.current_track_uri = track_uri.clone();
+            player.set_queue(vec![track_uri], 0);
+
+            if let Some(t) = track_summary {
+                self.state.playback.title = t.name.clone();
+                self.state.playback.artist = t.artist.clone();
+                self.state.playback.album = t.album.clone();
+                self.state.playback.duration_ms = t.duration_ms;
+                self.state.playback.art_url = t.cover_path;
+                self.state.status_msg = Some(format!("Playing '{}' by {}", t.name, t.artist));
+            } else {
+                self.state.status_msg = Some(format!("Playing track {track_id}"));
+            }
+
+            self.state.playback.progress_ms = 0;
+            self.state.playback.is_playing = true;
+            self.state.playback.is_local = false;
+            self.playing_started_at = Some(Instant::now());
+            self.on_track_started();
+        } else {
+            warn!("No player available");
+            self.state.status_msg = Some("No player available".to_string());
+        }
+    }
+
+    async fn play_playlist_by_id(&mut self, playlist_id: &str) {
+        if !self.spotify.authenticated {
+            self.state.status_msg = Some("Spotify not connected".to_string());
+            return;
+        }
+
+        self.state.status_msg = Some(format!("Loading playlist {playlist_id}..."));
+
+        let mut tracks = Vec::new();
+        let mut uris = Vec::new();
+        let mut offset = 0u32;
+
+        loop {
+            match self
+                .spotify
+                .fetch_playlist_tracks(playlist_id, offset)
+                .await
+            {
+                Ok((batch, total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    let n = batch.len() as u32;
+                    for t in batch {
+                        uris.push(t.uri.clone());
+                        tracks.push(t);
+                    }
+                    offset += n;
+                    if offset >= total || tracks.len() >= 500 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if tracks.is_empty() {
+                        self.state.status_msg = Some(format!("Failed to load playlist: {e}"));
+                        return;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            self.state.status_msg = Some("No tracks found in playlist".to_string());
+            return;
+        }
+
+        self.activate_spotify_player();
+        if !self.ensure_spotify_player().await {
+            warn!("Failed to create Spotify player");
+            self.state.status_msg = Some("Failed to create Spotify player".to_string());
+            return;
+        }
+
+        if let Some(player) = &mut self.player {
+            self.state.tracks = tracks.clone();
+            self.state.rebuild_sort_indices();
+            self.current_track_uri = uris[0].clone();
+            player.set_queue(uris, 0);
+
+            if let Some(first) = tracks.first() {
+                self.state.playback.title = first.name.clone();
+                self.state.playback.artist = first.artist.clone();
+                self.state.playback.album = first.album.clone();
+                self.state.playback.duration_ms = first.duration_ms;
+                self.state.playback.art_url = first.cover_path.clone();
+            }
+
+            self.state.playback.progress_ms = 0;
+            self.state.playback.is_playing = true;
+            self.state.playback.is_local = false;
+            self.playing_started_at = Some(Instant::now());
+            self.state.status_msg = Some(format!("Playing playlist ({} tracks)", tracks.len()));
+            self.on_track_started();
+        } else {
+            warn!("No player available");
+            self.state.status_msg = Some("No player available".to_string());
+        }
+    }
+
+    async fn play_album_by_id(&mut self, album_id: &str) {
+        if !self.spotify.authenticated {
+            self.state.status_msg = Some("Spotify not connected".to_string());
+            return;
+        }
+
+        self.state.status_msg = Some(format!("Loading album {album_id}..."));
+
+        let mut tracks = Vec::new();
+        let mut uris = Vec::new();
+        let mut offset = 0u32;
+
+        loop {
+            match self.spotify.fetch_album_tracks(album_id, offset).await {
+                Ok((batch, total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    let n = batch.len() as u32;
+                    for t in batch {
+                        uris.push(t.uri.clone());
+                        tracks.push(t);
+                    }
+                    offset += n;
+                    if offset >= total || tracks.len() >= 500 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if tracks.is_empty() {
+                        self.state.status_msg = Some(format!("Failed to load album: {e}"));
+                        return;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            self.state.status_msg = Some("No tracks found in album".to_string());
+            return;
+        }
+
+        self.activate_spotify_player();
+        if !self.ensure_spotify_player().await {
+            warn!("Failed to create Spotify player");
+            self.state.status_msg = Some("Failed to create Spotify player".to_string());
+            return;
+        }
+
+        if let Some(player) = &mut self.player {
+            self.state.tracks = tracks.clone();
+            self.state.rebuild_sort_indices();
+            self.current_track_uri = uris[0].clone();
+            player.set_queue(uris, 0);
+
+            if let Some(first) = tracks.first() {
+                self.state.playback.title = first.name.clone();
+                self.state.playback.artist = first.artist.clone();
+                self.state.playback.album = first.album.clone();
+                self.state.playback.duration_ms = first.duration_ms;
+                self.state.playback.art_url = first.cover_path.clone();
+            }
+
+            self.state.playback.progress_ms = 0;
+            self.state.playback.is_playing = true;
+            self.state.playback.is_local = false;
+            self.playing_started_at = Some(Instant::now());
+            self.state.status_msg = Some(format!("Playing album ({} tracks)", tracks.len()));
+            self.on_track_started();
+        } else {
+            warn!("No player available");
+            self.state.status_msg = Some("No player available".to_string());
+        }
+    }
+
+    async fn play_artist_by_id(&mut self, artist_id: &str) {
+        if !self.spotify.authenticated {
+            self.state.status_msg = Some("Spotify not connected".to_string());
+            return;
+        }
+
+        self.state.status_msg = Some(format!("Loading artist {artist_id}..."));
+
+        let mut tracks = Vec::new();
+        let mut uris = Vec::new();
+        let mut offset = 0u32;
+
+        loop {
+            match self.spotify.fetch_artist_tracks(artist_id, offset).await {
+                Ok((batch, total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    let n = batch.len() as u32;
+                    for t in batch {
+                        uris.push(t.uri.clone());
+                        tracks.push(t);
+                    }
+                    offset += n;
+                    if offset >= total || tracks.len() >= 100 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if tracks.is_empty() {
+                        self.state.status_msg = Some(format!("Failed to load artist tracks: {e}"));
+                        return;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            self.state.status_msg = Some("No tracks found for artist".to_string());
+            return;
+        }
+
+        self.activate_spotify_player();
+        if !self.ensure_spotify_player().await {
+            warn!("Failed to create Spotify player");
+            self.state.status_msg = Some("Failed to create Spotify player".to_string());
+            return;
+        }
+
+        if let Some(player) = &mut self.player {
+            self.state.tracks = tracks.clone();
+            self.state.rebuild_sort_indices();
+            self.current_track_uri = uris[0].clone();
+            player.set_queue(uris, 0);
+
+            if let Some(first) = tracks.first() {
+                self.state.playback.title = first.name.clone();
+                self.state.playback.artist = first.artist.clone();
+                self.state.playback.album = first.album.clone();
+                self.state.playback.duration_ms = first.duration_ms;
+                self.state.playback.art_url = first.cover_path.clone();
+            }
+
+            self.state.playback.progress_ms = 0;
+            self.state.playback.is_playing = true;
+            self.state.playback.is_local = false;
+            self.playing_started_at = Some(Instant::now());
+            self.state.status_msg = Some(format!("Playing artist ({} tracks)", tracks.len()));
+            self.on_track_started();
+        } else {
+            warn!("No player available");
+            self.state.status_msg = Some("No player available".to_string());
         }
     }
 }

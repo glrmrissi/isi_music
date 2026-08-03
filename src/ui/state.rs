@@ -167,6 +167,8 @@ pub struct UiState {
     pub loading: bool,
     pub delete_playlist_confirm: bool,
     pub delete_playlist_target: Option<String>,
+    pub lastfm_connected: bool,
+    pub lastfm_pending: bool,
 }
 
 impl UiState {
@@ -234,6 +236,8 @@ impl UiState {
             loading: false,
             delete_playlist_confirm: false,
             delete_playlist_target: None,
+            lastfm_connected: false,
+            lastfm_pending: false,
         }
     }
 

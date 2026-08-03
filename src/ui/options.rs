@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
 use super::UiState;
@@ -33,7 +33,6 @@ pub struct OptionsPanel {
     pub loading: bool,
     pub help_text: Vec<String>,
     pub help_scroll: usize,
-    pub theme: super::Theme,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,7 +51,7 @@ const SECTIONS: &[OptionsSection] = &[
 ];
 
 fn bg_style() -> Style {
-    Style::default().bg(Color::Rgb(20, 20, 20))
+    Style::default().bg(Color::Rgb(14, 14, 18))
 }
 
 fn section_block(title: &str) -> Block<'static> {
@@ -60,11 +59,12 @@ fn section_block(title: &str) -> Block<'static> {
         .title(format!(" {} ", title))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Rgb(60, 60, 70)))
         .style(bg_style())
 }
 
 impl OptionsPanel {
-    pub fn new(cache_manager: CacheManager, theme: super::Theme) -> Self {
+    pub fn new(cache_manager: CacheManager) -> Self {
         Self {
             visible: false,
             focused_section: OptionsSection::Features,
@@ -75,7 +75,6 @@ impl OptionsPanel {
             loading: false,
             help_text: Vec::new(),
             help_scroll: 0,
-            theme,
         }
     }
 
@@ -103,7 +102,16 @@ impl OptionsPanel {
 
     fn items_in_section(&self) -> usize {
         match self.focused_section {
-            OptionsSection::Features => 5,
+            OptionsSection::Features => {
+                #[cfg(feature = "album-art")]
+                {
+                    6
+                }
+                #[cfg(not(feature = "album-art"))]
+                {
+                    5
+                }
+            }
             OptionsSection::Cache => 8,
             OptionsSection::QuickAccess => 1,
             OptionsSection::Help => 1,
@@ -201,31 +209,36 @@ impl OptionsPanel {
             return;
         }
 
-        let bg = Style::default().bg(Color::Rgb(20, 20, 20));
+        // Clean color scheme
+        let bg = Style::default().bg(Color::Rgb(14, 14, 18));
+        let border_color = Color::Rgb(60, 60, 70);
+        let accent_color = Color::Rgb(140, 180, 220);
+        let muted_color = Color::Rgb(120, 120, 130);
+
         let area = frame.area();
 
         let popup_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(2),
                 Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(2),
             ])
             .split(area);
 
         let content_area = popup_layout[1];
         let footer_area = popup_layout[2];
 
-        // Opaque backdrop for the full popup
+        // Clean backdrop
         frame.render_widget(Clear, content_area);
         frame.render_widget(Paragraph::new("").style(bg), content_area);
 
         let block = Block::default()
-            .title(" Options Panel ")
+            .title(" Options ")
             .title_alignment(Alignment::Center)
             .border_type(BorderType::Rounded)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(border_color))
             .style(bg);
 
         let inner_area = block.inner(content_area);
@@ -233,13 +246,13 @@ impl OptionsPanel {
 
         let sections_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(28), Constraint::Min(0)])
+            .constraints([Constraint::Length(24), Constraint::Min(0)])
             .split(inner_area);
 
         let sections_area = sections_layout[0];
         let content_area = sections_layout[1];
 
-        // Opaque backdrop for sidebar and content
+        // Clean backdrop for sidebar and content
         frame.render_widget(Clear, sections_area);
         frame.render_widget(Paragraph::new("").style(bg), sections_area);
         frame.render_widget(Clear, content_area);
@@ -248,21 +261,15 @@ impl OptionsPanel {
         self.render_sections(frame, sections_area);
         self.render_content(frame, state, content_area);
 
-        // Opaque footer
+        // Clean footer
         frame.render_widget(Clear, footer_area);
         frame.render_widget(Paragraph::new("").style(bg), footer_area);
 
         let footer_text = Line::from(vec![
-            Span::styled(
-                " [\u{2191}\u{2193}] Items ",
-                Style::default().fg(Color::Gray),
-            ),
-            Span::styled(
-                " [\u{2190}\u{2192}/Tab] Sections ",
-                Style::default().fg(Color::Gray),
-            ),
-            Span::styled(" [Enter] Select ", Style::default().fg(Color::Yellow)),
-            Span::styled(" [Esc] Close ", Style::default().fg(Color::Gray)),
+            Span::styled(" Arrows: Navigate ", Style::default().fg(muted_color)),
+            Span::styled(" Tab: Sections ", Style::default().fg(muted_color)),
+            Span::styled(" Enter: Select ", Style::default().fg(accent_color)),
+            Span::styled(" Esc: Close ", Style::default().fg(muted_color)),
         ]);
 
         frame.render_widget(
@@ -274,22 +281,27 @@ impl OptionsPanel {
     }
 
     fn render_sections(&self, frame: &mut Frame, area: Rect) {
+        let accent_color = Color::Rgb(140, 180, 220);
+        let text_color = Color::Rgb(200, 200, 200);
+        let bg_color = Color::Rgb(14, 14, 18);
+        let border_color = Color::Rgb(60, 60, 70);
+
         let items: Vec<ListItem> = SECTIONS
             .iter()
             .map(|section| {
                 let label = match section {
-                    OptionsSection::Features => "  Features",
-                    OptionsSection::Cache => "  Cache",
-                    OptionsSection::QuickAccess => "  Quick Access",
-                    OptionsSection::Help => "  Help",
+                    OptionsSection::Features => "Features",
+                    OptionsSection::Cache => "Cache",
+                    OptionsSection::QuickAccess => "Quick Access",
+                    OptionsSection::Help => "Help",
                 };
                 let is_focused = self.focused_section == *section;
                 let style = if is_focused {
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(accent_color)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(text_color)
                 };
                 ListItem::new(Line::from(Span::styled(label, style)))
             })
@@ -304,17 +316,17 @@ impl OptionsPanel {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Sections ")
-                    .style(Style::default().bg(Color::Rgb(20, 20, 20))),
+                    .border_style(Style::default().fg(border_color))
+                    .style(Style::default().bg(bg_color)),
             )
-            .style(Style::default().bg(Color::Rgb(20, 20, 20)))
+            .style(Style::default().bg(bg_color))
             .highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(50, 50, 50))
-                    .fg(Color::Yellow)
+                    .bg(Color::Rgb(30, 30, 40))
+                    .fg(accent_color)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.options_panel_symbol);
+            .highlight_symbol(" ");
 
         frame.render_stateful_widget(list, area, &mut list_state);
     }
@@ -335,6 +347,11 @@ impl OptionsPanel {
         title: &str,
         items: &[(&str, &str, bool)],
     ) {
+        let accent_color = Color::Rgb(140, 180, 220);
+        let text_color = Color::Rgb(200, 200, 200);
+        let enabled_color = Color::Rgb(120, 180, 120);
+        let disabled_color = Color::Rgb(180, 120, 120);
+
         let block = section_block(title);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -342,17 +359,29 @@ impl OptionsPanel {
         let list_items: Vec<ListItem> = items
             .iter()
             .enumerate()
-            .map(|(i, &(label, _, enabled))| {
+            .map(|(i, &(label, custom_status, enabled))| {
                 let is_selected = i == self.selected_item;
-                let prefix = if is_selected { self.theme.options_panel_symbol.as_str() } else { "  " };
-                let status_str = if enabled { "On" } else { "Off" };
-                let status_color = if enabled { Color::Green } else { Color::Red };
+                let prefix = if is_selected { " " } else { " " };
+                let (status_str, status_color) = if !custom_status.is_empty() {
+                    let color = if enabled {
+                        enabled_color
+                    } else if custom_status.starts_with("Pending") {
+                        Color::Rgb(220, 180, 100)
+                    } else {
+                        disabled_color
+                    };
+                    (custom_status, color)
+                } else if enabled {
+                    ("On", enabled_color)
+                } else {
+                    ("Off", disabled_color)
+                };
                 let line_style = if is_selected {
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(accent_color)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(text_color)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{}{}: ", prefix, label), line_style),
@@ -363,7 +392,7 @@ impl OptionsPanel {
 
         let list = List::new(list_items)
             .style(bg_style())
-            .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)));
+            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 40)));
 
         let mut list_state =
             ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
@@ -372,33 +401,47 @@ impl OptionsPanel {
     }
 
     fn render_features_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
-        let items = vec![
-            (
-                "Cover Images",
-                "",
-                self.config.show_cover_images.unwrap_or(true),
-            ),
-            (
-                "Lyrics Fetching",
-                "",
-                self.config.enable_lyrics.unwrap_or(true),
-            ),
-            (
-                "Visualizer Display",
-                "",
-                self.config.show_visualizer.unwrap_or(true),
-            ),
-            (
-                "Compact Mode",
-                "",
-                self.config.compact_mode_default.unwrap_or(false),
-            ),
-            ("Breadcrumb", "", state.show_breadcrumb),
-        ];
+        let mut items = vec![];
+        #[cfg(feature = "album-art")]
+        items.push((
+            "Cover Images",
+            "",
+            self.config.show_cover_images.unwrap_or(true),
+        ));
+        items.push((
+            "Lyrics Fetching",
+            "",
+            self.config.enable_lyrics.unwrap_or(true),
+        ));
+        items.push((
+            "Visualizer Display",
+            "",
+            self.config.show_visualizer.unwrap_or(true),
+        ));
+        items.push((
+            "Compact Mode",
+            "",
+            self.config.compact_mode_default.unwrap_or(false),
+        ));
+        items.push(("Breadcrumb", "", state.show_breadcrumb));
+
+        let lastfm_text = if state.lastfm_connected {
+            "Connected"
+        } else if state.lastfm_pending {
+            "Pending (Press Enter)"
+        } else {
+            "Not Configured"
+        };
+        items.push(("Last.fm Scrobbling", lastfm_text, state.lastfm_connected));
+
         self.render_item_list(frame, area, "Feature Toggles", &items);
     }
 
     fn render_cache_section(&self, frame: &mut Frame, area: Rect) {
+        let accent_color = Color::Rgb(140, 180, 220);
+        let text_color = Color::Rgb(200, 200, 200);
+        let muted_color = Color::Rgb(120, 120, 130);
+
         let block = section_block("Cache Management");
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -406,11 +449,7 @@ impl OptionsPanel {
         if self.loading {
             let loading_text = Paragraph::new("Loading cache statistics...")
                 .alignment(Alignment::Center)
-                .style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .bg(Color::Rgb(20, 20, 20)),
-                );
+                .style(Style::default().fg(accent_color).bg(Color::Rgb(14, 14, 18)));
             frame.render_widget(loading_text, inner);
             return;
         }
@@ -419,27 +458,27 @@ impl OptionsPanel {
 
         let stats_items = if let Some(stats) = &self.cache_stats {
             vec![
-                format!("  Search Cache: {} entries", stats.search_cache_entries),
-                format!("  Library Cache: {} entries", stats.library_cache_entries),
-                format!("  Lyrics Cache: {} entries", stats.lyrics_cache_entries),
+                format!("Search Cache: {} entries", stats.search_cache_entries),
+                format!("Library Cache: {} entries", stats.library_cache_entries),
+                format!("Lyrics Cache: {} entries", stats.lyrics_cache_entries),
             ]
         } else {
             vec![
-                "  Search Cache: N/A".into(),
-                "  Library Cache: N/A".into(),
-                "  Lyrics Cache: N/A".into(),
+                "Search Cache: N/A".into(),
+                "Library Cache: N/A".into(),
+                "Lyrics Cache: N/A".into(),
             ]
         };
 
         for (i, line) in stats_items.iter().enumerate() {
             let is_sel = i == self.selected_item && i < 3;
-            let prefix = if is_sel { self.theme.options_panel_symbol.as_str() } else { "  " };
+            let prefix = if is_sel { " " } else { " " };
             let style = if is_sel {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(accent_color)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(text_color)
             };
             rows.push(ListItem::new(Line::from(Span::styled(
                 format!("{}{}", prefix, line),
@@ -450,22 +489,22 @@ impl OptionsPanel {
         rows.push(ListItem::new(Line::from("")));
 
         let actions = vec![
-            (" Clear All Caches", "c"),
-            (" Cleanup Expired", "f"),
-            (" Refresh Stats", "r"),
-            (" Refresh Playlists", "p"),
+            ("Clear All Caches", "c"),
+            ("Cleanup Expired", "f"),
+            ("Refresh Stats", "r"),
+            ("Refresh Playlists", "p"),
         ];
 
         for (i, (label, key)) in actions.iter().enumerate() {
             let idx = i + 4;
             let is_sel = idx == self.selected_item && idx >= 4;
-            let prefix = if is_sel { self.theme.options_panel_symbol.as_str() } else { "  " };
+            let prefix = if is_sel { " " } else { " " };
             let style = if is_sel {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(accent_color)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(muted_color)
             };
             rows.push(ListItem::new(Line::from(Span::styled(
                 format!("{}{} [{}]", prefix, label, key),
@@ -475,7 +514,7 @@ impl OptionsPanel {
 
         let list = List::new(rows)
             .style(bg_style())
-            .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)));
+            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 40)));
 
         let mut list_state =
             ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
@@ -507,14 +546,19 @@ impl OptionsPanel {
     }
 
     fn render_help_section(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // Clean backdrop
+        let backdrop_style = Style::default().bg(Color::Rgb(12, 12, 16));
+        frame.render_widget(Clear, area);
+        frame.render_widget(Paragraph::new("").style(backdrop_style), area);
 
         let scroll = self.help_scroll;
+
+        // Clean color scheme
+        let accent_color = Color::Rgb(140, 180, 220);
+        let header_color = Color::Rgb(200, 180, 140);
+        let text_color = Color::Rgb(200, 200, 200);
+        let border_color = Color::Rgb(60, 60, 70);
+
         let lines: Vec<Line> = self
             .help_text
             .iter()
@@ -523,29 +567,54 @@ impl OptionsPanel {
                     Line::from(Span::styled(
                         &line[1..],
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(header_color)
                             .add_modifier(Modifier::BOLD),
                     ))
+                } else if line.contains("  ")
+                    && line
+                        .chars()
+                        .next()
+                        .map(|c| !c.is_whitespace())
+                        .unwrap_or(false)
+                {
+                    let parts: Vec<&str> = line.splitn(2, "  ").collect();
+                    if parts.len() == 2 {
+                        Line::from(vec![
+                            Span::styled(
+                                parts[0],
+                                Style::default()
+                                    .fg(accent_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("  {}", parts[1]),
+                                Style::default().fg(text_color),
+                            ),
+                        ])
+                    } else {
+                        Line::from(Span::styled(line, Style::default().fg(text_color)))
+                    }
+                } else if line.trim().is_empty() {
+                    Line::from("")
                 } else {
-                    Line::from(Span::styled(line, Style::default().fg(Color::White)))
+                    Line::from(Span::styled(line, Style::default().fg(text_color)))
                 }
             })
             .collect();
 
         let total = lines.len();
-        let visible = inner.height.saturating_sub(2) as usize;
+        let visible = area.height.saturating_sub(3) as usize;
         let max_scroll = total.saturating_sub(visible);
         let offset = scroll.min(max_scroll);
 
+        // Clean title with minimal progress indicator
         let title = if total > visible {
             let pct = if max_scroll > 0 {
                 (offset * 100) / max_scroll
             } else {
                 0
             };
-            let n = (pct / 10).clamp(0, 10);
-            let bar: String = (0..10).map(|i| if i < n { '█' } else { '░' }).collect();
-            format!(" Help {bar} ")
+            format!(" Help [{}%] ", pct)
         } else {
             " Help ".to_string()
         };
@@ -554,16 +623,31 @@ impl OptionsPanel {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(title)
-            .title_alignment(Alignment::Left)
-            .border_style(Style::default().fg(Color::Yellow));
+            .title_alignment(Alignment::Center)
+            .title_style(
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .border_style(Style::default().fg(border_color))
+            .style(Style::default().bg(Color::Rgb(16, 16, 20)));
+
         let inner = block.inner(area);
         frame.render_widget(block, area);
+
+        // Clear the inner area before rendering to prevent scroll accumulation
+        frame.render_widget(Clear, inner);
+        frame.render_widget(
+            Paragraph::new("").style(Style::default().bg(Color::Rgb(16, 16, 20))),
+            inner,
+        );
 
         let visible_lines: Vec<&Line> = lines.iter().skip(offset).take(visible).collect();
         let text: Vec<Line> = visible_lines.into_iter().cloned().collect();
 
         let paragraph = Paragraph::new(Text::from(text))
-            .block(Block::default().padding(Padding::new(2, 2, 1, 1)));
+            .style(Style::default().bg(Color::Rgb(16, 16, 20)))
+            .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, inner);
     }
 }

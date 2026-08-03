@@ -13,9 +13,6 @@ impl App {
                 Some("Spotify not connected — only Local Files available".to_string());
             return false;
         }
-        if self.pending_fetch.is_some() {
-            return false;
-        }
         match idx {
             0 => {
                 self.state.push_nav();
@@ -37,7 +34,10 @@ impl App {
                 let (tx, rx) = oneshot::channel();
                 self.pending_fetch = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify.fetch_saved_albums(0).await.map_err(|e| e.to_string());
+                    let result = spotify
+                        .fetch_saved_albums(0)
+                        .await
+                        .map_err(|e| e.to_string());
                     let _ = tx.send(FetchResult::Albums(result));
                 });
             }
@@ -49,7 +49,10 @@ impl App {
                 let (tx, rx) = oneshot::channel();
                 self.pending_fetch = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify.fetch_followed_artists().await.map_err(|e| e.to_string());
+                    let result = spotify
+                        .fetch_followed_artists()
+                        .await
+                        .map_err(|e| e.to_string());
                     let _ = tx.send(FetchResult::Artists(result));
                 });
             }
@@ -69,9 +72,6 @@ impl App {
             Some(p) => p.clone(),
             None => return false,
         };
-        if self.pending_fetch.is_some() {
-            return false;
-        }
         self.state.push_nav();
         self.state.status_msg = Some(format!("Loading {}…", playlist.name));
         self.state.loading = true;
@@ -82,7 +82,10 @@ impl App {
         let (tx, rx) = oneshot::channel();
         self.pending_fetch = Some(rx);
         tokio::spawn(async move {
-            let result = spotify.fetch_playlist_tracks(&playlist_id, 0).await.map_err(|e| e.to_string());
+            let result = spotify
+                .fetch_playlist_tracks(&playlist_id, 0)
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(FetchResult::PlaylistTracks(result));
         });
         false
@@ -123,7 +126,7 @@ impl App {
         self.local_scan_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
-            let extensions = ["mp3", "flac", "ogg", "wav", "aiff"];
+            let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "opus"];
             let mut nodes: Vec<LocalNode> = Vec::new();
 
             let db_path = crate::config::get_local_db_path();
@@ -216,9 +219,15 @@ impl App {
                             track_data = s
                                 .query_row([path_str], |row| {
                                     Ok(crate::spotify::TrackSummary {
-                                        name: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(0)?),
-                                        artist: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(1)?),
-                                        album: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(2)?),
+                                        name: crate::app::metadata::sanitize_control_chars(
+                                            &row.get::<_, String>(0)?,
+                                        ),
+                                        artist: crate::app::metadata::sanitize_control_chars(
+                                            &row.get::<_, String>(1)?,
+                                        ),
+                                        album: crate::app::metadata::sanitize_control_chars(
+                                            &row.get::<_, String>(2)?,
+                                        ),
                                         duration_ms: row.get(3)?,
                                         uri: uri.clone(),
                                         cover_path: row.get(4).ok(),
@@ -240,9 +249,7 @@ impl App {
 
                             let cache_dir = dirs::cache_dir()
                                 .map(|d| d.join("isi-music/covers"))
-                                .unwrap_or_else(|| {
-                                    std::path::PathBuf::from("/tmp/isi-music/covers")
-                                });
+                                .unwrap_or_else(|| std::env::temp_dir().join("isi-music/covers"));
 
                             if let Err(e) = std::fs::create_dir_all(&cache_dir) {
                                 warn!("Cannot create cover cache dir: {e}");
