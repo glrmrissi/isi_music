@@ -19,6 +19,7 @@ const SCOPES: &[&str] = &[
     "user-library-modify",
     "user-follow-read",
     "playlist-read-private",
+    "playlist-read-collaborative",
     "playlist-modify-private",
     "playlist-modify-public",
 ];
@@ -28,7 +29,7 @@ fn base64url_encode(data: &[u8]) -> String {
 }
 
 fn generate_code_verifier() -> String {
-    let bytes: Vec<u8> = (0..32).map(|_| rand::random()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
     base64url_encode(&bytes)
 }
 
@@ -97,8 +98,8 @@ fn open_browser(url: &str) {
     let _ = std::process::Command::new("open").arg(url).spawn();
 
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", url])
+    let _ = std::process::Command::new("powershell")
+        .args(["-Command", &format!("Start-Process '{}'", url)])
         .spawn();
 }
 

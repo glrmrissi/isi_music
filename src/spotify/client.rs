@@ -18,6 +18,14 @@ use crate::ui::PlaybackState;
 static SPOTIFY_RATE_LIMITER: LazyLock<Mutex<Instant>> =
     LazyLock::new(|| Mutex::new(Instant::now()));
 
+#[derive(Clone, Debug)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub device_type: String,
+    pub is_active: bool,
+}
+
 async fn spotify_rate_limit() {
     let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
     let elapsed = last_request.elapsed();
@@ -363,14 +371,17 @@ impl LibraryCache {
                 album: t.album,
                 duration_ms: t.duration_ms,
                 uri: t.uri,
-                    cover_path: t.cover_path,
-                    added_at: None,
-                })
+                cover_path: t.cover_path,
+                added_at: None,
+            })
             .collect();
         Some((tracks, total))
     }
 
     pub fn save_tracks(&self, key: &str, tracks: &[TrackSummary], total: u32) {
+        if tracks.is_empty() && total > 0 {
+            return;
+        }
         let rows: Vec<CachedTrack> = tracks
             .iter()
             .map(|t| CachedTrack {
@@ -544,8 +555,7 @@ impl LibraryCache {
                 let last = tracks.last().unwrap();
                 Some(format!("{}\t{}", last.0, last.1))
             };
-            let summaries: Vec<TrackSummary> =
-                tracks.into_iter().map(|(_, _, t)| t).collect();
+            let summaries: Vec<TrackSummary> = tracks.into_iter().map(|(_, _, t)| t).collect();
             Some((summaries, total, next_cursor))
         } else {
             let mut s = conn
@@ -584,17 +594,12 @@ impl LibraryCache {
                 let last = tracks.last().unwrap();
                 Some(format!("{}\t{}", last.0, last.1))
             };
-            let summaries: Vec<TrackSummary> =
-                tracks.into_iter().map(|(_, _, t)| t).collect();
+            let summaries: Vec<TrackSummary> = tracks.into_iter().map(|(_, _, t)| t).collect();
             Some((summaries, total, next_cursor))
         }
     }
 
-    pub fn reset_liked_tracks_cache(
-        &self,
-        tracks: &[TrackSummary],
-        added_ats: &[String],
-    ) {
+    pub fn reset_liked_tracks_cache(&self, tracks: &[TrackSummary], added_ats: &[String]) {
         let Ok(conn) = self.open() else { return };
         let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
         let mut stmt = match conn.prepare(
@@ -617,11 +622,7 @@ impl LibraryCache {
         }
     }
 
-    pub fn append_liked_tracks_batch(
-        &self,
-        tracks: &[TrackSummary],
-        added_ats: &[String],
-    ) {
+    pub fn append_liked_tracks_batch(&self, tracks: &[TrackSummary], added_ats: &[String]) {
         let Ok(conn) = self.open() else { return };
         let mut stmt = match conn.prepare(
             "INSERT OR IGNORE INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
@@ -645,6 +646,13 @@ impl LibraryCache {
 
     pub fn clear_liked_tracks_cache(&self) {
         if let Ok(conn) = self.open() {
+            let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
+        }
+    }
+
+    pub fn clear_all_library_cache(&self) {
+        if let Ok(conn) = self.open() {
+            let _ = conn.execute("DELETE FROM library_cache", []);
             let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
         }
     }
@@ -775,8 +783,8 @@ impl SpotifyClient {
                     return Ok(Self {
                         token_manager,
                         http: reqwest::Client::new(),
-            shuffle_state: std::sync::atomic::AtomicBool::new(false),
-            repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
+                        shuffle_state: std::sync::atomic::AtomicBool::new(false),
+                        repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
                         authenticated: true,
                         search_cache: SearchCache::new(600),
                         library_cache: LibraryCache::new().await,
@@ -882,7 +890,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
             return Err(if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
                 anyhow::anyhow!("SPOTIFY_UNAUTHORIZED")
@@ -890,7 +898,7 @@ impl SpotifyClient {
                 warn!("Rate limited on Spotify API");
                 anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
             } else {
-                anyhow::anyhow!("Spotify {status}: {body}")
+                anyhow::anyhow!("Spotify API error: status {}", status)
             });
         }
 
@@ -936,7 +944,8 @@ impl SpotifyClient {
 
         self.library_cache.save_tracks(&key, &tracks, total);
         if !tracks.is_empty() && added_ats.len() == tracks.len() {
-            self.library_cache.append_liked_tracks_batch(&tracks, &added_ats);
+            self.library_cache
+                .append_liked_tracks_batch(&tracks, &added_ats);
         }
         Ok((tracks, total))
     }
@@ -986,13 +995,13 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
             return Err(if status.as_u16() == 401 {
                 anyhow::anyhow!("SPOTIFY_UNAUTHORIZED")
             } else if status.as_u16() == 429 {
                 anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
             } else {
-                anyhow::anyhow!("Spotify {status}: {body}")
+                anyhow::anyhow!("Spotify API error: status {}", status)
             });
         }
 
@@ -1040,8 +1049,7 @@ impl SpotifyClient {
         if let Some((cached_tracks, _cached_total, _)) = &cached {
             if cached_tracks.len() == api_tracks.len() {
                 let api_uris: Vec<&str> = api_tracks.iter().map(|t| t.uri.as_str()).collect();
-                let cached_uris: Vec<&str> =
-                    cached_tracks.iter().map(|t| t.uri.as_str()).collect();
+                let cached_uris: Vec<&str> = cached_tracks.iter().map(|t| t.uri.as_str()).collect();
                 if api_uris == cached_uris {
                     info!("sync_liked_tracks: no changes detected, using cache");
                     return Ok((cached_tracks.clone(), total));
@@ -1085,8 +1093,36 @@ impl SpotifyClient {
         Ok(())
     }
 
+    pub async fn play_context_uri(&self, context_uri: &str) -> Result<()> {
+        if !self.authenticated {
+            return Ok(());
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        spotify_rate_limit().await;
+        let body = serde_json::json!({ "context_uri": context_uri });
+        let response = self
+            .http
+            .put("https://api.spotify.com/v1/me/player/play")
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Spotify {status}: {body_text}");
+        }
+        Ok(())
+    }
+
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
         if !self.authenticated {
+            warn!("fetch_playlists: not authenticated");
             return Ok(Vec::new());
         }
         let token = self
@@ -1094,11 +1130,13 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
+        info!("fetch_playlists: starting to fetch playlists");
         let mut all = Vec::new();
         let mut offset = 0u32;
         loop {
             let offset_str = offset.to_string();
             spotify_rate_limit().await;
+            info!("fetch_playlists: requesting offset={}", offset);
             let response = self
                 .http
                 .get("https://api.spotify.com/v1/me/playlists")
@@ -1109,7 +1147,8 @@ impl SpotifyClient {
 
             let status = response.status();
             if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
+                let _ = response.text().await.unwrap_or_default();
+                warn!("fetch_playlists: API error status={}", status);
                 if status.as_u16() == 401 {
                     warn!("Got 401 Unauthorized - token may have expired");
                     return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
@@ -1118,7 +1157,7 @@ impl SpotifyClient {
                     warn!("Rate limited on Spotify API");
                     return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
                 }
-                return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+                return Err(anyhow::anyhow!("Spotify API error: status {}", status));
             }
 
             let json: serde_json::Value = response.json().await?;
@@ -1126,6 +1165,11 @@ impl SpotifyClient {
                 .as_array()
                 .map(|a| a.len() as u32)
                 .unwrap_or(0);
+
+            info!(
+                "fetch_playlists: fetched {} playlists at offset={}",
+                fetched, offset
+            );
 
             if let Some(items) = json["items"].as_array() {
                 for p in items {
@@ -1152,6 +1196,7 @@ impl SpotifyClient {
             }
             offset += fetched;
         }
+        info!("fetch_playlists: completed, total playlists={}", all.len());
         Ok(all)
     }
 
@@ -1165,8 +1210,10 @@ impl SpotifyClient {
         }
         let key = format!("playlist:{playlist_id}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: playlist {playlist_id} offset={offset}");
-            return Ok(cached);
+            if !cached.0.is_empty() {
+                info!("Library cache hit: playlist {playlist_id} offset={offset}");
+                return Ok(cached);
+            }
         }
         let token = self
             .get_access_token()
@@ -1175,23 +1222,23 @@ impl SpotifyClient {
 
         let offset_str = offset.to_string();
         let limit_str = "50";
+
+        // Feb 2026: /tracks endpoint was deprecated and removed, use /items
         let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
+        info!("Fetching playlist items for {playlist_id} (offset={offset})");
         spotify_rate_limit().await;
         let response = self
             .http
             .get(&url)
             .bearer_auth(&token)
-            .query(&[
-                ("limit", limit_str),
-                ("offset", &offset_str),
-                ("market", "from_token"),
-            ])
+            .query(&[("limit", limit_str), ("offset", &offset_str)])
             .send()
             .await?;
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
+            warn!("Playlist fetch failed for {playlist_id} status={status}");
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1204,11 +1251,76 @@ impl SpotifyClient {
             }
 
             if status.as_u16() == 403 {
-                warn!("Playlist not accessible (403) — may not be owned or collaborated");
-                return Err(anyhow::anyhow!("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE: {body}"));
+                // Fallback: try the main playlist endpoint which returns items inline
+                info!("Got 403 on /items, trying main playlist endpoint for {playlist_id}");
+                spotify_rate_limit().await;
+                let main_url = format!("https://api.spotify.com/v1/playlists/{playlist_id}");
+                let main_resp = self.http.get(&main_url).bearer_auth(&token).send().await?;
+                let main_status = main_resp.status();
+                info!("Main playlist endpoint returned status={main_status} for {playlist_id}");
+                if main_status.is_success() {
+                    let main_json: serde_json::Value = main_resp.json().await?;
+                    // New API: "items" field (was "tracks"), items[].item (was items[].track)
+                    let tracks_obj = if !main_json["items"].is_null() {
+                        &main_json["items"]
+                    } else {
+                        &main_json["tracks"]
+                    };
+                    let total = tracks_obj["total"].as_u64().unwrap_or(0) as u32;
+                    let items_count = tracks_obj["items"].as_array().map(|a| a.len()).unwrap_or(0);
+                    info!("Main endpoint: total={total}, items={items_count} for {playlist_id}");
+                    let mut tracks = Vec::new();
+                    if let Some(items) = tracks_obj["items"].as_array() {
+                        for item_wrapper in items {
+                            // New API: "item" (was "track")
+                            let track = if !item_wrapper["item"].is_null() {
+                                &item_wrapper["item"]
+                            } else {
+                                &item_wrapper["track"]
+                            };
+                            if track.is_null() || track["type"].as_str() == Some("episode") {
+                                continue;
+                            }
+                            let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                            let artist = track["artists"]
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|x| x["name"].as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                })
+                                .unwrap_or_default();
+                            let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                            let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                            let uri = track["uri"].as_str().unwrap_or("").to_string();
+                            let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
+                            if !uri.is_empty() {
+                                tracks.push(TrackSummary {
+                                    name,
+                                    artist,
+                                    album,
+                                    duration_ms,
+                                    uri,
+                                    cover_path: None,
+                                    added_at,
+                                });
+                            }
+                        }
+                    }
+                    info!(
+                        "Main endpoint: parsed {} tracks for {playlist_id}",
+                        tracks.len()
+                    );
+                    self.library_cache.save_tracks(&key, &tracks, total);
+                    return Ok((tracks, total));
+                }
+                let _ = main_resp.text().await.unwrap_or_default();
+                warn!("Main playlist endpoint also failed: {main_status}");
+                return Err(anyhow::anyhow!("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -1217,10 +1329,11 @@ impl SpotifyClient {
 
         if let Some(items) = json["items"].as_array() {
             for item_wrapper in items {
-                let track = if !item_wrapper["track"].is_null() {
-                    &item_wrapper["track"]
-                } else if !item_wrapper["item"].is_null() {
+                // New API: "item" (was "track")
+                let track = if !item_wrapper["item"].is_null() {
                     &item_wrapper["item"]
+                } else if !item_wrapper["track"].is_null() {
+                    &item_wrapper["track"]
                 } else {
                     continue;
                 };
@@ -1229,9 +1342,7 @@ impl SpotifyClient {
                     continue;
                 }
 
-                let added_at = item_wrapper["added_at"]
-                    .as_str()
-                    .map(|s| s.to_string());
+                let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
 
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
                 let artist = track["artists"]
@@ -1261,6 +1372,11 @@ impl SpotifyClient {
                 }
             }
         }
+
+        info!(
+            "Parsed {} tracks from playlist {playlist_id} (total={total})",
+            tracks.len()
+        );
 
         self.library_cache.save_tracks(&key, &tracks, total);
         Ok((tracks, total))
@@ -1339,7 +1455,10 @@ impl SpotifyClient {
             return Ok(PlaybackState::default());
         }
 
-        self.shuffle_state.store(json["shuffle_state"].as_bool().unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
+        self.shuffle_state.store(
+            json["shuffle_state"].as_bool().unwrap_or(false),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let repeat = json["repeat_state"].as_str().unwrap_or("off");
         if let Ok(mut rp) = self.repeat_state.write() {
             *rp = match repeat {
@@ -1409,8 +1528,14 @@ impl SpotifyClient {
             artist,
             album,
             is_playing,
-            shuffle: self.shuffle_state.load(std::sync::atomic::Ordering::Relaxed),
-            repeat: self.repeat_state.read().map(|r| *r).unwrap_or(super::RepeatState::Off),
+            shuffle: self
+                .shuffle_state
+                .load(std::sync::atomic::Ordering::Relaxed),
+            repeat: self
+                .repeat_state
+                .read()
+                .map(|r| *r)
+                .unwrap_or(super::RepeatState::Off),
             progress_ms,
             duration_ms,
             volume: 100,
@@ -1604,7 +1729,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1616,7 +1741,7 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -1756,6 +1881,73 @@ impl SpotifyClient {
         Ok(results)
     }
 
+    pub async fn fetch_devices(&self) -> Result<Vec<Device>> {
+        if !self.authenticated {
+            return Ok(Vec::new());
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No token"))?;
+
+        spotify_rate_limit().await;
+        let resp = self
+            .http
+            .get("https://api.spotify.com/v1/me/player/devices")
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("fetch_devices failed ({}): {}", status.as_u16(), text);
+        }
+
+        let v: serde_json::Value = serde_json::from_str(&text)?;
+        let devices = v["devices"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("no devices array"))?
+            .iter()
+            .filter_map(|d| {
+                Some(Device {
+                    id: d["id"].as_str()?.to_string(),
+                    name: d["name"].as_str()?.to_string(),
+                    device_type: d["type"].as_str().unwrap_or("unknown").to_string(),
+                    is_active: d["is_active"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect();
+        Ok(devices)
+    }
+
+    pub async fn transfer_playback(&self, device_id: &str) -> Result<()> {
+        if !self.authenticated {
+            anyhow::bail!("not authenticated");
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No token"))?;
+
+        spotify_rate_limit().await;
+        let body = serde_json::json!({ "device_ids": [device_id], "play": false });
+        let resp = self
+            .http
+            .put("https://api.spotify.com/v1/me/player")
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await?;
+            anyhow::bail!("transfer_playback failed ({}): {}", status.as_u16(), text);
+        }
+        Ok(())
+    }
+
     pub async fn fetch_album_tracks(
         &self,
         album_id: &str,
@@ -1766,8 +1958,10 @@ impl SpotifyClient {
         }
         let key = format!("album:{album_id}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: album {album_id} offset={offset}");
-            return Ok(cached);
+            if !cached.0.is_empty() {
+                info!("Library cache hit: album {album_id} offset={offset}");
+                return Ok(cached);
+            }
         }
         let token = self
             .get_access_token()
@@ -1792,7 +1986,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1804,7 +1998,7 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -1869,7 +2063,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1881,7 +2075,7 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -1944,7 +2138,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1956,7 +2150,7 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2002,8 +2196,10 @@ impl SpotifyClient {
         }
         let key = format!("artist:{artist_name}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: artist {artist_name} offset={offset}");
-            return Ok(cached);
+            if !cached.0.is_empty() {
+                info!("Library cache hit: artist {artist_name} offset={offset}");
+                return Ok(cached);
+            }
         }
         let token = self
             .get_access_token()
@@ -2030,7 +2226,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2042,7 +2238,7 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2102,7 +2298,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2114,7 +2310,7 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2173,7 +2369,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let _ = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2185,8 +2381,8 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            tracing::error!("fetch_show_episodes {status}: {body}");
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            tracing::error!("fetch_show_episodes API error: status {}", status);
+            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2459,6 +2655,58 @@ impl SpotifyClient {
             .map(|s| s.to_string())
     }
 
+    pub async fn fetch_track_summary(&self, track_id: &str) -> Result<TrackSummary> {
+        if !self.authenticated {
+            anyhow::bail!("Not authenticated");
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+        spotify_rate_limit().await;
+        let resp = self
+            .http
+            .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
+            .bearer_auth(&token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("Spotify track fetch failed: {}", resp.status());
+        }
+        let json: serde_json::Value = resp.json().await?;
+        let name = json["name"].as_str().unwrap_or("Unknown").to_string();
+        let artist = json["artists"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a["name"].as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let album = json["album"]["name"]
+            .as_str()
+            .unwrap_or("Unknown")
+            .to_string();
+        let duration_ms = json["duration_ms"].as_u64().unwrap_or(0);
+        let uri = json["uri"]
+            .as_str()
+            .unwrap_or(&format!("spotify:track:{track_id}"))
+            .to_string();
+        let cover_path = json["album"]["images"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|img| img["url"].as_str())
+            .map(|s| s.to_string());
+
+        Ok(TrackSummary {
+            name,
+            artist,
+            album,
+            duration_ms,
+            uri,
+            cover_path,
+            added_at: None,
+        })
+    }
+
     pub async fn add_tracks_to_playlist(
         &self,
         playlist_id: &str,
@@ -2466,18 +2714,34 @@ impl SpotifyClient {
         position: Option<u32>,
     ) -> Result<String> {
         spotify_rate_limit().await;
-        let token = self.get_access_token().await
+        let token = self
+            .get_access_token()
+            .await
             .ok_or_else(|| anyhow::anyhow!("No access token"))?;
         let mut body = serde_json::json!({ "uris": uris });
         if let Some(pos) = position {
             body["position"] = serde_json::json!(pos);
         }
-        let resp = self.http
-            .post(format!("https://api.spotify.com/v1/playlists/{playlist_id}/items"))
+        let mut resp = self
+            .http
+            .post(format!(
+                "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+            ))
             .bearer_auth(&token)
             .json(&body)
             .send()
             .await?;
+        if resp.status().as_u16() == 404 {
+            resp = self
+                .http
+                .post(format!(
+                    "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+                ))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await?;
+        }
         let status = resp.status();
         let text = resp.text().await?;
         if status.is_success() {
@@ -2501,7 +2765,7 @@ impl SpotifyClient {
         let body = serde_json::json!({
             "items": uris.iter().map(|uri| serde_json::json!({"uri": uri})).collect::<Vec<_>>()
         });
-        let resp = self
+        let mut resp = self
             .http
             .delete(format!(
                 "https://api.spotify.com/v1/playlists/{playlist_id}/items"
@@ -2510,6 +2774,17 @@ impl SpotifyClient {
             .json(&body)
             .send()
             .await?;
+        if resp.status().as_u16() == 404 {
+            resp = self
+                .http
+                .delete(format!(
+                    "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+                ))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await?;
+        }
         let status = resp.status();
         let text = resp.text().await?;
         if status.is_success() {
@@ -2543,11 +2818,7 @@ impl SpotifyClient {
             Ok(())
         } else {
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Unfollow playlist failed ({}): {}",
-                status.as_u16(),
-                text
-            );
+            anyhow::bail!("Unfollow playlist failed ({}): {}", status.as_u16(), text);
         }
     }
 
@@ -2570,11 +2841,7 @@ impl SpotifyClient {
             let arr: Vec<bool> = serde_json::from_str(&text)?;
             Ok(arr.first().copied().unwrap_or(false))
         } else {
-            anyhow::bail!(
-                "Check track saved failed ({}): {}",
-                status.as_u16(),
-                text
-            );
+            anyhow::bail!("Check track saved failed ({}): {}", status.as_u16(), text);
         }
     }
 
@@ -2585,7 +2852,9 @@ impl SpotifyClient {
         description: Option<&str>,
     ) -> Result<PlaylistSummary> {
         spotify_rate_limit().await;
-        let token = self.get_access_token().await
+        let token = self
+            .get_access_token()
+            .await
             .ok_or_else(|| anyhow::anyhow!("No access token"))?;
         let mut body = serde_json::json!({
             "name": name,
@@ -2594,7 +2863,8 @@ impl SpotifyClient {
         if let Some(desc) = description {
             body["description"] = serde_json::json!(desc);
         }
-        let resp = self.http
+        let resp = self
+            .http
             .post("https://api.spotify.com/v1/me/playlists")
             .bearer_auth(&token)
             .json(&body)
@@ -2619,7 +2889,6 @@ impl SpotifyClient {
             anyhow::bail!("Create playlist failed ({}): {}", status.as_u16(), text);
         }
     }
-
 }
 
 pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
