@@ -10,8 +10,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  deny:
+    name: Cargo Deny (advisories, licenses, bans)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (Edition 2024)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo-deny
+        run: cargo deny --all-features --locked check
+
   build:
     name: Build (${{ matrix.label }})
+    needs: deny
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -20,6 +39,8 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux
+          - os: windows-latest
+            label: windows
 
     steps:
       - name: Checkout repository
@@ -44,5 +65,15 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Set credentials for build
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> $GITHUB_ENV
+          echo "LASTFM_API_SECRET=${{ secrets.LASTFM_API_SECRET }}" >> $GITHUB_ENV
+        shell: bash
+
       - name: Build
         run: cargo build --release --locked
+
+      - name: Remove generated secrets from target
+        shell: bash
+        run: find target/ -name "secrets.rs" -delete 2>/dev/null || true

@@ -1,0 +1,84 @@
+# cargo-deny configuration
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Check all targets and features
+all-features = true
+no-default-features = false
+
+[advisories]
+# Fail the build on advisories
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Ignore these advisories (with reasons)
+ignore = [
+    # rsa: Marvin Attack timing sidechannel. No safe upgrade available.
+    # Transitive dep of librespot-core. Risk is mitigated in client-side use
+    # (timing observation requires network access; Spotify API is the target).
+    "RUSTSEC-2023-0071",
+    # quick-xml: Quadratic run time DoS when checking duplicate attribute names.
+    # Transitive dep of librespot-core (pinned to 0.38 in patches/). Fix requires
+    # 0.41+ which has breaking API changes. Risk is low: XML parsed is Spotify
+    # API responses (trusted), not user-supplied untrusted XML.
+    "RUSTSEC-2026-0194",
+    # quick-xml: Unbounded namespace-declaration allocation (memory-exhaustion DoS).
+    # Same situation as RUSTSEC-2026-0194 above.
+    "RUSTSEC-2026-0195",
+]
+unmaintained = "workspace"
+
+[licenses]
+# Allow these licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "0BSD",
+    "Unlicense",
+    # Permissive licenses used by dependencies
+    "BSL-1.0",     # Boost Software License (clipboard-win, error-code)
+    "MPL-2.0",     # Mozilla Public License 2.0 (symphonia, mpris-server, option-ext)
+    "CDLA-Permissive-2.0", # Community Data License Agreement (webpki-roots cert bundle)
+]
+# Confidence threshold for license detection
+confidence-threshold = 0.8
+# Licenses not in the allow list above are denied by default (no `deny` key needed)
+
+[bans]
+# Warn on multiple versions of the same crate
+multiple-versions = "warn"
+# Warn on wildcard dependencies
+wildcards = "warn"
+# Highlight crates that are allowed but not recommended
+highlight = "all"
+# Skip (allow) specific crates that have multiple versions (common in large trees)
+# These are tolerated duplicates, not a whitelist of allowed crates
+skip = [
+    { name = "windows-sys", version = "*" },
+    { name = "windows", version = "*" },
+    { name = "windows-core", version = "*" },
+    { name = "windows-targets", version = "*" },
+    { name = "hashbrown", version = "*" },
+    { name = "bitflags", version = "*" },
+    { name = "getrandom", version = "*" },
+    { name = "rand", version = "*" },
+    { name = "rand_core", version = "*" },
+    { name = "rand_chacha", version = "*" },
+    { name = "thiserror", version = "*" },
+    { name = "windows_x86_64_msvc", version = "*" },
+    { name = "windows-result", version = "*" },
+    { name = "windows-strings", version = "*" },
+    { name = "windows-link", version = "*" },
+]
+
+[sources]
+# Only allow crates from crates.io
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Deny git dependencies (except our local patch)
+allow-git = []

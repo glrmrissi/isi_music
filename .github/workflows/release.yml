@@ -32,8 +32,27 @@ jobs:
         id: extract
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+  deny:
+    name: Cargo Deny (advisories, licenses, bans)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo-deny
+        run: cargo deny --all-features --locked check
+
   test:
     name: Test
+    needs: deny
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -57,11 +76,21 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Set credentials for build
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> $GITHUB_ENV
+          echo "LASTFM_API_SECRET=${{ secrets.LASTFM_API_SECRET }}" >> $GITHUB_ENV
+        shell: bash
+
       - name: Test (default features)
         run: cargo test --locked --verbose
 
       - name: Test (minimal features)
         run: cargo test --locked --no-default-features -F spotify,discord --verbose
+
+      - name: Remove generated secrets from target
+        shell: bash
+        run: find target/ -name "secrets.rs" -delete 2>/dev/null || true
 
   build:
     name: Build (${{ matrix.label }})
@@ -92,6 +121,13 @@ jobs:
             asset_name: isi-music-macos-arm64
             use_cross: false
 
+          - os: windows-latest
+            label: Windows x86_64
+            target: x86_64-pc-windows-msvc
+            artifact_name: isi-music.exe
+            asset_name: isi-music-windows-x86_64.exe
+            use_cross: false
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -118,6 +154,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: Set credentials for build
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> $GITHUB_ENV
+          echo "LASTFM_API_SECRET=${{ secrets.LASTFM_API_SECRET }}" >> $GITHUB_ENV
+        shell: bash
 
       - name: Build full binary
         shell: bash
@@ -147,6 +189,10 @@ jobs:
             --verbose && \
           cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" \
              "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"
+
+      - name: Remove generated secrets from target
+        shell: bash
+        run: find target/ -name "secrets.rs" -delete 2>/dev/null || true
 
       - name: Create release artifacts
         shell: bash
