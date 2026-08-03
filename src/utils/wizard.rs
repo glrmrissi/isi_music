@@ -1,10 +1,9 @@
 // TODO: modularize this file (~660 lines) into smaller modules
-use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use console::{Term, style};
-use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 
 use crate::config::{AppConfig, LastfmConfig};
 use crate::utils::theme::Theme;
@@ -316,7 +315,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     println!("  Where is your local music library?\n");
     println!(
         "  {}",
-        style("Supported formats: mp3, flac, ogg, wav, aiff").dim()
+        style("Supported formats: mp3, flac, opus, ogg, wav, aiff").dim()
     );
     println!();
 
@@ -329,7 +328,13 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         .allow_empty(true)
         .interact_text()?;
 
-    let music_dir = raw.trim().to_string();
+    // Windows paths with backslashes are invalid inside TOML basic strings
+    // ("\U" starts a unicode escape) — forward slashes work everywhere
+    let music_dir = if cfg!(windows) {
+        raw.trim().replace('\\', "/")
+    } else {
+        raw.trim().to_string()
+    };
     cfg.local.music_dir = if music_dir.is_empty() {
         None
     } else {
@@ -377,11 +382,6 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     header(term, "— Step 4 / 5 · Last.fm Scrobbling");
 
     println!("  Scrobble tracks you listen to on Last.fm.\n");
-    println!(
-        "  {}",
-        style("Create an API app at https://www.last.fm/api/account/create").dim()
-    );
-    println!();
 
     let lastfm_enabled = Confirm::with_theme(&theme())
         .with_prompt("Configure Last.fm scrobbling?")
@@ -389,56 +389,30 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         .interact()?;
 
     if lastfm_enabled {
-        let api_key: String = Input::with_theme(&theme())
-            .with_prompt("API Key")
-            .validate_with(|s: &String| {
-                if s.len() == 32 {
-                    Ok(())
-                } else {
-                    Err("API Key must be 32 characters")
-                }
-            })
-            .interact_text()?;
-
-        let api_secret: String = Password::with_theme(&theme())
-            .with_prompt("API Secret (hidden)")
-            .interact()?;
-
-        cfg.lastfm.api_key = Some(api_key.clone());
-        cfg.lastfm.api_secret = Some(api_secret.clone());
-
         println!();
         println!(
             "  {}",
             style("Running Last.fm auth flow — a browser window will open.").dim()
         );
 
-        let token = crate::utils::lastfm::LastfmClient::get_auth_token(&api_key).await?;
-        let auth_url = format!(
-            "https://www.last.fm/api/auth/?api_key={}&token={}",
-            api_key, token
-        );
-
-        if open::that(&auth_url).is_err() {
-            println!("\n  Visit: {}", style(&auth_url).cyan().underlined());
-        }
-
-        println!("\n  Press ENTER after authorising on Last.fm…");
-        let mut _buf = String::new();
-        io::stdin().read_line(&mut _buf)?;
-
-        print!("  Finalising… ");
-        io::stdout().flush().ok();
-
-        match crate::utils::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
+        match crate::utils::lastfm::LastfmClient::authenticate_with_default().await {
             Ok(session_key) => {
                 cfg.lastfm.session_key = Some(session_key);
-                println!("{}", style("[OK]").green());
+                println!(
+                    "  {}  Last.fm authentication successful!",
+                    style("[OK]").green()
+                );
             }
             Err(e) => {
-                println!("{}", style("failed").red());
-                println!("  {}", style(format!("{e:#}")).dim());
-                println!("  You can run `isi-music setup-lastfm` later.");
+                println!(
+                    "  {}  Last.fm authentication failed: {}",
+                    style("[ERROR]").red(),
+                    style(format!("{e:#}")).dim()
+                );
+                println!(
+                    "  {}",
+                    style("You can run `isi-music setup-lastfm` later.").dim()
+                );
                 cfg.lastfm = LastfmConfig::default();
             }
         }

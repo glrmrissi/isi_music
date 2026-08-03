@@ -32,8 +32,6 @@ pub struct DiscordConfig {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct LastfmConfig {
-    pub api_key: Option<String>,
-    pub api_secret: Option<String>,
     pub session_key: Option<String>,
 }
 
@@ -141,7 +139,12 @@ pub fn load_refresh_token() -> Option<String> {
 
 pub fn get_local_db_path() -> String {
     if let Some(mut path) = dirs::data_dir() {
-        path.push("isi_music");
+        // Old versions used "isi_music" (underscore) — migrate to the hyphenated name
+        let legacy = path.join("isi_music");
+        path.push("isi-music");
+        if legacy.exists() && !path.exists() {
+            let _ = std::fs::rename(&legacy, &path);
+        }
 
         if let Err(e) = std::fs::create_dir_all(&path) {
             eprintln!("Erro ao criar diretório: {e}");
