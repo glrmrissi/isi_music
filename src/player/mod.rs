@@ -129,7 +129,11 @@ pub struct NativePlayer {
 }
 
 impl NativePlayer {
-    pub async fn new(access_token: String, _low_resource: bool) -> Result<Self> {
+    pub async fn new(
+        access_token: String,
+        _low_resource: bool,
+        bitrate: librespot_playback::config::Bitrate,
+    ) -> Result<Self> {
         let session = Session::new(SessionConfig::default(), None);
         let credentials = Credentials::with_access_token(access_token);
         session
@@ -145,8 +149,6 @@ impl NativePlayer {
         let mixer_fn = mixer::find(None).context("No mixer found")?;
         let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
         let volume_getter = soft_mixer.get_soft_volume();
-
-        let bitrate = librespot_playback::config::Bitrate::Bitrate320;
 
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
@@ -164,6 +166,8 @@ impl NativePlayer {
             PlayerConfig {
                 gapless: false,
                 bitrate,
+                normalisation: false,
+                normalisation_pregain_db: 0.0,
                 position_update_interval: Some(std::time::Duration::from_millis(250)),
                 ..PlayerConfig::default()
             },

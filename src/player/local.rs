@@ -11,7 +11,81 @@ use tracing::{info, warn};
 
 use super::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode};
 use crate::audio::audio_sink::{AnalyzingSource, SharedAnalyzerState};
+use crate::audio::opus::OpusSource;
 use crate::spotify::TrackSummary;
+
+/// Decoder for local files: symphonia handles MP3/FLAC/etc, OpusSource handles .opus
+enum LocalDecoder {
+    Symphonia(Decoder<BufReader<File>>),
+    Opus(OpusSource),
+}
+
+impl LocalDecoder {
+    fn open(path: &std::path::Path) -> Option<Self> {
+        let is_opus = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("opus"))
+            .unwrap_or(false);
+
+        if is_opus {
+            OpusSource::open(path).ok().map(LocalDecoder::Opus)
+        } else {
+            let file = File::open(path).ok()?;
+            Decoder::new(BufReader::new(file))
+                .ok()
+                .map(LocalDecoder::Symphonia)
+        }
+    }
+}
+
+impl Iterator for LocalDecoder {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        match self {
+            LocalDecoder::Symphonia(d) => d.next(),
+            LocalDecoder::Opus(d) => d.next(),
+        }
+    }
+}
+
+impl rodio::Source for LocalDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        match self {
+            LocalDecoder::Symphonia(d) => d.current_span_len(),
+            LocalDecoder::Opus(d) => d.current_span_len(),
+        }
+    }
+
+    fn channels(&self) -> u16 {
+        match self {
+            LocalDecoder::Symphonia(d) => d.channels(),
+            LocalDecoder::Opus(d) => d.channels(),
+        }
+    }
+
+    fn sample_rate(&self) -> u32 {
+        match self {
+            LocalDecoder::Symphonia(d) => d.sample_rate(),
+            LocalDecoder::Opus(d) => d.sample_rate(),
+        }
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        match self {
+            LocalDecoder::Symphonia(d) => d.total_duration(),
+            LocalDecoder::Opus(d) => d.total_duration(),
+        }
+    }
+
+    fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), rodio::source::SeekError> {
+        match self {
+            LocalDecoder::Symphonia(d) => d.try_seek(pos),
+            LocalDecoder::Opus(d) => d.try_seek(pos),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct LocalTrack {
@@ -157,14 +231,9 @@ impl LocalPlayer {
         self.sink.clear();
         self.sink.stop();
 
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
-
-        let decoder = match Decoder::new(BufReader::new(file)) {
-            Ok(d) => d,
-            Err(_) => return false,
+        let decoder = match LocalDecoder::open(&path) {
+            Some(d) => d,
+            None => return false,
         };
 
         if self.analyzer.enabled() {
@@ -218,8 +287,7 @@ impl LocalPlayer {
                     is_seeking.store(false, Ordering::SeqCst);
                     return;
                 }
-                let file = File::open(&path).ok();
-                let decoder = file.and_then(|f| Decoder::new(BufReader::new(f)).ok());
+                let decoder = LocalDecoder::open(&path);
 
                 if let Some(d) = decoder {
                     if seek_gen != generation.load(Ordering::Acquire) {
