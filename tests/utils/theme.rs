@@ -208,10 +208,14 @@ fn theme_default_show_ascii_art() {
 
 fn print_node(node: &LayoutNode, depth: usize) {
     let indent = "  ".repeat(depth);
-    println!("{}node: widget={:?} dir={:?} constraints={:?} children={}",
-        indent, node.widget, node.direction,
+    println!(
+        "{}node: widget={:?} dir={:?} constraints={:?} children={}",
+        indent,
+        node.widget,
+        node.direction,
         node.constraints.as_ref().map(|v| v.len()).unwrap_or(0),
-        node.children.as_ref().map(|v| v.len()).unwrap_or(0));
+        node.children.as_ref().map(|v| v.len()).unwrap_or(0)
+    );
     if let Some(children) = &node.children {
         for child in children {
             print_node(child, depth + 1);
@@ -244,10 +248,7 @@ fn collect_areas(node: &LayoutNode, area: Rect, areas: &mut Vec<(Option<UiWidget
 }
 
 fn rects_overlap(a: &Rect, b: &Rect) -> bool {
-    a.x < b.x + b.width
-        && a.x + a.width > b.x
-        && a.y < b.y + b.height
-        && a.y + a.height > b.y
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
 }
 
 #[test]
@@ -342,7 +343,10 @@ widget = "help"
             let lt = &theme.layout_tree;
             println!("direction: {:?}", lt.direction);
             println!("constraints: {:?}", lt.constraints);
-            println!("children count: {:?}", lt.children.as_ref().map(|c| c.len()));
+            println!(
+                "children count: {:?}",
+                lt.children.as_ref().map(|c| c.len())
+            );
             print_node(lt, 0);
         }
         Err(e) => {
@@ -370,7 +374,10 @@ widget = "help"
     assert_eq!(middle.direction, Some(SerializableDirection::Horizontal));
     let middle_constraints = middle.constraints.as_ref().unwrap();
     assert_eq!(middle_constraints.len(), 2);
-    assert_eq!(middle_constraints[0], SerializableConstraint::Percentage(12));
+    assert_eq!(
+        middle_constraints[0],
+        SerializableConstraint::Percentage(12)
+    );
     assert_eq!(middle_constraints[1], SerializableConstraint::Fill(1));
 
     let middle_children = middle.children.as_ref().unwrap();
@@ -390,7 +397,10 @@ widget = "help"
     let content_children = content.children.as_ref().unwrap();
     assert_eq!(content_children.len(), 1);
     let content_horizontal = &content_children[0];
-    assert_eq!(content_horizontal.direction, Some(SerializableDirection::Horizontal));
+    assert_eq!(
+        content_horizontal.direction,
+        Some(SerializableDirection::Horizontal)
+    );
     let ch_children = content_horizontal.children.as_ref().unwrap();
     assert_eq!(ch_children.len(), 2);
     assert_eq!(ch_children[0].widget, Some(UiWidget::MainContent));
@@ -487,9 +497,15 @@ widget = "help"
     let mut areas: Vec<(Option<UiWidget>, Rect)> = Vec::new();
     collect_areas(&theme.layout_tree, test_area, &mut areas);
 
-    println!("Widget areas for {}x{} terminal:", test_area.width, test_area.height);
+    println!(
+        "Widget areas for {}x{} terminal:",
+        test_area.width, test_area.height
+    );
     for (widget, area) in &areas {
-        println!("  {:?}: ({}, {}, {}, {})", widget, area.x, area.y, area.width, area.height);
+        println!(
+            "  {:?}: ({}, {}, {}, {})",
+            widget, area.x, area.y, area.width, area.height
+        );
     }
 
     for i in 0..areas.len() {
@@ -497,8 +513,16 @@ widget = "help"
             if rects_overlap(&areas[i].1, &areas[j].1) {
                 panic!(
                     "OVERLAP: {:?} at ({},{},{},{}) overlaps with {:?} at ({},{},{},{})",
-                    areas[i].0, areas[i].1.x, areas[i].1.y, areas[i].1.width, areas[i].1.height,
-                    areas[j].0, areas[j].1.x, areas[j].1.y, areas[j].1.width, areas[j].1.height
+                    areas[i].0,
+                    areas[i].1.x,
+                    areas[i].1.y,
+                    areas[i].1.width,
+                    areas[i].1.height,
+                    areas[j].0,
+                    areas[j].1.x,
+                    areas[j].1.y,
+                    areas[j].1.width,
+                    areas[j].1.height
                 );
             }
         }
