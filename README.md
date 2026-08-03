@@ -9,7 +9,7 @@ isi-music is a terminal audio player for Spotify streaming and local file playba
 ## Features
 
 - **Spotify streaming** via librespot -- no official Spotify app required
-- **Local file playback** -- MP3 and FLAC with automatic metadata extraction
+- **Local file playback** -- MP3, FLAC, Opus, Ogg Vorbis, WAV with automatic metadata extraction
 - **Real-time audio visualizer** using braille characters (Spotify + local files)
 - **Full-text search** across tracks, albums, artists, playlists, and podcasts
 - **Queue management** with cross-player support (mix Spotify and local tracks)
@@ -67,6 +67,17 @@ chmod +x isi-music
 sudo mv isi-music /usr/local/bin/
 ```
 
+**Windows:**
+```powershell
+# PowerShell
+Invoke-WebRequest -Uri https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-windows-x86_64.exe -OutFile isi-music.exe
+# Move it to a folder on your PATH, e.g.:
+mkdir "$env:LOCALAPPDATA\Programs\isi-music" -Force
+move isi-music.exe "$env:LOCALAPPDATA\Programs\isi-music\"
+```
+
+No audio dependencies are needed on Windows (WASAPI is built in). For the best experience use a modern terminal such as Windows Terminal.
+
 **Linux audio dependencies:**
 
 | Distro | Command |
@@ -91,7 +102,7 @@ Individual setup commands:
 
 ```bash
 isi-music setup-spotify   # Spotify Client ID + PKCE OAuth
-isi-music setup-lastfm    # Last.fm API key + session
+isi-music setup-lastfm    # Last.fm authentication (no API key needed!)
 ```
 
 ## Configuration
@@ -106,8 +117,6 @@ client_id = "your_client_id_here"
 music_dir = "~/Music"
 
 [lastfm]
-api_key    = "your_lastfm_api_key"
-api_secret = "your_lastfm_api_secret"
 session_key = "obtained_via_setup-lastfm"
 
 [discord]
@@ -450,9 +459,13 @@ isi-music --status       # shows current track and progress
 isi-music --quit-daemon
 ```
 
-Logs are written to `~/.cache/isi-music/isi-music.log` (Linux) or the equivalent cache path on other platforms. Clear them with `isi-music --clear-logs`.
+Logs are written to `~/.cache/isi-music/isi-music.log` (Linux) or the equivalent cache path on other platforms (`%LOCALAPPDATA%\isi-music\` on Windows). Clear them with `isi-music --clear-logs`.
 
 > Daemon mode currently supports Spotify playback only. Local file playback works in TUI mode.
+>
+> **Windows note:** instead of forking, `--daemon` launches a detached background process, and
+> CLI <-> daemon IPC uses the named pipe `\\.\pipe\isi-music` instead of a Unix socket. All CLI
+> commands work the same. Media keys are not supported (MPRIS is Linux-only).
 
 ## Local Files
 
@@ -463,7 +476,11 @@ isi-music can play local audio files without a Spotify account. Point it at your
 music_dir = "~/Music"
 ```
 
-Supported formats: MP3, FLAC.
+> **Windows:** use forward slashes (`music_dir = "C:/Users/you/Music"`) or double the
+> backslashes (`"C:\\Users\\you\\Music"`). A single `\U` sequence is an invalid TOML
+> escape and will prevent the app from starting.
+
+Supported formats: MP3, FLAC, Opus (.opus), Ogg Vorbis, WAV.
 
 Navigate to **Local Files** in the library panel and press Enter to scan. The first scan extracts metadata and embedded cover art, cached in SQLite for instant subsequent loads.
 
@@ -471,9 +488,9 @@ You can mix local and Spotify tracks in the same queue -- isi-music routes each 
 
 ## Integrations
 
-### MPRIS2 (Linux)
+### MPRIS2 (Linux only)
 
-isi-music registers on D-Bus as `org.mpris.MediaPlayer2.isi_music`, enabling media keys, Waybar widgets, and `playerctl`.
+isi-music registers on D-Bus as `org.mpris.MediaPlayer2.isi_music`, enabling media keys, Waybar widgets, and `playerctl`. Not available on Windows or macOS (no D-Bus session bus).
 
 **Waybar config:**
 ```json
@@ -495,7 +512,7 @@ MPRIS works in both TUI and daemon modes.
 
 ### Last.fm Scrobbling
 
-Run `isi-music setup-lastfm` to configure. The wizard will prompt for your API credentials and open your browser for authorization.
+Run `isi-music setup-lastfm` to configure. The wizard will open your browser for Last.fm authorization - just log in and authorize the app. No API credentials needed!
 
 Scrobbling behavior:
 - Track starts: `track.updateNowPlaying`
@@ -533,10 +550,16 @@ cd isi_music
 # Linux build dependencies
 sudo apt install libasound2-dev libpulse-dev libdbus-1-dev pkg-config
 
+# Windows: MSVC C++ Build Tools + cmake (Opus builds libopus from C sources)
+winget install Kitware.CMake
+
+# Linux: cmake is also required (Opus builds libopus from C sources)
+sudo apt install cmake
+
 cargo build --release
 
 # Run with debug logging
-RUST_LOG=isi_music=debug cargo run
+RUST_LOG=isi_music=debug cargo run   # PowerShell: $env:RUST_LOG="isi_music=debug"; cargo run
 
 # Run tests (154 tests)
 cargo test
@@ -572,7 +595,7 @@ Available features:
 |---------|---------|-------------|
 | `spotify` | yes | Spotify streaming via librespot |
 | `discord` | yes | Discord Rich Presence |
-| `mpris` | no | MPRIS2 D-Bus media controls |
+| `mpris` | no | MPRIS2 D-Bus media controls (Linux only; no-op on other platforms) |
 | `lastfm` | yes | Last.fm scrobbling |
 | `wizard` | yes | Interactive setup wizard |
 | `visualizer` | yes | Real-time audio FFT visualizer |
@@ -584,7 +607,8 @@ Available features:
 isi-music uses multiple audio backends depending on the source:
 
 - **librespot** -- Spotify authentication and audio streaming via the Spotify Connect protocol
-- **rodio + symphonia** -- Local audio decoding (MP3 and FLAC)
+- **rodio + symphonia** -- Local audio decoding (MP3, FLAC, Ogg Vorbis, WAV)
+- **ogg + opus2 + opusmeta** -- Opus decoding (RFC 7845) with libopus (bundled)
 - **Custom HTTP client** -- Spotify Web API for search, metadata, playlists, and album art
 
 The TUI is built with ratatui. The event loop polls player state, processes keyboard input, and renders at ~60 fps.
@@ -606,9 +630,17 @@ This project follows Semantic Versioning derived from conventional commits:
 ### Local files showing "Unknown Artist"
 
 Delete the SQLite cache and covers, then restart:
+
+**Linux:**
 ```bash
 rm ~/.local/share/isi-music/library.db
 rm -rf ~/.cache/isi-music/covers/
+```
+
+**Windows (PowerShell):**
+```powershell
+Remove-Item "$env:APPDATA\isi-music\library.db"
+Remove-Item -Recurse "$env:LOCALAPPDATA\isi-music\covers\"
 ```
 
 ### Album art not showing
