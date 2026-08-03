@@ -7,8 +7,10 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 #[cfg(feature = "album-art")]
 use ratatui_image::picker::Picker;
+#[cfg(unix)]
 use std::fs::OpenOptions;
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 
 mod app;
@@ -36,7 +38,6 @@ const YELLOW: &str = "\x1b[1;33m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const GREEN: &str = "\x1b[32m";
-const GRAY: &str = "\x1b[90m";
 
 const BOX_W: usize = 63;
 
@@ -79,97 +80,31 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!(
         "{}",
         bl!(format!(
-            "  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}"
+            "  isi-music will open Last.fm authorization in your browser"
         ))
     );
-    println!("{}", bl!("  2. Create an API application"));
     println!(
         "{}",
         bl!(format!(
-            "  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}"
+            "  Just log in to your Last.fm account and authorize the app"
         ))
     );
     println!("{}", bl!(""));
     println!(
         "{}",
         bl!(format!(
-            "  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}"
-        ))
-    );
-    println!("{}", bl!("  5. Add the following content:"));
-    println!("{}", bl!(""));
-    println!("{}", bl!(format!("     {GRAY}[lastfm]{RESET}")));
-    println!(
-        "{}",
-        bl!(format!("     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}"))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}"
-        ))
-    );
-    println!("{}", bl!("     session_key = \"\""));
-    println!("{}", bl!(""));
-    println!(
-        "{}",
-        bl!(format!(
-            "  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}"
-        ))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "  {YELLOW}Never commit your API Secret to Git.{RESET}"
+            "  {YELLOW}{BOLD}No API credentials needed!{RESET} {YELLOW}isi-music handles everything.{RESET}"
         ))
     );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
-    let api_key = loop {
-        let v = prompt("API Key: ");
-        if !v.is_empty() {
-            break v;
-        }
-        println!("Cannot be empty.");
-    };
-    let api_secret = loop {
-        let v = prompt("API Secret: ");
-        if !v.is_empty() {
-            break v;
-        }
-        println!("Cannot be empty.");
-    };
+    println!("Opening Last.fm authorization in your browser...");
 
-    println!("Requesting authorization token...");
-    let token = utils::lastfm::LastfmClient::get_auth_token(&api_key).await?;
-
-    let auth_url = format!(
-        "https://www.last.fm/api/auth/?api_key={}&token={}",
-        api_key, token
-    );
-
-    println!("\nOpening Last.fm authorization in your browser...");
-    if open::that(&auth_url).is_err() {
-        println!("Could not open browser automatically. Please visit:");
-        println!("URL: {}", auth_url);
-    } else {
-        println!("URL: {}", auth_url);
-    }
-    println!("\nAfter authorizing, return here and press ENTER.");
-
-    let mut _unused = String::new();
-    std::io::stdin().read_line(&mut _unused)?;
-
-    print!("Finalizing Last.fm authentication...");
-    std::io::stdout().flush().ok();
-
-    match utils::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
+    match utils::lastfm::LastfmClient::authenticate_with_default().await {
         Ok(session_key) => {
-            cfg.lastfm.api_key = Some(api_key);
-            cfg.lastfm.api_secret = Some(api_secret);
             cfg.lastfm.session_key = Some(session_key);
             cfg.save()?;
-            println!(" OK");
+            println!("Last.fm authentication successful!");
             println!("Last.fm scrobbling enabled!");
             println!();
         }
@@ -322,10 +257,19 @@ PLAYBACK CONTROL
   isi-music --status                 Show current track and progress
 
 QUEUE MANAGEMENT
-  isi-music --liked                  Load all liked songs and play
-  isi-music --play <spotify:playlist:ID>   Load a playlist and play
-  isi-music --ls                     List loaded tracks with their ID
+  isi-music --playlists               List your playlists (ID + name)
+  isi-music --play <ID|name>         Load playlist by ID or name (fuzzy match)
+  isi-music --liked [--limit N]      Load liked songs (limit to N, default 100)
+  isi-music --search <query>         Search within loaded queue
+  isi-music --search-global <query>  Search globally on Spotify
+  isi-music --ls [--limit N]         List loaded tracks (paginate with --limit)
   isi-music --play-id <N>            Play track by ID (from --ls)
+
+DEVICE CONTROL
+  isi-music --devices                List available Spotify Connect devices
+  isi-music --device <name>          Transfer playback to device (fuzzy match)
+
+NOTE: Audio quality and crossfade changes require daemon restart (not yet supported via CLI).
 
 SETUP
   isi-music setup                    First config (wizard)
@@ -358,9 +302,13 @@ LAST.FM SCROBBLING
 FILES
   Config   ~/.config/isi-music/config.toml
   Log      ~/.local/share/isi-music/isi-music.log
-  Socket   $XDG_RUNTIME_DIR/isi-music.sock
 "
     );
+
+    #[cfg(unix)]
+    println!("  Socket   $XDG_RUNTIME_DIR/isi-music.sock");
+    #[cfg(windows)]
+    println!("  Pipe     \\\\.\\pipe\\isi-music");
 }
 
 fn main() -> Result<()> {
@@ -385,26 +333,68 @@ fn main() -> Result<()> {
     let arg1 = args.get(1).map(|s| s.as_str());
 
     if arg1 == Some("--daemon") {
-        let child_pid = unsafe { libc::fork() };
-        if child_pid < 0 {
-            anyhow::bail!("fork() failed");
-        }
-        if child_pid > 0 {
-            println!("isi-music daemon started (PID {child_pid})");
-            return Ok(());
-        }
-        unsafe {
-            libc::setsid();
+        // Unix: classic double-step daemonize (fork + setsid + stdio to /dev/null)
+        #[cfg(unix)]
+        {
+            let child_pid = unsafe { libc::fork() };
+            if child_pid < 0 {
+                anyhow::bail!("fork() failed");
+            }
+            if child_pid > 0 {
+                println!("isi-music daemon started (PID {child_pid})");
+                return Ok(());
+            }
+            unsafe {
+                libc::setsid();
+            }
+
+            if let Ok(file) = OpenOptions::new().read(true).write(true).open("/dev/null") {
+                let fd = file.as_raw_fd();
+                unsafe {
+                    libc::dup2(fd, libc::STDIN_FILENO);
+                    libc::dup2(fd, libc::STDOUT_FILENO);
+                    libc::dup2(fd, libc::STDERR_FILENO);
+                }
+            }
+
+            return tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(daemon::run(cfg));
         }
 
-        if let Ok(file) = OpenOptions::new().read(true).write(true).open("/dev/null") {
-            let fd = file.as_raw_fd();
-            unsafe {
-                libc::dup2(fd, libc::STDIN_FILENO);
-                libc::dup2(fd, libc::STDOUT_FILENO);
-                libc::dup2(fd, libc::STDERR_FILENO);
-            }
+        // Windows has no fork(): re-launch ourselves as a detached background process
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+            let exe = std::env::current_exe()?;
+            let child = std::process::Command::new(exe)
+                .arg("--daemon-child")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+                .spawn()?;
+            println!("isi-music daemon started (PID {})", child.id());
+            return Ok(());
         }
+
+        // Other platforms: run the daemon in the foreground
+        #[cfg(not(any(unix, windows)))]
+        {
+            return tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(daemon::run(cfg));
+        }
+    }
+
+    // Internal: spawned detached by `--daemon` on Windows
+    if arg1 == Some("--daemon-child") {
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
@@ -432,8 +422,8 @@ fn main() -> Result<()> {
         }
 
         Some(
-            cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-" | "--status" | "--ls"
-            | "--liked" | "--quit-daemon"),
+            cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-" | "--status"
+            | "--quit-daemon" | "--playlists" | "--devices"),
         ) => {
             let c = cmd.trim_start_matches('-');
             Some(if c == "quit-daemon" {
@@ -442,11 +432,49 @@ fn main() -> Result<()> {
                 c.into()
             })
         }
+        Some("--device") => {
+            let name = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --device <name>"))?;
+            Some(format!("device {name}"))
+        }
+        Some("--ls") => {
+            if args.get(2).is_some() && args.get(2) == Some(&"--limit".to_string()) {
+                let limit = args
+                    .get(3)
+                    .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --ls --limit <N>"))?;
+                Some(format!("ls --limit {limit}"))
+            } else {
+                Some("ls".into())
+            }
+        }
         Some("--play") => {
             let uri = args
                 .get(2)
-                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --play <spotify:playlist:ID>"))?;
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --play <ID|name>"))?;
             Some(format!("play {uri}"))
+        }
+        Some("--liked") => {
+            if args.get(2).is_some() && args.get(2) == Some(&"--limit".to_string()) {
+                let limit = args
+                    .get(3)
+                    .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --liked --limit <N>"))?;
+                Some(format!("liked --limit {limit}"))
+            } else {
+                Some("liked".into())
+            }
+        }
+        Some("--search") => {
+            let query = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --search <query>"))?;
+            Some(format!("search {query}"))
+        }
+        Some("--search-global") => {
+            let query = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --search-global <query>"))?;
+            Some(format!("search-global {query}"))
         }
         Some("--play-id") => {
             let id = args.get(2).ok_or_else(|| {
@@ -531,7 +559,7 @@ fn main() -> Result<()> {
                 .with_ansi(false)
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("isi_music=warn".parse()?),
+                        .add_directive("isi_music=info".parse()?),
                 )
                 .init();
 

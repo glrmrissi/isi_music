@@ -4,7 +4,7 @@ pub mod discord;
 pub mod ipc;
 pub mod lastfm;
 pub mod lyrics;
-#[cfg(feature = "mpris")]
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 pub mod mpris;
 pub mod theme;
 pub mod wizard;
