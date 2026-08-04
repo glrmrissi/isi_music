@@ -51,6 +51,7 @@ pub trait AudioPlayer: Send {
         uri: String,
         name: String,
         artist: String,
+        album: String,
         duration_ms: u64,
         cover_path: Option<PathBuf>,
     );
@@ -106,6 +107,7 @@ pub struct QueuedTrack {
     pub uri: String,
     pub name: String,
     pub artist: String,
+    pub album: String,
     pub duration_ms: u64,
     pub cover_path: Option<PathBuf>,
 }
@@ -284,6 +286,7 @@ impl NativePlayer {
         uri: String,
         name: String,
         artist: String,
+        album: String,
         duration_ms: u64,
         cover_path: Option<PathBuf>,
     ) {
@@ -291,6 +294,7 @@ impl NativePlayer {
             uri,
             name,
             artist,
+            album,
             duration_ms,
             cover_path,
         });
@@ -438,10 +442,11 @@ impl AudioPlayer for NativePlayer {
         uri: String,
         name: String,
         artist: String,
+        album: String,
         duration_ms: u64,
         cover_path: Option<PathBuf>,
     ) {
-        self.add_to_queue(uri, name, artist, duration_ms, cover_path);
+        self.add_to_queue(uri, name, artist, album, duration_ms, cover_path);
     }
     fn user_queue(&self) -> &[QueuedTrack] {
         self.user_queue()

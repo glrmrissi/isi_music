@@ -45,13 +45,15 @@ pub struct MusixMatchConfig {
     pub musixmatch_api_key: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AppOptionsConfig {
     pub show_cover_images: Option<bool>,
     pub enable_lyrics: Option<bool>,
     pub show_visualizer: Option<bool>,
     pub default_layout: Option<String>,
     pub compact_mode_default: Option<bool>,
+    /// When the queue ends, automatically fetch and queue recommended tracks (default: true)
+    pub autoplay: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -93,6 +95,11 @@ impl AppConfig {
         std::env::var("MUSIXMATCH_API_KEY")
             .ok()
             .or_else(|| self.musixmatch.musixmatch_api_key.clone())
+    }
+
+    /// Autoplay is enabled by default; only disabled if explicitly set to false.
+    pub fn autoplay_enabled(&self) -> bool {
+        self.options.autoplay.unwrap_or(true)
     }
 
     pub fn save(&self) -> Result<()> {

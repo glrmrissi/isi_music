@@ -67,7 +67,7 @@ impl App {
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
             self.state.playback.artist = qt.artist;
-            self.state.playback.album = String::new();
+            self.state.playback.album = qt.album;
             self.state.playback.duration_ms = qt.duration_ms;
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
@@ -181,10 +181,19 @@ impl App {
     }
 
     pub async fn radio_refill(&mut self) {
-        let seeds: Vec<String> = self.recent_track_uris.iter().cloned().collect();
+        // Seed from the current playing track first, then recent tracks
+        let mut seeds: Vec<String> = Vec::new();
+        if self.current_track_uri.starts_with("spotify:track:") {
+            seeds.push(self.current_track_uri.clone());
+        }
+        for uri in self.recent_track_uris.iter().rev() {
+            if !seeds.contains(uri) && seeds.len() < 5 {
+                seeds.push(uri.clone());
+            }
+        }
         if seeds.is_empty() {
             self.state.status_msg =
-                Some("Radio: no seed tracks yet — play a Spotify track first".to_string());
+                Some("Autoplay: no seed track — play a Spotify track first".to_string());
             return;
         }
 
@@ -192,17 +201,32 @@ impl App {
             Ok(tracks) if !tracks.is_empty() => {
                 let count = tracks.len();
                 if let Some(player) = &mut self.player {
+                    // Also update playing_tracks so the now-playing display
+                    // (title/artist/album) works for autoplay-queued tracks
+                    self.playing_tracks.extend(tracks.clone());
                     for t in tracks {
-                        player.add_to_queue(t.uri, t.name, t.artist, t.duration_ms, None);
+                        player.add_to_queue(t.uri, t.name, t.artist, t.album, t.duration_ms, None);
                     }
-                    self.state.status_msg = Some(format!("Radio: queued {count} tracks"));
+                    let label = if self.radio_mode {
+                        "Autoplay"
+                    } else {
+                        "Autoplay"
+                    };
+                    self.state.status_msg = Some(format!("{label}: queued {count} tracks"));
                     self.sync_queue_display();
                 }
             }
             Ok(_) | Err(_) => {
-                self.radio_mode = false;
-                self.state.playback.radio_mode = false;
-                self.state.status_msg = Some("Radio: could not find tracks, radio off".to_string());
+                // Only disable radio_mode if it was manually toggled, not autoplay
+                if self.radio_mode {
+                    self.radio_mode = false;
+                    self.state.playback.radio_mode = false;
+                    self.state.status_msg =
+                        Some("Autoplay: could not find tracks, autoplay off".to_string());
+                } else {
+                    self.state.status_msg =
+                        Some("Autoplay: could not find recommendations".to_string());
+                }
             }
         }
     }
@@ -248,6 +272,7 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = count as u32;
                 self.state.tracks_offset = count as u32;
+                self.state.tracks_api_offset = count as u32;
                 self.state.active_playlist_uri = Some("radio:recommendations".to_string());
                 self.state.active_playlist_id = Some("radio:recommendations".to_string());
                 self.state

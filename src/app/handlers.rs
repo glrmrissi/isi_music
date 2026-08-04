@@ -338,6 +338,12 @@ impl App {
                 match panel.handle_key(code) {
                     PanelAction::Close => {
                         panel.visible = false;
+                        // Persist config changes to disk
+                        let cfg_to_save = crate::config::AppConfig {
+                            options: panel.config.clone(),
+                            ..crate::config::AppConfig::load().unwrap_or_default()
+                        };
+                        let _ = cfg_to_save.save();
                         self.state.status_msg = Some("Options panel closed".to_string());
                     }
                     PanelAction::ToggleItem => match panel.focused_section {
@@ -395,6 +401,16 @@ impl App {
                                 }
                                 4 => {
                                     self.toggle_lastfm_scrobbling().await;
+                                }
+                                5 => {
+                                    let v = !panel.config.autoplay.unwrap_or(true);
+                                    panel.config.autoplay = Some(v);
+                                    self.autoplay_enabled = v;
+                                    self.state.status_msg = Some(if v {
+                                        "Autoplay enabled".to_string()
+                                    } else {
+                                        "Autoplay disabled".to_string()
+                                    });
                                 }
                                 _ => {}
                             }
@@ -658,7 +674,16 @@ impl App {
                             .local_tree
                             .get_visible(*actual_vi)
                             .and_then(|n| n.track().cloned())
-                            .map(|t| (t.uri, t.name, t.artist, t.duration_ms, t.cover_path))
+                            .map(|t| {
+                                (
+                                    t.uri,
+                                    t.name,
+                                    t.artist,
+                                    t.album,
+                                    t.duration_ms,
+                                    t.cover_path,
+                                )
+                            })
                     })
                 } else {
                     self.state.track_list.selected().and_then(|display_idx| {
@@ -668,13 +693,14 @@ impl App {
                                 t.uri.clone(),
                                 t.name.clone(),
                                 t.artist.clone(),
+                                t.album.clone(),
                                 t.duration_ms,
                                 t.cover_path.clone(),
                             )
                         })
                     })
                 };
-                if let Some((uri, name, artist, duration_ms, cover_path)) = track {
+                if let Some((uri, name, artist, album, duration_ms, cover_path)) = track {
                     let is_local = uri.starts_with("file://");
                     let target = if is_local == self.local_active {
                         self.player.as_mut()
@@ -686,6 +712,7 @@ impl App {
                             uri,
                             name.clone(),
                             artist,
+                            album,
                             duration_ms,
                             cover_path.map(std::path::PathBuf::from),
                         );
@@ -898,56 +925,71 @@ impl App {
                     self.debug_overlay
                         .log(LogLevel::Warn, "CopyTrackLink: no track playing");
                 } else {
-                    let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-                    let cmd = if wayland { "wl-copy" } else { "xclip" };
-                    let args: &[&str] = if wayland {
-                        &[]
+                    // Try arboard (cross-platform) first, fall back to xclip/wl-copy on Linux
+                    let copied = match arboard::Clipboard::new() {
+                        Ok(mut cb) => cb.set_text(&url).is_ok(),
+                        Err(_) => false,
+                    };
+                    if !copied {
+                        // Fallback: xclip (X11) / wl-copy (Wayland)
+                        let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+                        let cmd = if wayland { "wl-copy" } else { "xclip" };
+                        let args: &[&str] = if wayland {
+                            &[]
+                        } else {
+                            &["-selection", "clipboard"]
+                        };
+                        let mut child = match std::process::Command::new(cmd)
+                            .args(args)
+                            .stdin(std::process::Stdio::piped())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                self.state.status_msg =
+                                    Some(format!("Copy failed: {cmd} not found ({e})"));
+                                self.debug_overlay.log(
+                                    LogLevel::Error,
+                                    format!("CopyTrackLink: failed to spawn {cmd}: {e}"),
+                                );
+                                return;
+                            }
+                        };
+                        if let Some(mut stdin) = child.stdin.take() {
+                            use std::io::Write;
+                            let _ = stdin.write_all(url.as_bytes());
+                        }
+                        match child.wait() {
+                            Ok(status) if status.success() => {
+                                self.state.status_msg = Some(format!("Link copied: {url}"));
+                                self.debug_overlay
+                                    .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
+                            }
+                            Ok(status) => {
+                                self.state.status_msg =
+                                    Some(format!("Copy failed: {cmd} exited with {status}"));
+                                self.debug_overlay.log(
+                                    LogLevel::Error,
+                                    format!("CopyTrackLink: {cmd} exited with {status}"),
+                                );
+                                return;
+                            }
+                            Err(e) => {
+                                self.state.status_msg =
+                                    Some(format!("Copy failed: {cmd} error ({e})"));
+                                self.debug_overlay.log(
+                                    LogLevel::Error,
+                                    format!("CopyTrackLink: {cmd} wait error: {e}"),
+                                );
+                                return;
+                            }
+                        }
                     } else {
-                        &["-selection", "clipboard"]
-                    };
-                    let mut child = match std::process::Command::new(cmd)
-                        .args(args)
-                        .stdin(std::process::Stdio::piped())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn()
-                    {
-                        Ok(c) => c,
-                        Err(e) => {
-                            self.state.status_msg =
-                                Some(format!("Copy failed: {cmd} not found ({e})"));
-                            self.debug_overlay.log(
-                                LogLevel::Error,
-                                format!("CopyTrackLink: failed to spawn {cmd}: {e}"),
-                            );
-                            return;
-                        }
-                    };
-                    if let Some(mut stdin) = child.stdin.take() {
-                        use std::io::Write;
-                        let _ = stdin.write_all(url.as_bytes());
-                    }
-                    match child.wait() {
-                        Ok(status) if status.success() => {
-                            self.state.status_msg = Some(format!("Link copied: {url}"));
-                            self.debug_overlay
-                                .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
-                        }
-                        Ok(status) => {
-                            self.state.status_msg =
-                                Some(format!("Copy failed: {cmd} exited with {status}"));
-                            self.debug_overlay.log(
-                                LogLevel::Error,
-                                format!("CopyTrackLink: {cmd} exited with {status}"),
-                            );
-                        }
-                        Err(e) => {
-                            self.state.status_msg = Some(format!("Copy failed: {cmd} error ({e})"));
-                            self.debug_overlay.log(
-                                LogLevel::Error,
-                                format!("CopyTrackLink: {cmd} wait error: {e}"),
-                            );
-                        }
+                        self.state.status_msg = Some(format!("Link copied: {url}"));
+                        self.debug_overlay
+                            .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
                     }
                 }
             }
@@ -1270,6 +1312,7 @@ impl App {
                                     self.state.tracks = tracks;
                                     self.state.tracks_total = total;
                                     self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.tracks_api_offset = self.state.tracks.len() as u32;
                                     self.state.active_playlist_uri = Some(format!("show:{id}"));
                                     self.state.active_playlist_id = Some(format!("show:{id}"));
                                     self.state
@@ -1513,6 +1556,7 @@ impl App {
                                     self.state.tracks = tracks;
                                     self.state.tracks_total = total;
                                     self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.tracks_api_offset = self.state.tracks.len() as u32;
                                     self.state.active_playlist_uri = Some(format!("album:{uri}"));
                                     self.state.active_playlist_id = Some(format!("album:{id}"));
                                     self.state
@@ -1557,7 +1601,7 @@ impl App {
                             self.state.status_msg = Some(format!("Loading {name}…"));
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             match self.spotify.fetch_playlist_tracks(&id, 0).await {
-                                Ok((tracks, total)) => {
+                                Ok((tracks, total, _page_items)) => {
                                     if tracks.is_empty() {
                                         self.state.status_msg = Some(
                                             "Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
@@ -1566,6 +1610,7 @@ impl App {
                                         self.state.tracks = tracks;
                                         self.state.tracks_total = total;
                                         self.state.tracks_offset = self.state.tracks.len() as u32;
+                                        self.state.tracks_api_offset = _page_items;
                                         self.state.active_playlist_uri = Some(uri);
                                         self.state.active_playlist_id = Some(id);
                                         self.state.track_list.select(Some(0));
@@ -1614,6 +1659,7 @@ impl App {
                                     self.state.tracks = tracks;
                                     self.state.tracks_total = total;
                                     self.state.tracks_offset = self.state.tracks.len() as u32;
+                                    self.state.tracks_api_offset = self.state.tracks.len() as u32;
                                     self.state.active_artist_name = Some(name.clone());
                                     self.state.active_playlist_uri = Some(format!("artist:{id}"));
                                     self.state.active_playlist_id = Some(format!("artist:{id}"));
@@ -1796,16 +1842,15 @@ impl App {
                 .fetch_playlist_tracks(playlist_id, offset)
                 .await
             {
-                Ok((batch, total)) => {
+                Ok((batch, total, page_items)) => {
                     if batch.is_empty() {
                         break;
                     }
-                    let n = batch.len() as u32;
                     for t in batch {
                         uris.push(t.uri.clone());
                         tracks.push(t);
                     }
-                    offset += n;
+                    offset += page_items;
                     if offset >= total || tracks.len() >= 500 {
                         break;
                     }

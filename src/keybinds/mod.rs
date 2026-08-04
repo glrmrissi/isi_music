@@ -66,7 +66,7 @@ impl Action {
             ("seek_backward", &["left"], SeekBackward),
             ("toggle_shuffle", &["s"], ToggleShuffle),
             ("cycle_repeat", &["r"], CycleRepeat),
-            ("toggle_radio", &["R"], ToggleRadio),
+            ("toggle_radio", &["´"], ToggleRadio),
             ("recommendations", &["alt+r"], GetRecommendations),
             ("like_track", &["l"], LikeTrack),
             ("add_to_queue", &["a"], AddToQueue),

@@ -41,7 +41,17 @@ pub enum FetchResult {
     PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
-    MoreTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, Option<String>), String>),
+    MoreTracks(
+        Result<
+            (
+                Vec<crate::spotify::TrackSummary>,
+                u32,
+                Option<String>,
+                Option<u32>,
+            ),
+            String,
+        >,
+    ),
 }
 
 pub struct App {
@@ -78,6 +88,7 @@ pub struct App {
     art_url: Option<String>,
     session_reconnecting: bool,
     radio_mode: bool,
+    autoplay_enabled: bool,
     recent_track_uris: std::collections::VecDeque<String>,
     playing_tracks: Vec<crate::spotify::TrackSummary>,
     theme: Theme,
@@ -113,6 +124,7 @@ impl App {
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
         let cfg = crate::config::AppConfig::load().unwrap_or_default();
+        let autoplay_enabled = cfg.autoplay_enabled();
         let lastfm = match &cfg.lastfm.session_key {
             Some(sk) => {
                 use crate::utils::lastfm::{get_api_key, get_api_secret};
@@ -249,6 +261,7 @@ impl App {
             art_url: initial_art,
             session_reconnecting: false,
             radio_mode: false,
+            autoplay_enabled,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
             theme,
@@ -326,6 +339,7 @@ impl App {
             art_url: None,
             session_reconnecting: false,
             radio_mode: false,
+            autoplay_enabled: false,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
             theme: Default::default(),
@@ -403,6 +417,7 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = total;
                 self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
                 self.state.active_playlist_uri = Some("liked_songs".to_string());
                 self.state.active_playlist_id = Some("liked_songs".to_string());
                 self.state
@@ -484,6 +499,7 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = total;
                 self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
                 self.state
                     .track_list
                     .select(if self.state.tracks.is_empty() {
@@ -510,6 +526,7 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = total;
                 self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
                 self.state
                     .track_list
                     .select(if self.state.tracks.is_empty() {
@@ -530,6 +547,7 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = total;
                 self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
                 self.state
                     .track_list
                     .select(if self.state.tracks.is_empty() {
@@ -546,7 +564,7 @@ impl App {
             FetchResult::ArtistTracks(Err(e)) => {
                 self.state.status_msg = Some(format!("Error: {e}"));
             }
-            FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor))) => {
+            FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor, page_items))) => {
                 self.state.tracks_loading = false;
                 self.state.status_msg = None;
                 if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
@@ -558,6 +576,13 @@ impl App {
                     self.state.tracks_total = total;
                 }
                 self.state.tracks_offset += new_tracks.len() as u32;
+                // Advance the API offset by the number of items the API returned
+                // (before episode filtering) to avoid re-fetching items on the next page
+                if let Some(pi) = page_items {
+                    self.state.tracks_api_offset += pi;
+                } else {
+                    self.state.tracks_api_offset += new_tracks.len() as u32;
+                }
                 self.state.tracks.append(&mut new_tracks);
                 self.state.rebuild_sort_indices();
             }
@@ -774,7 +799,9 @@ impl App {
                             } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if self.radio_mode && !self.local_active {
+                            } else if (self.radio_mode || self.autoplay_enabled)
+                                && !self.local_active
+                            {
                                 needs_radio_refill = true;
                             } else {
                                 needs_crossover = true;
@@ -799,7 +826,9 @@ impl App {
                             } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if self.radio_mode && !self.local_active {
+                            } else if (self.radio_mode || self.autoplay_enabled)
+                                && !self.local_active
+                            {
                                 needs_radio_refill = true;
                             } else {
                                 needs_crossover = true;

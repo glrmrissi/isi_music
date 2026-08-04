@@ -2,9 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::info;
-#[cfg(all(feature = "mpris", target_os = "linux"))]
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::config::AppConfig;
 use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
@@ -20,6 +18,7 @@ struct TrackInfo {
     artist: String,
     album: String,
     duration_ms: u64,
+    uri: String,
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
@@ -89,6 +88,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     let mut track_start_unix: u64 = 0;
     let mut scrobble_sent = false;
     let mut last_tick = Instant::now();
+    let autoplay_enabled = cfg.autoplay_enabled();
+    let mut recent_track_uris: std::collections::VecDeque<String> =
+        std::collections::VecDeque::new();
 
     loop {
         tokio::select! {
@@ -265,10 +267,62 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded | PlayerNotification::TrackUnavailable => {
+                            // Track recent URIs for autoplay seeding
+                            if let Some(idx) = player.current_index() {
+                                if let Some(t) = track_list.get(idx) {
+                                    if t.uri.starts_with("spotify:track:") {
+                                        recent_track_uris.push_back(t.uri.clone());
+                                        if recent_track_uris.len() > 5 {
+                                            recent_track_uris.pop_front();
+                                        }
+                                    }
+                                }
+                            }
+
                             if player.next() {
                                 progress_ms = 0;
                                 scrobble_sent = false;
                                 track_start_unix = unix_now();
+                            } else if autoplay_enabled && !recent_track_uris.is_empty() {
+                                // Queue exhausted — fetch recommendations and continue
+                                info!("daemon: queue exhausted, fetching autoplay recommendations");
+                                let seeds: Vec<String> = recent_track_uris.iter().cloned().collect();
+                                match spotify.fetch_recommendations(&seeds, 20).await {
+                                    Ok(tracks) if !tracks.is_empty() => {
+                                        for t in &tracks {
+                                            player.add_to_queue(
+                                                t.uri.clone(),
+                                                t.name.clone(),
+                                                t.artist.clone(),
+                                                t.album.clone(),
+                                                t.duration_ms,
+                                                None,
+                                            );
+                                        }
+                                        // Update track_list so status/ls reflect the new tracks
+                                        for t in tracks {
+                                            track_list.push(TrackInfo {
+                                                name: t.name,
+                                                artist: t.artist,
+                                                album: t.album,
+                                                duration_ms: t.duration_ms,
+                                                uri: t.uri,
+                                            });
+                                        }
+                                        info!("daemon: autoplay queued tracks, continuing");
+                                        if player.next() {
+                                            progress_ms = 0;
+                                            scrobble_sent = false;
+                                            track_start_unix = unix_now();
+                                        }
+                                    }
+                                    Ok(_) => {
+                                        warn!("daemon: autoplay returned no tracks");
+                                    }
+                                    Err(e) => {
+                                        warn!("daemon: autoplay failed: {e}");
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -355,7 +409,7 @@ async fn load_playlist(
     let mut offset = 0u32;
 
     loop {
-        let (batch, total) = spotify.fetch_playlist_tracks(&id, offset).await?;
+        let (batch, total, page_items) = spotify.fetch_playlist_tracks(&id, offset).await?;
         let n = batch.len();
         if n == 0 {
             break;
@@ -367,9 +421,10 @@ async fn load_playlist(
                 artist: t.artist,
                 album: t.album,
                 duration_ms: t.duration_ms,
+                uri: t.uri,
             });
         }
-        offset += n as u32;
+        offset += page_items;
         if offset >= total {
             break;
         }
@@ -409,6 +464,7 @@ async fn load_liked(
                 artist: t.artist,
                 album: t.album,
                 duration_ms: t.duration_ms,
+                uri: t.uri,
             });
         }
         offset += n as u32;

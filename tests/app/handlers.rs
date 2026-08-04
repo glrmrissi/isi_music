@@ -396,6 +396,7 @@ async fn dispatch_remove_from_queue_removes_item() {
         uri: "spotify:track:abc".into(),
         name: "Track 1".into(),
         artist: "Artist".into(),
+        album: String::new(),
         duration_ms: 200_000,
         cover_path: None,
     });

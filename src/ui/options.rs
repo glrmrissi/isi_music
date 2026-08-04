@@ -105,11 +105,11 @@ impl OptionsPanel {
             OptionsSection::Features => {
                 #[cfg(feature = "album-art")]
                 {
-                    6
+                    7
                 }
                 #[cfg(not(feature = "album-art"))]
                 {
-                    5
+                    6
                 }
             }
             OptionsSection::Cache => 8,
@@ -433,6 +433,8 @@ impl OptionsPanel {
             "Not Configured"
         };
         items.push(("Last.fm Scrobbling", lastfm_text, state.lastfm_connected));
+
+        items.push(("Autoplay", "", self.config.autoplay.unwrap_or(true)));
 
         self.render_item_list(frame, area, "Feature Toggles", &items);
     }

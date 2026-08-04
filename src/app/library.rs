@@ -85,6 +85,7 @@ impl App {
             let result = spotify
                 .fetch_playlist_tracks(&playlist_id, 0)
                 .await
+                .map(|(t, total, _)| (t, total))
                 .map_err(|e| e.to_string());
             let _ = tx.send(FetchResult::PlaylistTracks(result));
         });
@@ -319,6 +320,7 @@ impl App {
             self.state.tracks = tree.all_tracks_flat();
             self.state.tracks_total = track_count as u32;
             self.state.tracks_offset = track_count as u32;
+            self.state.tracks_api_offset = track_count as u32;
             self.state.local_tree = tree;
             self.state
                 .local_tree_list

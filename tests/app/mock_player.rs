@@ -111,6 +111,7 @@ impl AudioPlayer for MockPlayer {
         uri: String,
         name: String,
         artist: String,
+        album: String,
         duration_ms: u64,
         cover_path: Option<PathBuf>,
     ) {
@@ -118,6 +119,7 @@ impl AudioPlayer for MockPlayer {
             uri,
             name,
             artist,
+            album,
             duration_ms,
             cover_path,
         });

@@ -1200,19 +1200,23 @@ impl SpotifyClient {
         Ok(all)
     }
 
+    /// Returns (tracks, total, page_items_count).
+    /// `page_items_count` is the number of items the API returned (before episode filtering),
+    /// which callers must use to increment the offset — NOT `tracks.len()`.
     pub async fn fetch_playlist_tracks(
         &self,
         playlist_id: &str,
         offset: u32,
-    ) -> Result<(Vec<TrackSummary>, u32)> {
+    ) -> Result<(Vec<TrackSummary>, u32, u32)> {
         if !self.authenticated {
-            return Ok((Vec::new(), 0));
+            return Ok((Vec::new(), 0, 0));
         }
         let key = format!("playlist:{playlist_id}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
             if !cached.0.is_empty() {
                 info!("Library cache hit: playlist {playlist_id} offset={offset}");
-                return Ok(cached);
+                let page_items = cached.0.len() as u32;
+                return Ok((cached.0, cached.1, page_items));
             }
         }
         let token = self
@@ -1313,7 +1317,7 @@ impl SpotifyClient {
                         tracks.len()
                     );
                     self.library_cache.save_tracks(&key, &tracks, total);
-                    return Ok((tracks, total));
+                    return Ok((tracks, total, items_count as u32));
                 }
                 let _ = main_resp.text().await.unwrap_or_default();
                 warn!("Main playlist endpoint also failed: {main_status}");
@@ -1325,6 +1329,7 @@ impl SpotifyClient {
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
+        let page_items = json["items"].as_array().map(|a| a.len()).unwrap_or(0) as u32;
         let mut tracks = Vec::new();
 
         if let Some(items) = json["items"].as_array() {
@@ -1374,12 +1379,12 @@ impl SpotifyClient {
         }
 
         info!(
-            "Parsed {} tracks from playlist {playlist_id} (total={total})",
+            "Parsed {} tracks from playlist {playlist_id} (total={total}, page_items={page_items})",
             tracks.len()
         );
 
         self.library_cache.save_tracks(&key, &tracks, total);
-        Ok((tracks, total))
+        Ok((tracks, total, page_items))
     }
 
     pub async fn play_in_context(&self, playlist_uri: &str, track_uri: &str) -> Result<()> {
@@ -2423,7 +2428,147 @@ impl SpotifyClient {
         self.http.clone()
     }
 
+    /// Fetch recommended tracks based on seed URIs.
+    /// Tries Spotify's official `/v1/recommendations` endpoint first,
+    /// falls back to the custom heuristic if it fails or returns too few results.
     pub async fn fetch_recommendations(
+        &self,
+        seed_uris: &[String],
+        limit: u8,
+    ) -> Result<Vec<TrackSummary>> {
+        if !self.authenticated {
+            return Ok(Vec::new());
+        }
+
+        // Try the official Spotify recommendations endpoint first
+        match self.fetch_spotify_recommendations(seed_uris, limit).await {
+            Ok(tracks) if tracks.len() >= (limit as usize / 2).max(3) => {
+                info!(
+                    "Spotify /v1/recommendations returned {} tracks",
+                    tracks.len()
+                );
+                return Ok(tracks);
+            }
+            Ok(few) => {
+                info!(
+                    "Spotify /v1/recommendations returned only {} tracks, falling back to custom",
+                    few.len()
+                );
+            }
+            Err(e) => {
+                warn!("Spotify /v1/recommendations failed ({e:#}), falling back to custom logic");
+            }
+        }
+
+        // Fallback: custom heuristic
+        self.fetch_recommendations_fallback(seed_uris, limit).await
+    }
+
+    /// Official Spotify `/v1/recommendations` endpoint.
+    /// Accepts up to 5 seed URIs (tracks and/or artists).
+    async fn fetch_spotify_recommendations(
+        &self,
+        seed_uris: &[String],
+        limit: u8,
+    ) -> Result<Vec<TrackSummary>> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        // Split seeds into track IDs and artist IDs (max 5 total)
+        let mut seed_track_ids: Vec<&str> = Vec::new();
+        let mut seed_artist_ids: Vec<&str> = Vec::new();
+
+        for uri in seed_uris.iter().take(5) {
+            if let Some(id) = uri.strip_prefix("spotify:track:") {
+                seed_track_ids.push(id);
+            } else if let Some(id) = uri.strip_prefix("spotify:artist:") {
+                seed_artist_ids.push(id);
+            }
+        }
+
+        if seed_track_ids.is_empty() && seed_artist_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let limit_str = limit.to_string();
+        let mut query: Vec<(&str, &str)> =
+            vec![("limit", limit_str.as_str()), ("market", "from_token")];
+
+        let seed_tracks_joined = seed_track_ids.join(",");
+        let seed_artists_joined = seed_artist_ids.join(",");
+
+        if !seed_track_ids.is_empty() {
+            query.push(("seed_tracks", seed_tracks_joined.as_str()));
+        }
+        if !seed_artist_ids.is_empty() {
+            query.push(("seed_artists", seed_artists_joined.as_str()));
+        }
+
+        spotify_rate_limit().await;
+        let resp = self
+            .http
+            .get("https://api.spotify.com/v1/recommendations")
+            .bearer_auth(&token)
+            .query(&query)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(
+                "Spotify /v1/recommendations returned {status}: {}",
+                &body[..body.len().min(500)]
+            );
+            anyhow::bail!("Spotify /v1/recommendations returned {status}");
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        let empty: Vec<serde_json::Value> = vec![];
+        let tracks: Vec<TrackSummary> = json["tracks"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .filter_map(|t| {
+                let uri = t["uri"].as_str()?.to_string();
+                if uri.is_empty() {
+                    return None;
+                }
+                Some(TrackSummary {
+                    name: t["name"].as_str().unwrap_or("Unknown").to_string(),
+                    artist: t["artists"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x["name"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default(),
+                    album: t["album"]["name"].as_str().unwrap_or_default().to_string(),
+                    duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
+                    uri,
+                    cover_path: None,
+                    added_at: None,
+                })
+            })
+            .collect();
+
+        info!(
+            "Spotify /v1/recommendations: seed_tracks={}, seed_artists={}, got {} tracks",
+            seed_track_ids.len(),
+            seed_artist_ids.len(),
+            tracks.len()
+        );
+
+        Ok(tracks)
+    }
+
+    /// Custom heuristic recommendation logic (fallback).
+    /// Discovers featured artists from seed artists' albums, then searches their tracks.
+    async fn fetch_recommendations_fallback(
         &self,
         seed_uris: &[String],
         limit: u8,

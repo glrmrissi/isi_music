@@ -147,7 +147,9 @@ impl App {
 
             self.state.tracks_loading = true;
             self.state.status_msg = Some("Loading more tracks…".to_string());
-            let offset = self.state.tracks_offset;
+            // Use tracks_api_offset (raw API item count) for pagination, not
+            // tracks_offset (filtered track count) — they diverge when episodes are present
+            let offset = self.state.tracks_api_offset;
             let id = self.state.active_playlist_id.clone();
 
             if id.as_deref() == Some("liked_songs") && self.state.tracks_cursor.is_none() {
@@ -167,7 +169,7 @@ impl App {
                         let result = spotify
                             .fetch_liked_tracks_page(after.as_deref(), offset)
                             .await
-                            .map(|(t, total, next)| (t, total, next))
+                            .map(|(t, total, next)| (t, total, next, None))
                             .map_err(|e| e.to_string());
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
@@ -178,7 +180,7 @@ impl App {
                         let result = spotify
                             .fetch_album_tracks(&album_id, offset)
                             .await
-                            .map(|(t, total)| (t, total, None))
+                            .map(|(t, total)| (t, total, None, None))
                             .map_err(|e| e.to_string());
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
@@ -189,7 +191,7 @@ impl App {
                         let result = spotify
                             .fetch_artist_tracks(&name, offset)
                             .await
-                            .map(|(t, total)| (t, total, None))
+                            .map(|(t, total)| (t, total, None, None))
                             .map_err(|e| e.to_string());
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
@@ -200,7 +202,7 @@ impl App {
                         let result = spotify
                             .fetch_playlist_tracks(&playlist_id, offset)
                             .await
-                            .map(|(t, total)| (t, total, None))
+                            .map(|(t, total, page_items)| (t, total, None, Some(page_items)))
                             .map_err(|e| e.to_string());
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
