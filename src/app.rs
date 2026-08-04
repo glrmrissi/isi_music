@@ -28,6 +28,8 @@ use crate::utils::discord::DiscordRpc;
 use crate::utils::lastfm::LastfmClient;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
+#[cfg(windows)]
+use crate::utils::smtc::{SmtcCmd, SmtcHandle, SmtcState};
 use crate::utils::theme::Theme;
 use librespot_playback::config::Bitrate;
 
@@ -70,6 +72,8 @@ pub struct App {
     picker: Picker,
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     mpris: Option<MprisHandle>,
+    #[cfg(windows)]
+    smtc: Option<SmtcHandle>,
     discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
@@ -199,6 +203,18 @@ impl App {
             }
         };
 
+        #[cfg(windows)]
+        let smtc = match crate::utils::smtc::spawn() {
+            Ok(h) => {
+                debug_overlay.log(LogLevel::Info, format!("SMTC started"));
+                Some(h)
+            }
+            Err(e) => {
+                debug_overlay.log(LogLevel::Error, format!("SMTC unavailable: {e}"));
+                None
+            }
+        };
+
         let discord = if cfg.discord.enabled == Some(true) {
             let app_id = cfg
                 .discord
@@ -241,6 +257,8 @@ impl App {
             picker,
             #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris,
+            #[cfg(windows)]
+            smtc,
             discord,
             discord_last_title: String::new(),
             discord_last_playing: false,
@@ -318,6 +336,8 @@ impl App {
             picker: ratatui_image::picker::Picker::halfblocks(),
             #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris: None,
+            #[cfg(windows)]
+            smtc: None,
             discord: None,
             discord_last_title: String::new(),
             discord_last_playing: false,
@@ -1036,6 +1056,72 @@ impl App {
                             if let Some(p) = &mut self.player {
                                 p.set_volume(self.saved_volume);
                                 self.state.playback.volume = p.volume();
+                            }
+                        }
+                    }
+                }
+            }
+
+            #[cfg(windows)]
+            if let Some(smtc) = &mut self.smtc {
+                let pb = &self.state.playback;
+                smtc.update(&SmtcState {
+                    title: pb.title.clone(),
+                    artist: pb.artist.clone(),
+                    album: pb.album.clone(),
+                    art_url: pb.art_url.clone(),
+                    cover_path: pb.cover_path.clone(),
+                    duration_ms: pb.duration_ms,
+                    position_ms: pb.progress_ms,
+                    is_playing: pb.is_playing,
+                });
+
+                let cmds: Vec<SmtcCmd> = {
+                    let mut v = Vec::new();
+                    while let Ok(c) = smtc.cmd_rx.try_recv() {
+                        v.push(c);
+                    }
+                    v
+                };
+
+                for cmd in cmds {
+                    match cmd {
+                        SmtcCmd::Play => {
+                            self.ensure_spotify_player().await;
+                            if let Some(p) = &mut self.player {
+                                p.play();
+                            }
+                            self.state.playback.is_playing = true;
+                        }
+                        SmtcCmd::Pause => {
+                            if let Some(p) = &mut self.player {
+                                p.pause();
+                            }
+                            self.state.playback.is_playing = false;
+                        }
+                        SmtcCmd::Next => {
+                            self.ensure_spotify_player().await;
+                            if let Some(p) = &mut self.player {
+                                p.next();
+                            }
+                            self.sync_track_selection();
+                            self.sync_queue_display();
+                        }
+                        SmtcCmd::Previous => {
+                            self.ensure_spotify_player().await;
+                            if let Some(p) = &mut self.player {
+                                p.prev();
+                            }
+                            self.sync_track_selection();
+                        }
+                        SmtcCmd::Seek(ms) => {
+                            self.state.playback.progress_ms = ms;
+                            self.progress_at_play_start = ms;
+                            if self.state.playback.is_playing {
+                                self.playing_started_at = Some(Instant::now());
+                            }
+                            if let Some(p) = &mut self.player {
+                                p.seek_mut(ms as u32);
                             }
                         }
                     }
