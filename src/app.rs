@@ -26,10 +26,13 @@ use crate::ui::AlbumArtData;
 use crate::ui::{Ui, UiState};
 use crate::utils::discord::DiscordRpc;
 use crate::utils::lastfm::LastfmClient;
+#[cfg(windows)]
+use crate::utils::media_keys::{MediaKey, MediaKeysHandle};
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
+#[cfg(windows)]
+use crate::utils::smtc::{SmtcCmd, SmtcHandle, SmtcState};
 use crate::utils::theme::Theme;
-use librespot_playback::config::Bitrate;
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -80,6 +83,10 @@ pub struct App {
     picker: Picker,
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     mpris: Option<MprisHandle>,
+    #[cfg(windows)]
+    media_keys: Option<MediaKeysHandle>,
+    #[cfg(windows)]
+    smtc: Option<SmtcHandle>,
     discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
@@ -112,6 +119,7 @@ pub struct App {
     trim_counter: u64,
     pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
+    audio: crate::config::AudioConfig,
 }
 
 impl App {
@@ -211,6 +219,30 @@ impl App {
             }
         };
 
+        #[cfg(windows)]
+        let media_keys = match crate::utils::media_keys::spawn() {
+            Ok(h) => {
+                debug_overlay.log(LogLevel::Info, format!("Global media hotkeys registered"));
+                Some(h)
+            }
+            Err(e) => {
+                debug_overlay.log(LogLevel::Warn, format!("Media hotkeys unavailable: {e}"));
+                None
+            }
+        };
+
+        #[cfg(windows)]
+        let smtc = match crate::utils::smtc::spawn() {
+            Ok(h) => {
+                debug_overlay.log(LogLevel::Info, format!("SMTC integration enabled"));
+                Some(h)
+            }
+            Err(e) => {
+                debug_overlay.log(LogLevel::Warn, format!("SMTC unavailable: {e}"));
+                None
+            }
+        };
+
         let discord = if cfg.discord.enabled == Some(true) {
             let app_id = cfg
                 .discord
@@ -253,6 +285,10 @@ impl App {
             picker,
             #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris,
+            #[cfg(windows)]
+            media_keys,
+            #[cfg(windows)]
+            smtc,
             discord,
             discord_last_title: String::new(),
             discord_last_playing: false,
@@ -285,6 +321,7 @@ impl App {
             trim_counter: 0,
             pending_fetch: None,
             pending_pagination: None,
+            audio: cfg.audio.clone(),
         })
     }
 
@@ -331,6 +368,10 @@ impl App {
             picker: ratatui_image::picker::Picker::halfblocks(),
             #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris: None,
+            #[cfg(windows)]
+            media_keys: None,
+            #[cfg(windows)]
+            smtc: None,
             discord: None,
             discord_last_title: String::new(),
             discord_last_playing: false,
@@ -363,6 +404,7 @@ impl App {
             options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
             pending_fetch: None,
             pending_pagination: None,
+            audio: crate::config::AudioConfig::default(),
         }
     }
 
@@ -606,7 +648,14 @@ impl App {
         let Some(token) = self.spotify.get_access_token().await else {
             return false;
         };
-        match NativePlayer::new(token, false, Bitrate::Bitrate320).await {
+        match NativePlayer::new(
+            token,
+            false,
+            self.audio.librespot_bitrate(),
+            self.audio.gapless,
+        )
+        .await
+        {
             Ok(mut p) => {
                 p.set_volume(self.saved_volume);
                 p.set_visualizer_enabled(self.state.show_visualizer);
@@ -1071,10 +1120,182 @@ impl App {
                 }
             }
 
+            #[cfg(windows)]
+            if let Some(smtc) = &self.smtc {
+                let pb = &self.state.playback;
+                smtc.update(&SmtcState {
+                    title: pb.title.clone(),
+                    artist: pb.artist.clone(),
+                    album: pb.album.clone(),
+                    art_url: pb.art_url.clone(),
+                    cover_path: pb.cover_path.clone(),
+                    duration_ms: pb.duration_ms,
+                    position_ms: pb.progress_ms,
+                    is_playing: pb.is_playing,
+                });
+            }
+
+            #[cfg(windows)]
+            let smtc_cmds: Vec<SmtcCmd> = {
+                if let Some(smtc) = &self.smtc {
+                    let mut v = Vec::new();
+                    while let Ok(c) = smtc.cmd_rx.try_recv() {
+                        v.push(c);
+                    }
+                    v
+                } else {
+                    Vec::new()
+                }
+            };
+
+            #[cfg(windows)]
+            for cmd in smtc_cmds {
+                match cmd {
+                    SmtcCmd::Play => {
+                        if let Some(p) = &mut self.player {
+                            p.play();
+                            self.state.playback.is_playing = true;
+                        } else {
+                            self.ensure_spotify_player().await;
+                            if self.player.is_none() {
+                                self.ensure_local_player().await;
+                            }
+                            if let Some(p) = &mut self.player {
+                                p.play();
+                                self.state.playback.is_playing = true;
+                            }
+                        }
+                    }
+                    SmtcCmd::Pause => {
+                        if let Some(p) = &mut self.player {
+                            p.pause();
+                            self.state.playback.is_playing = false;
+                        }
+                    }
+                    SmtcCmd::Next => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.next() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.next_track().await;
+                        }
+                    }
+                    SmtcCmd::Previous => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.prev() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.prev_track().await;
+                        }
+                    }
+                    SmtcCmd::Seek(ms) => {
+                        self.state.playback.progress_ms = ms;
+                        self.progress_at_play_start = ms;
+                        if self.state.playback.is_playing {
+                            self.playing_started_at = Some(Instant::now());
+                        }
+                        if let Some(p) = &mut self.player {
+                            p.seek_mut(ms as u32);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(windows)]
+            let media_key_cmds: Vec<MediaKey> = {
+                if let Some(media_keys) = &self.media_keys {
+                    let mut v = Vec::new();
+                    while let Ok(cmd) = media_keys.cmd_rx.try_recv() {
+                        v.push(cmd);
+                    }
+                    v
+                } else {
+                    Vec::new()
+                }
+            };
+
+            #[cfg(windows)]
+            for cmd in media_key_cmds {
+                match cmd {
+                    MediaKey::PlayPause => {
+                        if self.state.playback.is_playing {
+                            if let Some(p) = &mut self.player {
+                                p.pause();
+                            }
+                            self.state.playback.is_playing = false;
+                        } else if let Some(p) = &mut self.player {
+                            p.play();
+                            self.state.playback.is_playing = true;
+                        } else {
+                            self.ensure_spotify_player().await;
+                            if self.player.is_none() {
+                                self.ensure_local_player().await;
+                            }
+                            if let Some(p) = &mut self.player {
+                                if !p.is_playing() {
+                                    p.play();
+                                }
+                                self.state.playback.is_playing = true;
+                            } else if self.spotify.authenticated {
+                                let _ = self.spotify.toggle_playback().await;
+                            }
+                        }
+                    }
+                    MediaKey::Next => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.next() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.next_track().await;
+                        }
+                    }
+                    MediaKey::Previous => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.prev() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.prev_track().await;
+                        }
+                    }
+                }
+            }
+
             #[cfg(feature = "album-art")]
             if let Some(rx) = &mut self.album_art_pending {
                 if let Ok(bytes) = rx.try_recv() {
                     self.album_art_pending = None;
+
+                    // Feed the SMTC thumbnail: Spotify tracks played via
+                    // librespot never populate `pb.art_url`/`pb.cover_path`,
+                    // so we materialise the downloaded cover bytes into a temp
+                    // file and expose it via `cover_path` for the SMTC worker.
+                    #[cfg(windows)]
+                    if let Some(path) = crate::utils::smtc::cache_cover_bytes(&bytes)
+                        && let Some(s) = path.to_str()
+                    {
+                        self.state.playback.cover_path = Some(s.to_string());
+                    }
+
                     match image::load_from_memory(&bytes) {
                         Ok(img) => {
                             let resized = img.thumbnail(256, 256);

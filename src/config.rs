@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub options: AppOptionsConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub audio: AudioConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -63,6 +65,34 @@ pub struct CacheConfig {
     pub max_size_mb: Option<u64>,
     pub cleanup_interval_hours: Option<u32>,
     pub keep_days: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct AudioConfig {
+    /// Gapless playback for Spotify (librespot). Local files still need work.
+    #[serde(default = "default_true")]
+    pub gapless: bool,
+    /// Spotify stream bitrate in kbps: 96, 160 or 320.
+    #[serde(default = "default_bitrate")]
+    pub bitrate: u16,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_bitrate() -> u16 {
+    320
+}
+
+impl AudioConfig {
+    pub fn librespot_bitrate(&self) -> librespot_playback::config::Bitrate {
+        match self.bitrate {
+            96 => librespot_playback::config::Bitrate::Bitrate96,
+            160 => librespot_playback::config::Bitrate::Bitrate160,
+            _ => librespot_playback::config::Bitrate::Bitrate320,
+        }
+    }
 }
 
 impl AppConfig {
@@ -192,4 +222,18 @@ pub fn log_path() -> Result<PathBuf> {
     let dir = base.join("isi-music");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("isi-music.log"))
+}
+
+pub fn lyrics_cache_dir() -> Result<PathBuf> {
+    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+    let dir = base.join("isi-music").join("lyrics");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub fn waveform_cache_dir() -> Result<PathBuf> {
+    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+    let dir = base.join("isi-music").join("waveforms");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }

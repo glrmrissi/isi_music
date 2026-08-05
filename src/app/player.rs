@@ -4,7 +4,6 @@ use tracing::{info, warn};
 use crate::App;
 use crate::player::{AudioPlayer, NativePlayer};
 use crate::ui::{Focus, SearchPanel};
-use librespot_playback::config::Bitrate;
 
 impl App {
     pub fn on_track_started(&mut self) {
@@ -94,6 +93,11 @@ impl App {
                         self.state.playback.cover_path = track.cover_path.clone();
                     } else {
                         self.state.playback.art_url = track.cover_path.clone();
+                        // Spotify tracks don't carry a local cover path; clear
+                        // the previous track's cached cover so the SMTC/MPRIS
+                        // thumbnail doesn't show a stale image until the new
+                        // cover is fetched.
+                        self.state.playback.cover_path = None;
                     }
                     self.debug_overlay.log(
                         crate::utils::debug_overlay::LogLevel::Info,
@@ -374,7 +378,14 @@ impl App {
             return;
         };
 
-        match NativePlayer::new(token, false, Bitrate::Bitrate320).await {
+        match NativePlayer::new(
+            token,
+            false,
+            self.audio.librespot_bitrate(),
+            self.audio.gapless,
+        )
+        .await
+        {
             Ok(mut p) => {
                 p.set_volume(saved_volume);
                 if !saved_queue.is_empty() {

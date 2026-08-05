@@ -115,6 +115,7 @@ pub struct LocalPlayer {
     load_guard: Option<Instant>,
     pub is_seeking: Arc<AtomicBool>,
     seek_generation: Arc<AtomicU64>,
+    waveform: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 impl LocalPlayer {
@@ -177,6 +178,7 @@ impl LocalPlayer {
             load_guard: None,
             is_seeking: Arc::new(AtomicBool::new(false)),
             seek_generation: Arc::new(AtomicU64::new(0)),
+            waveform: Arc::new(Mutex::new(None)),
         };
 
         if let Err(e) = instance.reload_library_from_db() {
@@ -251,6 +253,19 @@ impl LocalPlayer {
         self.current_idx = Some(idx);
         self.is_playing = true;
         self.load_guard = Some(Instant::now());
+
+        // Pre-generate waveform in a background thread for local files.
+        *self.waveform.lock().unwrap() = None;
+        let waveform = Arc::clone(&self.waveform);
+        std::thread::spawn(move || {
+            if let (Some(data), Ok(mut w)) = (
+                crate::utils::waveform::generate_for_file(&path),
+                waveform.lock(),
+            ) {
+                *w = Some(data);
+            }
+        });
+
         let _ = self.event_tx.send(PlayerNotification::Playing);
         true
     }
@@ -336,13 +351,17 @@ impl LocalPlayer {
         self.current_idx.and_then(|i| self.queue.get(i))
     }
 
+    pub fn waveform(&self) -> Option<Vec<u8>> {
+        self.waveform.lock().ok().and_then(|w| w.clone())
+    }
+
     pub fn next_inner(&mut self) -> bool {
         self.playing_queued = None;
 
-        if self.repeat == RepeatMode::Track {
-            if let Some(idx) = self.current_idx {
-                return self.try_load_track(idx);
-            }
+        if self.repeat == RepeatMode::Track
+            && let Some(idx) = self.current_idx
+        {
+            return self.try_load_track(idx);
         }
 
         if !self.user_queue.is_empty() {
@@ -533,7 +552,7 @@ impl AudioPlayer for LocalPlayer {
     }
 
     fn repeat(&self) -> RepeatMode {
-        self.repeat.clone()
+        self.repeat
     }
 
     fn current_index(&self) -> Option<usize> {
@@ -619,6 +638,7 @@ impl AudioPlayer for LocalPlayer {
             },
             is_local: true,
             art_url: None,
+            waveform: self.waveform(),
             ..crate::ui::PlaybackState::default()
         })
     }

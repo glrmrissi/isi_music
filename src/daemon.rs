@@ -9,9 +9,12 @@ use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
 use crate::utils::ipc::IpcListener;
 use crate::utils::lastfm::LastfmClient;
+#[cfg(windows)]
+use crate::utils::media_keys::MediaKey;
 #[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::utils::mpris::{MprisCmd, MprisState};
-use librespot_playback::config::Bitrate;
+#[cfg(windows)]
+use crate::utils::smtc::{SmtcCmd, SmtcState};
 
 struct TrackInfo {
     name: String,
@@ -61,8 +64,15 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         .get_access_token()
         .await
         .ok_or_else(|| anyhow::anyhow!("No Spotify access token"))?;
-    let mut player: Box<dyn AudioPlayer> =
-        Box::new(NativePlayer::new(token, true, Bitrate::Bitrate320).await?);
+    let mut player: Box<dyn AudioPlayer> = Box::new(
+        NativePlayer::new(
+            token,
+            true,
+            cfg.audio.librespot_bitrate(),
+            cfg.audio.gapless,
+        )
+        .await?,
+    );
 
     // MPRIS D-Bus (optional — gracefully degrades if D-Bus unavailable; Linux only)
     #[cfg(all(feature = "mpris", target_os = "linux"))]
@@ -73,6 +83,32 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         }
         Err(e) => {
             warn!("MPRIS unavailable: {e}");
+            None
+        }
+    };
+
+    // Global media hotkeys (Windows)
+    #[cfg(windows)]
+    let mut media_keys = match crate::utils::media_keys::spawn() {
+        Ok(h) => {
+            info!("Global media hotkeys registered");
+            Some(h)
+        }
+        Err(e) => {
+            warn!("Media hotkeys unavailable: {e}");
+            None
+        }
+    };
+
+    // SMTC (Windows)
+    #[cfg(windows)]
+    let smtc = match crate::utils::smtc::spawn() {
+        Ok(h) => {
+            info!("SMTC integration enabled");
+            Some(h)
+        }
+        Err(e) => {
+            warn!("SMTC unavailable: {e}");
             None
         }
     };
@@ -258,6 +294,69 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                             }
                             MprisCmd::SetVolume(v) => {
                                 player.set_volume((v * 100.0).round() as u8);
+                            }
+                        }
+                    }
+                }
+
+                // Global media hotkeys (Windows)
+                #[cfg(windows)]
+                if let Some(media_keys) = &mut media_keys {
+                    while let Ok(cmd) = media_keys.cmd_rx.try_recv() {
+                        match cmd {
+                            MediaKey::PlayPause => {
+                                player.toggle();
+                            }
+                            MediaKey::Next => {
+                                if player.next() {
+                                    progress_ms = 0;
+                                    scrobble_sent = false;
+                                    track_start_unix = unix_now();
+                                }
+                            }
+                            MediaKey::Previous => {
+                                if player.prev() {
+                                    progress_ms = 0;
+                                    scrobble_sent = false;
+                                    track_start_unix = unix_now();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // SMTC (Windows)
+                #[cfg(windows)]
+                if let Some(smtc) = &smtc {
+                    let idx = player.current_index();
+                    let (title, artist, duration_ms) = idx
+                        .and_then(|i| track_list.get(i))
+                        .map(|t| (t.name.clone(), t.artist.clone(), t.duration_ms))
+                        .unwrap_or_default();
+                    smtc.update(&SmtcState {
+                        title,
+                        artist,
+                        album: String::new(),
+                        art_url: None,
+                        cover_path: None,
+                        duration_ms,
+                        position_ms: progress_ms,
+                        is_playing: player.is_playing(),
+                    });
+
+                    while let Ok(cmd) = smtc.cmd_rx.try_recv() {
+                        match cmd {
+                            SmtcCmd::Play => { player.play(); }
+                            SmtcCmd::Pause => { player.pause(); }
+                            SmtcCmd::Next => {
+                                if player.next() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
+                            }
+                            SmtcCmd::Previous => {
+                                if player.prev() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
+                            }
+                            SmtcCmd::Seek(ms) => {
+                                progress_ms = ms;
+                                player.seek(ms as u32);
                             }
                         }
                     }

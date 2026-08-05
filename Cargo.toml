@@ -51,7 +51,7 @@ dirs = "5"
 toml = "0.8"
 
 # HTTP client (used for Spotify search API directly)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -113,6 +113,15 @@ id3 = "1.16.4"
 
 # Buffer
 ringbuf = "0.5.0"
+
+# Windows path normalization (avoids \\?\ prefix)
+dunce = "1.0"
+
+# Global media hotkeys + native toasts + SMTC (Windows)
+[target.'cfg(windows)'.dependencies]
+global-hotkey = "0.6.4"
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61", features = ["Media", "Media_Playback", "Storage_Streams", "Foundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
 
 # Wizard
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }

@@ -135,6 +135,7 @@ impl NativePlayer {
         access_token: String,
         _low_resource: bool,
         bitrate: librespot_playback::config::Bitrate,
+        gapless: bool,
     ) -> Result<Self> {
         let session = Session::new(SessionConfig::default(), None);
         let credentials = Credentials::with_access_token(access_token);
@@ -166,7 +167,7 @@ impl NativePlayer {
 
         let player = LibrespotPlayer::new(
             PlayerConfig {
-                gapless: false,
+                gapless,
                 bitrate,
                 normalisation: false,
                 normalisation_pregain_db: 0.0,
@@ -344,11 +345,11 @@ impl NativePlayer {
 
     pub fn next(&mut self) -> bool {
         self.playing_queued = None;
-        if self.repeat == RepeatMode::Track {
-            if let Some(idx) = self.current_index {
-                self.play_at(idx);
-                return true;
-            }
+        if self.repeat == RepeatMode::Track
+            && let Some(idx) = self.current_index
+        {
+            self.play_at(idx);
+            return true;
         }
         if !self.user_queue.is_empty() {
             let track = self.user_queue.remove(0);
@@ -386,11 +387,11 @@ impl NativePlayer {
     }
 
     pub fn prev(&mut self) -> bool {
-        if let Some(idx) = self.current_index {
-            if idx > 0 {
-                self.play_at(idx - 1);
-                return true;
-            }
+        if let Some(idx) = self.current_index
+            && idx > 0
+        {
+            self.play_at(idx - 1);
+            return true;
         }
         false
     }
