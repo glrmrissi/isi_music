@@ -18,6 +18,7 @@ pub struct PlaybackState {
     pub lyrics: Option<crate::utils::lyrics::LyricsData>,
     pub lyrics_scroll: usize,
     pub lyrics_loading: bool,
+    pub waveform: Option<Vec<u8>>,
 }
 
 impl Default for PlaybackState {
@@ -39,6 +40,7 @@ impl Default for PlaybackState {
             lyrics: None,
             lyrics_scroll: 0,
             lyrics_loading: false,
+            waveform: None,
         }
     }
 }
@@ -50,6 +52,7 @@ impl PlaybackState {
         let lyrics_scroll = self.lyrics_scroll;
         let radio_mode = self.radio_mode;
         let art_url = self.art_url.clone();
+        let waveform = self.waveform.take();
 
         *self = from_api;
 
@@ -58,5 +61,6 @@ impl PlaybackState {
         self.lyrics_scroll = lyrics_scroll;
         self.radio_mode = radio_mode;
         self.art_url = art_url;
+        self.waveform = waveform;
     }
 }

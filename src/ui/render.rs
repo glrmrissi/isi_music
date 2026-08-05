@@ -1599,12 +1599,29 @@ impl Ui {
         let width = area.width.saturating_sub(14 + shuffle_display_width as u16) as usize;
         let filled = (width as f64 * ratio) as usize;
 
-        let bar = format!(
-            "{}{}{}",
-            "⣿".repeat(filled),
-            "⡷",
-            "⠶".repeat(width.saturating_sub(filled))
-        );
+        const WAVEFORM_BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+        let bar = if let Some(waveform) = pb.waveform.as_ref().filter(|w| !w.is_empty()) {
+            (0..width)
+                .map(|i| {
+                    let idx = (i * waveform.len()) / width.max(1);
+                    let amp = waveform[idx.min(waveform.len().saturating_sub(1))] as usize;
+                    WAVEFORM_BLOCKS[amp.min(WAVEFORM_BLOCKS.len() - 1)]
+                })
+                .collect::<String>()
+        } else {
+            format!(
+                "{}{}{}",
+                "⣿".repeat(filled),
+                "⡷",
+                "⠶".repeat(width.saturating_sub(filled))
+            )
+        };
+
+        // Split the waveform into played / unplayed spans for color.
+        let chars: Vec<char> = bar.chars().collect();
+        let played: String = chars.iter().take(filled).collect();
+        let unplayed: String = chars.iter().skip(filled).collect();
 
         let content = Line::from(vec![
             Span::styled(
@@ -1614,7 +1631,8 @@ impl Ui {
                     .add_modifier(Modifier::ITALIC),
             ),
             Span::raw(" "),
-            Span::styled(bar, Style::default().fg(self.theme.accent_color)),
+            Span::styled(played, Style::default().fg(self.theme.accent_color)),
+            Span::styled(unplayed, Style::default().fg(self.theme.border_inactive)),
             Span::raw(" "),
             Span::styled(
                 fmt_duration(pb.duration_ms),

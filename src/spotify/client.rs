@@ -1551,6 +1551,7 @@ impl SpotifyClient {
             lyrics: None,
             lyrics_scroll: 0,
             lyrics_loading: false,
+            waveform: None,
         })
     }
 
