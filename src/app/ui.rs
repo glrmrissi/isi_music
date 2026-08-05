@@ -214,7 +214,12 @@ impl App {
 
     #[cfg(feature = "album-art")]
     pub async fn maybe_fetch_album_art(&mut self) {
-        if !self.state.show_album_art && self.discord.is_none() {
+        #[cfg(windows)]
+        let smtc_needs_art = self.smtc.is_some();
+        #[cfg(not(windows))]
+        let smtc_needs_art = false;
+
+        if !self.state.show_album_art && self.discord.is_none() && !smtc_needs_art {
             return;
         }
 

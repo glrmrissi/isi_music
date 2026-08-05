@@ -199,9 +199,8 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
                 }
             }
             if cover_art.is_none() {
-                for pic in id3tag.pictures() {
+                if let Some(pic) = id3tag.pictures().next() {
                     cover_art = Some(pic.data.to_vec());
-                    break;
                 }
             }
         }

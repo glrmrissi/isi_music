@@ -197,7 +197,10 @@ impl LastfmClient {
         if !album.trim().is_empty() {
             params.insert("album[0]", album.to_string());
         } else {
-            info!("Last.fm: scrobble with empty album for {} - {}", artist, track);
+            info!(
+                "Last.fm: scrobble with empty album for {} - {}",
+                artist, track
+            );
         }
         if duration_ms > 0 {
             params.insert("duration[0]", (duration_ms / 1000).to_string());
