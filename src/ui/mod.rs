@@ -7,7 +7,7 @@ pub mod search;
 pub mod state;
 
 pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode};
-pub use options::OptionsPanel;
+pub use options::SettingsPanel;
 pub use playback::PlaybackState;
 pub use search::SearchResults;
 pub use state::{ActiveContent, CompactItem, Focus, SearchPanel, UiState};

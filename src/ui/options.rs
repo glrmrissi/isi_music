@@ -1,5 +1,6 @@
 // TODO: modularize this file (~560 lines) into smaller modules
-use crate::config::AppOptionsConfig;
+use crate::config::AppConfig;
+use crate::settings::Settings;
 use crate::utils::cache::{CacheManager, CacheStats};
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -9,11 +10,12 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+use std::sync::{Arc, Mutex};
 
 use super::UiState;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PanelAction {
+pub enum SettingsAction {
     None,
     Close,
     ToggleItem,
@@ -23,12 +25,13 @@ pub enum PanelAction {
     RefreshPlaylists,
 }
 
-pub struct OptionsPanel {
+pub struct SettingsPanel {
     pub visible: bool,
-    pub focused_section: OptionsSection,
+    pub focused_section: SettingsSection,
     pub selected_item: usize,
     pub cache_manager: CacheManager,
-    pub config: AppOptionsConfig,
+    pub settings: Arc<Mutex<Settings>>,
+    pub config: AppConfig,
     pub cache_stats: Option<CacheStats>,
     pub loading: bool,
     pub help_text: Vec<String>,
@@ -36,18 +39,18 @@ pub struct OptionsPanel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum OptionsSection {
-    Features,
+pub enum SettingsSection {
+    General,
     Cache,
     QuickAccess,
     Help,
 }
 
-const SECTIONS: &[OptionsSection] = &[
-    OptionsSection::Features,
-    OptionsSection::Cache,
-    OptionsSection::QuickAccess,
-    OptionsSection::Help,
+const SECTIONS: &[SettingsSection] = &[
+    SettingsSection::General,
+    SettingsSection::Cache,
+    SettingsSection::QuickAccess,
+    SettingsSection::Help,
 ];
 
 fn bg_style() -> Style {
@@ -63,18 +66,33 @@ fn section_block(title: &str) -> Block<'static> {
         .style(bg_style())
 }
 
-impl OptionsPanel {
-    pub fn new(cache_manager: CacheManager) -> Self {
+impl SettingsPanel {
+    pub fn new(cache_manager: CacheManager, settings: Arc<Mutex<Settings>>) -> Self {
+        let config = settings
+            .lock()
+            .map(|guard| guard.config.clone())
+            .unwrap_or_default();
         Self {
             visible: false,
-            focused_section: OptionsSection::Features,
+            focused_section: SettingsSection::General,
             selected_item: 0,
             cache_manager,
-            config: AppOptionsConfig::default(),
+            settings,
+            config,
             cache_stats: None,
             loading: false,
             help_text: Vec::new(),
             help_scroll: 0,
+        }
+    }
+
+    pub fn save_config(&self) {
+        if let Ok(mut guard) = self.settings.lock() {
+            guard.config = self.config.clone();
+            guard.mark_dirty();
+        }
+        if let Ok(guard) = self.settings.lock() {
+            let _ = guard.save();
         }
     }
 
@@ -102,7 +120,7 @@ impl OptionsPanel {
 
     fn items_in_section(&self) -> usize {
         match self.focused_section {
-            OptionsSection::Features => {
+            SettingsSection::General => {
                 #[cfg(feature = "album-art")]
                 {
                     7
@@ -112,78 +130,78 @@ impl OptionsPanel {
                     6
                 }
             }
-            OptionsSection::Cache => 8,
-            OptionsSection::QuickAccess => 1,
-            OptionsSection::Help => 1,
+            SettingsSection::Cache => 8,
+            SettingsSection::QuickAccess => 1,
+            SettingsSection::Help => 1,
         }
     }
 
-    pub fn handle_key(&mut self, code: KeyCode) -> PanelAction {
-        if self.focused_section == OptionsSection::Help {
+    pub fn handle_key(&mut self, code: KeyCode) -> SettingsAction {
+        if self.focused_section == SettingsSection::Help {
             match code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.help_scroll = self.help_scroll.saturating_sub(1);
-                    return PanelAction::None;
+                    return SettingsAction::None;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.help_scroll = self.help_scroll.saturating_add(1);
-                    return PanelAction::None;
+                    return SettingsAction::None;
                 }
-                KeyCode::Esc => return PanelAction::Close,
+                KeyCode::Esc => return SettingsAction::Close,
                 _ => {}
             }
         }
 
         match code {
-            KeyCode::Esc => PanelAction::Close,
+            KeyCode::Esc => SettingsAction::Close,
             KeyCode::Up => {
                 if self.selected_item == 0 {
                     self.selected_item = self.items_in_section().saturating_sub(1);
                 } else {
                     self.selected_item -= 1;
                 }
-                PanelAction::None
+                SettingsAction::None
             }
             KeyCode::Down => {
                 self.selected_item = (self.selected_item + 1) % self.items_in_section().max(1);
-                PanelAction::None
+                SettingsAction::None
             }
             KeyCode::Left => {
                 self.navigate_sections(true, false);
                 self.selected_item = 0;
-                PanelAction::None
+                SettingsAction::None
             }
             KeyCode::Right => {
                 self.navigate_sections(false, true);
                 self.selected_item = 0;
-                PanelAction::None
+                SettingsAction::None
             }
             KeyCode::Tab => {
                 self.navigate_sections(false, true);
                 self.selected_item = 0;
-                PanelAction::None
+                SettingsAction::None
             }
             KeyCode::Enter => match self.focused_section {
-                OptionsSection::Cache => match self.selected_item {
-                    4 => PanelAction::ClearAllCache,
-                    5 => PanelAction::CleanupExpired,
-                    6 => PanelAction::RefreshStats,
-                    7 => PanelAction::RefreshPlaylists,
-                    _ => PanelAction::None,
+                SettingsSection::Cache => match self.selected_item {
+                    4 => SettingsAction::ClearAllCache,
+                    5 => SettingsAction::CleanupExpired,
+                    6 => SettingsAction::RefreshStats,
+                    7 => SettingsAction::RefreshPlaylists,
+                    _ => SettingsAction::None,
                 },
-                _ => PanelAction::ToggleItem,
+                _ => SettingsAction::ToggleItem,
             },
             KeyCode::Char('c') | KeyCode::Char('C')
-                if self.focused_section == OptionsSection::Cache =>
+                if self.focused_section == SettingsSection::Cache =>
             {
-                PanelAction::ClearAllCache
+                SettingsAction::ClearAllCache
             }
             KeyCode::Char('r') | KeyCode::Char('R')
-                if self.focused_section == OptionsSection::Cache =>
+                if self.focused_section == SettingsSection::Cache =>
             {
-                PanelAction::RefreshStats
+                SettingsAction::RefreshStats
             }
-            _ => PanelAction::None,
+            _ => SettingsAction::None,
         }
     }
 
@@ -234,7 +252,7 @@ impl OptionsPanel {
         frame.render_widget(Paragraph::new("").style(bg), content_area);
 
         let block = Block::default()
-            .title(" Options ")
+            .title(" Settings ")
             .title_alignment(Alignment::Center)
             .border_type(BorderType::Rounded)
             .borders(Borders::ALL)
@@ -290,10 +308,10 @@ impl OptionsPanel {
             .iter()
             .map(|section| {
                 let label = match section {
-                    OptionsSection::Features => "Features",
-                    OptionsSection::Cache => "Cache",
-                    OptionsSection::QuickAccess => "Quick Access",
-                    OptionsSection::Help => "Help",
+                    SettingsSection::General => "Features",
+                    SettingsSection::Cache => "Cache",
+                    SettingsSection::QuickAccess => "Quick Access",
+                    SettingsSection::Help => "Help",
                 };
                 let is_focused = self.focused_section == *section;
                 let style = if is_focused {
@@ -333,10 +351,10 @@ impl OptionsPanel {
 
     fn render_content(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         match self.focused_section {
-            OptionsSection::Features => self.render_features_section(frame, state, area),
-            OptionsSection::Cache => self.render_cache_section(frame, area),
-            OptionsSection::QuickAccess => self.render_quick_access_section(frame, area),
-            OptionsSection::Help => self.render_help_section(frame, area),
+            SettingsSection::General => self.render_general_section(frame, state, area),
+            SettingsSection::Cache => self.render_cache_section(frame, area),
+            SettingsSection::QuickAccess => self.render_quick_access_section(frame, area),
+            SettingsSection::Help => self.render_help_section(frame, area),
         }
     }
 
@@ -400,30 +418,14 @@ impl OptionsPanel {
         frame.render_stateful_widget(list, inner, &mut list_state);
     }
 
-    fn render_features_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+    fn render_general_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         let mut items = vec![];
         #[cfg(feature = "album-art")]
-        items.push((
-            "Cover Images",
-            "",
-            self.config.show_cover_images.unwrap_or(true),
-        ));
-        items.push((
-            "Lyrics Fetching",
-            "",
-            self.config.enable_lyrics.unwrap_or(true),
-        ));
-        items.push((
-            "Visualizer Display",
-            "",
-            self.config.show_visualizer.unwrap_or(true),
-        ));
-        items.push((
-            "Compact Mode",
-            "",
-            self.config.compact_mode_default.unwrap_or(false),
-        ));
-        items.push(("Breadcrumb", "", state.show_breadcrumb));
+        items.push(("Cover Images", "", self.config.show_cover_images()));
+        items.push(("Lyrics Fetching", "", self.config.enable_lyrics()));
+        items.push(("Visualizer Display", "", self.config.show_visualizer()));
+        items.push(("Compact Mode", "", self.config.compact_mode_default()));
+        items.push(("Breadcrumb", "", self.config.show_breadcrumb()));
 
         let lastfm_text = if state.lastfm_connected {
             "Connected"
@@ -434,9 +436,9 @@ impl OptionsPanel {
         };
         items.push(("Last.fm Scrobbling", lastfm_text, state.lastfm_connected));
 
-        items.push(("Autoplay", "", self.config.autoplay.unwrap_or(true)));
+        items.push(("Autoplay", "", self.config.autoplay_enabled()));
 
-        self.render_item_list(frame, area, "Feature Toggles", &items);
+        self.render_item_list(frame, area, "General", &items);
     }
 
     fn render_cache_section(&self, frame: &mut Frame, area: Rect) {
