@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
     pub spotify: SpotifyConfig,
     #[serde(default)]
@@ -16,33 +16,35 @@ pub struct AppConfig {
     #[serde(default)]
     pub options: AppOptionsConfig,
     #[serde(default)]
+    pub ui: UiConfig,
+    #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
     pub audio: AudioConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct LocalConfig {
     pub music_dir: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct DiscordConfig {
     pub enabled: Option<bool>,
     pub app_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct LastfmConfig {
     pub session_key: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SpotifyConfig {
     pub client_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct MusixMatchConfig {
     pub musixmatch_api_key: Option<String>,
 }
@@ -58,7 +60,25 @@ pub struct AppOptionsConfig {
     pub autoplay: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub show_cover_images: Option<bool>,
+    #[serde(default)]
+    pub enable_lyrics: Option<bool>,
+    #[serde(default)]
+    pub show_visualizer: Option<bool>,
+    #[serde(default)]
+    pub default_layout: Option<String>,
+    #[serde(default)]
+    pub compact_mode_default: Option<bool>,
+    #[serde(default)]
+    pub show_breadcrumb: Option<bool>,
+    #[serde(default)]
+    pub autoplay: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct CacheConfig {
     pub enabled: Option<bool>,
     pub auto_cleanup: Option<bool>,
@@ -127,9 +147,64 @@ impl AppConfig {
             .or_else(|| self.musixmatch.musixmatch_api_key.clone())
     }
 
+    pub fn show_cover_images(&self) -> bool {
+        self.ui
+            .show_cover_images
+            .or(self.options.show_cover_images)
+            .unwrap_or(true)
+    }
+
+    pub fn enable_lyrics(&self) -> bool {
+        self.ui
+            .enable_lyrics
+            .or(self.options.enable_lyrics)
+            .unwrap_or(true)
+    }
+
+    pub fn show_visualizer(&self) -> bool {
+        self.ui
+            .show_visualizer
+            .or(self.options.show_visualizer)
+            .unwrap_or(true)
+    }
+
+    pub fn compact_mode_default(&self) -> bool {
+        self.ui
+            .compact_mode_default
+            .or(self.options.compact_mode_default)
+            .unwrap_or(false)
+    }
+
+    pub fn show_breadcrumb(&self) -> bool {
+        self.ui.show_breadcrumb.unwrap_or(false)
+    }
+
     /// Autoplay is enabled by default; only disabled if explicitly set to false.
     pub fn autoplay_enabled(&self) -> bool {
-        self.options.autoplay.unwrap_or(true)
+        self.ui.autoplay.or(self.options.autoplay).unwrap_or(true)
+    }
+
+    /// Copies values from the legacy `[options]` section into `[ui]` when `[ui]`
+    /// was not explicitly set. This keeps existing user configs working.
+    pub fn normalize(&mut self) {
+        if self.ui.show_cover_images.is_none() {
+            self.ui.show_cover_images = self.options.show_cover_images;
+        }
+        if self.ui.enable_lyrics.is_none() {
+            self.ui.enable_lyrics = self.options.enable_lyrics;
+        }
+        if self.ui.show_visualizer.is_none() {
+            self.ui.show_visualizer = self.options.show_visualizer;
+        }
+        if self.ui.default_layout.is_none() {
+            self.ui.default_layout = self.options.default_layout.clone();
+        }
+        if self.ui.compact_mode_default.is_none() {
+            self.ui.compact_mode_default = self.options.compact_mode_default;
+        }
+        if self.ui.autoplay.is_none() {
+            self.ui.autoplay = self.options.autoplay;
+        }
     }
 
     pub fn save(&self) -> Result<()> {

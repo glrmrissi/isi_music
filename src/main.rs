@@ -19,6 +19,7 @@ mod config;
 mod daemon;
 mod keybinds;
 mod player;
+mod settings;
 mod spotify;
 mod ui;
 mod utils;
