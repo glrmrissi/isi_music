@@ -114,7 +114,7 @@ pub struct App {
     playing_started_at: Option<Instant>,
     progress_at_play_start: u64,
     initial_sync_done: bool,
-    options_panel: Option<crate::ui::OptionsPanel>,
+    settings_panel: Option<crate::ui::SettingsPanel>,
     #[cfg(target_os = "linux")]
     trim_counter: u64,
     pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
@@ -131,7 +131,13 @@ impl App {
         keybinds_rx: crate::keybinds::KeybindsWatcher,
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
-        let cfg = crate::config::AppConfig::load().unwrap_or_default();
+        let settings = Arc::new(Mutex::new(
+            crate::settings::Settings::load().unwrap_or_default(),
+        ));
+        let cfg = settings
+            .lock()
+            .map(|guard| guard.config.clone())
+            .unwrap_or_default();
         let autoplay_enabled = cfg.autoplay_enabled();
         let lastfm = match &cfg.lastfm.session_key {
             Some(sk) => {
@@ -181,6 +187,10 @@ impl App {
         let db_path = crate::config::get_local_db_path();
 
         let mut state = UiState::new();
+        state.show_album_art = cfg.show_cover_images();
+        state.show_visualizer = cfg.show_visualizer();
+        state.show_breadcrumb = cfg.show_breadcrumb();
+        state.compact_mode = cfg.compact_mode_default();
 
         if let Some(msg) = startup_warning {
             state.status_msg = Some(msg);
@@ -255,7 +265,7 @@ impl App {
         };
 
         let cache_manager = crate::utils::cache::CacheManager::new();
-        let options_panel = crate::ui::OptionsPanel::new(cache_manager);
+        let settings_panel = crate::ui::SettingsPanel::new(cache_manager, Arc::clone(&settings));
 
         state.lastfm_connected = lastfm.is_some();
 
@@ -316,7 +326,7 @@ impl App {
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
-            options_panel: Some(options_panel),
+            settings_panel: Some(settings_panel),
             #[cfg(target_os = "linux")]
             trim_counter: 0,
             pending_fetch: None,
@@ -331,7 +341,15 @@ impl App {
         let spotify = crate::spotify::SpotifyClient::new_unauthenticated().await;
         let debug_overlay = Arc::new(DebugOverlay::new());
         let cache_manager = crate::utils::cache::CacheManager::new();
+        let settings = Arc::new(Mutex::new(crate::settings::Settings::default()));
         let mut state = crate::ui::UiState::new();
+        {
+            let cfg = settings.lock().unwrap().config.clone();
+            state.show_album_art = cfg.show_cover_images();
+            state.show_visualizer = cfg.show_visualizer();
+            state.show_breadcrumb = cfg.show_breadcrumb();
+            state.compact_mode = cfg.compact_mode_default();
+        }
 
         if spotify.authenticated {
             if let Ok(playlists) = spotify.fetch_playlists().await {
@@ -342,6 +360,7 @@ impl App {
             }
         }
 
+        let autoplay_enabled = settings.lock().unwrap().config.autoplay_enabled();
         Self {
             seek_tx,
             seek_rx,
@@ -380,7 +399,7 @@ impl App {
             art_url: None,
             session_reconnecting: false,
             radio_mode: false,
-            autoplay_enabled: false,
+            autoplay_enabled,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
             theme: Default::default(),
@@ -401,7 +420,10 @@ impl App {
             initial_sync_done: false,
             #[cfg(target_os = "linux")]
             trim_counter: 0,
-            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager)),
+            settings_panel: Some(crate::ui::SettingsPanel::new(
+                cache_manager,
+                Arc::clone(&settings),
+            )),
             pending_fetch: None,
             pending_pagination: None,
             audio: crate::config::AudioConfig::default(),
@@ -1355,7 +1377,7 @@ impl App {
 
             terminal.draw(|f| {
                 self.ui.render(f, &mut self.state);
-                if let Some(ref panel) = self.options_panel {
+                if let Some(ref panel) = self.settings_panel {
                     panel.render(f, &self.state);
                 }
             })?;

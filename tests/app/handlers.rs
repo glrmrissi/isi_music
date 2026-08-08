@@ -180,13 +180,13 @@ async fn dispatch_sort_tracks_no_crash() {
 #[tokio::test]
 async fn dispatch_options_panel_toggles() {
     let mut app = App::new_for_test().await;
-    let was_visible = app.options_panel.as_ref().unwrap().visible;
+    let was_visible = app.settings_panel.as_ref().unwrap().visible;
 
     app.dispatch(Action::OptionsPanel).await;
-    assert_ne!(app.options_panel.as_ref().unwrap().visible, was_visible);
+    assert_ne!(app.settings_panel.as_ref().unwrap().visible, was_visible);
 
     app.dispatch(Action::OptionsPanel).await;
-    assert_eq!(app.options_panel.as_ref().unwrap().visible, was_visible);
+    assert_eq!(app.settings_panel.as_ref().unwrap().visible, was_visible);
 }
 
 #[tokio::test]

@@ -332,131 +332,134 @@ impl App {
             return self.handle_search_key(code).await;
         }
 
-        if let Some(ref mut panel) = self.options_panel {
-            if panel.visible {
-                use crate::ui::options::{OptionsSection, PanelAction};
-                match panel.handle_key(code) {
-                    PanelAction::Close => {
-                        panel.visible = false;
-                        // Persist config changes to disk
-                        let cfg_to_save = crate::config::AppConfig {
-                            options: panel.config.clone(),
-                            ..crate::config::AppConfig::load().unwrap_or_default()
-                        };
-                        let _ = cfg_to_save.save();
-                        self.state.status_msg = Some("Options panel closed".to_string());
-                    }
-                    PanelAction::ToggleItem => match panel.focused_section {
-                        OptionsSection::Features => {
-                            let idx = panel.selected_item;
-                            #[cfg(feature = "album-art")]
-                            if idx == 0 {
-                                self.state.show_album_art = !self.state.show_album_art;
-                                panel.config.show_cover_images = Some(self.state.show_album_art);
-                                self.state.status_msg = Some(if self.state.show_album_art {
-                                    "Cover images enabled".to_string()
-                                } else {
-                                    "Cover images disabled".to_string()
-                                });
-                                return Ok(());
-                            }
-                            #[cfg(feature = "album-art")]
-                            let idx = idx - 1;
-                            match idx {
-                                0 => {
-                                    let v = !panel.config.enable_lyrics.unwrap_or(true);
-                                    panel.config.enable_lyrics = Some(v);
-                                    self.state.status_msg = Some(if v {
-                                        "Lyrics fetching enabled".to_string()
-                                    } else {
-                                        "Lyrics fetching disabled".to_string()
-                                    });
-                                }
-                                1 => {
-                                    self.state.show_visualizer = !self.state.show_visualizer;
-                                    panel.config.show_visualizer = Some(self.state.show_visualizer);
-                                    self.state.status_msg = Some(if self.state.show_visualizer {
-                                        "Visualizer enabled".to_string()
-                                    } else {
-                                        "Visualizer disabled".to_string()
-                                    });
-                                }
-                                2 => {
-                                    self.state.compact_mode = !self.state.compact_mode;
-                                    panel.config.compact_mode_default =
-                                        Some(self.state.compact_mode);
-                                    self.state.status_msg = Some(if self.state.compact_mode {
-                                        "Compact mode on".to_string()
-                                    } else {
-                                        "Compact mode off".to_string()
-                                    });
-                                }
-                                3 => {
-                                    self.state.show_breadcrumb = !self.state.show_breadcrumb;
-                                    self.state.status_msg = Some(if self.state.show_breadcrumb {
-                                        "Breadcrumb on".to_string()
-                                    } else {
-                                        "Breadcrumb off".to_string()
-                                    });
-                                }
-                                4 => {
-                                    self.toggle_lastfm_scrobbling().await;
-                                }
-                                5 => {
-                                    let v = !panel.config.autoplay.unwrap_or(true);
-                                    panel.config.autoplay = Some(v);
-                                    self.autoplay_enabled = v;
-                                    self.state.status_msg = Some(if v {
-                                        "Autoplay enabled".to_string()
-                                    } else {
-                                        "Autoplay disabled".to_string()
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    },
-                    PanelAction::ClearAllCache => {
-                        let _ = panel.cache_manager.clear_all().await;
-                        self.spotify.library_cache.clear_all_library_cache();
-                        panel.cache_stats = Some(panel.cache_manager.get_stats().await);
-                        self.state.status_msg = Some("All caches cleared".to_string());
-                    }
-                    PanelAction::CleanupExpired => {
-                        let _ = panel.cache_manager.cleanup_expired().await;
-                        panel.cache_stats = Some(panel.cache_manager.get_stats().await);
-                        self.state.status_msg =
-                            Some("Expired cache entries cleaned up".to_string());
-                    }
-                    PanelAction::RefreshStats => {
-                        panel.load_cache_stats().await;
-                        self.state.status_msg = Some("Cache stats refreshed".to_string());
-                    }
-                    PanelAction::RefreshPlaylists => {
-                        if self.spotify.authenticated {
-                            match self.spotify.fetch_playlists().await {
-                                Ok(playlists) => {
-                                    self.state.playlists = playlists;
-                                    if !self.state.playlists.is_empty() {
-                                        self.state.playlist_list.select(Some(0));
-                                    }
-                                    self.state.status_msg = Some("Playlists refreshed".to_string());
-                                }
-                                Err(e) => {
-                                    self.state.status_msg =
-                                        Some(format!("Failed to refresh playlists: {e}"));
-                                }
-                            }
-                        } else {
-                            self.state.status_msg =
-                                Some("Not authenticated with Spotify".to_string());
-                        }
-                    }
-                    PanelAction::None => {}
+        if let Some(ref mut panel) = self.settings_panel
+            && panel.visible
+        {
+            use crate::ui::options::{SettingsAction, SettingsSection};
+            match panel.handle_key(code) {
+                SettingsAction::Close => {
+                    panel.visible = false;
+                    panel.save_config();
+                    self.state.status_msg = Some("Settings panel closed".to_string());
                 }
-                return Ok(());
+                SettingsAction::ToggleItem => match panel.focused_section {
+                    SettingsSection::General => {
+                        let idx = panel.selected_item;
+                        #[cfg(feature = "album-art")]
+                        if idx == 0 {
+                            self.state.show_album_art = !self.state.show_album_art;
+                            panel.config.ui.show_cover_images = Some(self.state.show_album_art);
+                            panel.save_config();
+                            self.state.status_msg = Some(if self.state.show_album_art {
+                                "Cover images enabled".to_string()
+                            } else {
+                                "Cover images disabled".to_string()
+                            });
+                            return Ok(());
+                        }
+                        #[cfg(feature = "album-art")]
+                        let idx = idx - 1;
+                        match idx {
+                            0 => {
+                                let v = !panel.config.enable_lyrics();
+                                panel.config.ui.enable_lyrics = Some(v);
+                                panel.save_config();
+                                self.state.status_msg = Some(if v {
+                                    "Lyrics fetching enabled".to_string()
+                                } else {
+                                    "Lyrics fetching disabled".to_string()
+                                });
+                            }
+                            1 => {
+                                self.state.show_visualizer = !self.state.show_visualizer;
+                                panel.config.ui.show_visualizer = Some(self.state.show_visualizer);
+                                panel.save_config();
+                                if let Some(player) = &mut self.player {
+                                    player.set_visualizer_enabled(self.state.show_visualizer);
+                                }
+                                self.state.status_msg = Some(if self.state.show_visualizer {
+                                    "Visualizer enabled".to_string()
+                                } else {
+                                    "Visualizer disabled".to_string()
+                                });
+                            }
+                            2 => {
+                                self.state.compact_mode = !self.state.compact_mode;
+                                panel.config.ui.compact_mode_default =
+                                    Some(self.state.compact_mode);
+                                panel.save_config();
+                                self.state.status_msg = Some(if self.state.compact_mode {
+                                    "Compact mode on".to_string()
+                                } else {
+                                    "Compact mode off".to_string()
+                                });
+                            }
+                            3 => {
+                                self.state.show_breadcrumb = !self.state.show_breadcrumb;
+                                panel.config.ui.show_breadcrumb = Some(self.state.show_breadcrumb);
+                                panel.save_config();
+                                self.state.status_msg = Some(if self.state.show_breadcrumb {
+                                    "Breadcrumb on".to_string()
+                                } else {
+                                    "Breadcrumb off".to_string()
+                                });
+                            }
+                            4 => {
+                                self.toggle_lastfm_scrobbling().await;
+                            }
+                            5 => {
+                                let v = !panel.config.autoplay_enabled();
+                                panel.config.ui.autoplay = Some(v);
+                                self.autoplay_enabled = v;
+                                panel.save_config();
+                                self.state.status_msg = Some(if v {
+                                    "Autoplay enabled".to_string()
+                                } else {
+                                    "Autoplay disabled".to_string()
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                },
+                SettingsAction::ClearAllCache => {
+                    let _ = panel.cache_manager.clear_all().await;
+                    self.spotify.library_cache.clear_all_library_cache();
+                    panel.cache_stats = Some(panel.cache_manager.get_stats().await);
+                    self.state.status_msg = Some("All caches cleared".to_string());
+                }
+                SettingsAction::CleanupExpired => {
+                    let _ = panel.cache_manager.cleanup_expired().await;
+                    panel.cache_stats = Some(panel.cache_manager.get_stats().await);
+                    self.state.status_msg = Some("Expired cache entries cleaned up".to_string());
+                }
+                SettingsAction::RefreshStats => {
+                    panel.load_cache_stats().await;
+                    self.state.status_msg = Some("Cache stats refreshed".to_string());
+                }
+                SettingsAction::RefreshPlaylists => {
+                    if self.spotify.authenticated {
+                        match self.spotify.fetch_playlists().await {
+                            Ok(playlists) => {
+                                self.state.playlists = playlists;
+                                if !self.state.playlists.is_empty() {
+                                    self.state.playlist_list.select(Some(0));
+                                }
+                                self.state.status_msg = Some("Playlists refreshed".to_string());
+                            }
+                            Err(e) => {
+                                self.state.status_msg =
+                                    Some(format!("Failed to refresh playlists: {e}"));
+                            }
+                        }
+                    } else {
+                        self.state.status_msg = Some("Not authenticated with Spotify".to_string());
+                    }
+                }
+                SettingsAction::None => {}
             }
+            return Ok(());
         }
 
         match code {
@@ -844,13 +847,13 @@ impl App {
                     }
                     lines.push(String::new());
                 }
-                if let Some(ref mut panel) = self.options_panel {
+                if let Some(ref mut panel) = self.settings_panel {
                     panel.set_help_text(lines);
-                    panel.focused_section = crate::ui::options::OptionsSection::Help;
+                    panel.focused_section = crate::ui::options::SettingsSection::Help;
                     panel.selected_item = 0;
                     if !panel.visible {
                         panel.visible = true;
-                        self.state.status_msg = Some("Help — Options panel".to_string());
+                        self.state.status_msg = Some("Help — Settings panel".to_string());
                     }
                 }
             }
@@ -893,7 +896,7 @@ impl App {
                 });
             }
             A::OptionsPanel => {
-                if let Some(ref mut panel) = self.options_panel {
+                if let Some(ref mut panel) = self.settings_panel {
                     panel.toggle().await;
                     if panel.visible {
                         let raw = self.keybinds.format_help_text();
@@ -908,9 +911,9 @@ impl App {
                         panel.set_help_text(lines);
                     }
                     self.state.status_msg = Some(if panel.visible {
-                        "Options panel opened".to_string()
+                        "Settings panel opened".to_string()
                     } else {
-                        "Options panel closed".to_string()
+                        "Settings panel closed".to_string()
                     });
                 }
             }
