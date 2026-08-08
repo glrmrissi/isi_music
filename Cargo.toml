@@ -117,15 +117,15 @@ ringbuf = "0.5.0"
 # Windows path normalization (avoids \\?\ prefix)
 dunce = "1.0"
 
+# Wizard (setup/config prompts)
+dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+console   = "0.15"
+
 # Global media hotkeys + native toasts + SMTC (Windows)
 [target.'cfg(windows)'.dependencies]
 global-hotkey = "0.6.4"
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.61", features = ["Media", "Media_Playback", "Storage_Streams", "Foundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
-
-# Wizard
-dialoguer = { version = "0.11", features = ["fuzzy-select"] }
-console   = "0.15"
 
 [dev-dependencies]
 tempfile = "3"
