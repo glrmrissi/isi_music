@@ -2,7 +2,15 @@
 name = "isi-music"
 version = "1.3.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["Guilherme Rissi <guilhermerissi04112006@gmail.com>"]
 license = "MIT"
+description = "Terminal audio player for Spotify streaming and local file playback"
+repository = "https://github.com/glrmrissi/isi_music"
+homepage = "https://github.com/glrmrissi/isi_music"
+readme = "README.md"
+keywords = ["spotify", "music", "tui", "terminal", "audio"]
+categories = ["multimedia::audio", "command-line-utilities"]
 
 [[bin]]
 name = "isi-music"
@@ -35,16 +43,16 @@ ogg = "0.9"
 opus2 = { version = "0.4", features = ["bundled"] }
 opusmeta = "3"
 
-# .env support (desenvolvimento)
+# .env support (development)
 dotenvy = "0.15"
 
-# sqllite support
+# SQLite library/search cache
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # URL parsing (OAuth callback)
 url = "2"
 
-# Diretórios XDG (config/cache do usuário)
+# XDG base directories (user config/cache)
 dirs = "5"
 
 # Config file
@@ -107,8 +115,10 @@ urlencoding = "2.1.3"
 # Unicode display width for correct TUI rendering
 unicode-width = "0.2"
 
+# FLAC metadata (Vorbis comments)
 metaflac = "0.2.8"
 
+# ID3 metadata (MP3 tags)
 id3 = "1.16.4"
 
 # Buffer
