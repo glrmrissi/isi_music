@@ -157,6 +157,7 @@ pub struct UiState {
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
     pub show_visualizer: bool,
+    pub reactive_theme_enabled: bool,
     pub track_sort_by: TrackSortBy,
     pub sorted_track_indices: Vec<usize>,
     pub show_lyrics: bool,
@@ -230,6 +231,7 @@ impl UiState {
             viz_bands: Vec::new(),
             art_url: None,
             show_visualizer: true,
+            reactive_theme_enabled: false,
             track_sort_by: TrackSortBy::Default,
             sorted_track_indices: Vec::new(),
             show_lyrics: false,
@@ -475,16 +477,9 @@ impl UiState {
     }
 
     pub fn restore_session(&mut self, session: &crate::config::SessionState) {
-        if let Some(ref focus) = session.focus {
-            match focus.as_str() {
-                "library" => self.focus = Focus::Library,
-                "playlists" => self.focus = Focus::Playlists,
-                "tracks" => self.focus = Focus::Tracks,
-                "queue" => self.focus = Focus::Queue,
-                "search" => self.focus = Focus::Search,
-                _ => {}
-            }
-        }
+        // Always start with focus on Library — this is the entry point
+        // the user expects when opening the app.
+        self.focus = Focus::Library;
         if let Some(ref content) = session.active_content {
             match content.as_str() {
                 "tracks" => self.active_content = ActiveContent::Tracks,
@@ -786,6 +781,74 @@ impl UiState {
                 let n = self.queue_items.len();
                 if n > 0 {
                     self.queue_list.select(Some(n - 1));
+                }
+            }
+        }
+    }
+
+    pub fn nav_middle(&mut self) {
+        if self.compact_effective
+            && self.focus == Focus::Tracks
+            && self.active_content == ActiveContent::None
+        {
+            let selectable = self.compact_selectable_positions();
+            if !selectable.is_empty() {
+                self.library_list.select(Some(selectable[selectable.len() / 2]));
+            }
+            return;
+        }
+        match self.focus {
+            Focus::Library => self.library_list.select(Some(LIBRARY_ITEMS.len() / 2)),
+            Focus::Playlists => {
+                let n = self.playlists.len();
+                if n > 0 {
+                    self.playlist_list.select(Some(n / 2));
+                }
+            }
+            Focus::Tracks => match self.active_content {
+                ActiveContent::Albums => {
+                    let n = self.albums.len();
+                    if n > 0 {
+                        self.album_list.select(Some(n / 2));
+                    }
+                }
+                ActiveContent::Artists => {
+                    let n = self.artists.len();
+                    if n > 0 {
+                        self.artist_list.select(Some(n / 2));
+                    }
+                }
+                ActiveContent::Shows => {
+                    let n = self.shows.len();
+                    if n > 0 {
+                        self.show_list.select(Some(n / 2));
+                    }
+                }
+                ActiveContent::LocalFiles => {
+                    let n = self.sorted_track_indices.len();
+                    if n > 0 {
+                        self.local_tree_list.select(Some(n / 2));
+                    }
+                }
+                _ => {
+                    let n = self.sorted_track_indices.len();
+                    if n > 0 {
+                        self.track_list.select(Some(n / 2));
+                    }
+                }
+            },
+            Focus::Search => {
+                if let Some(sr) = &mut self.search_results {
+                    let n = sr.current_len();
+                    if n > 0 {
+                        sr.current_list_mut().select(Some(n / 2));
+                    }
+                }
+            }
+            Focus::Queue => {
+                let n = self.queue_items.len();
+                if n > 0 {
+                    self.queue_list.select(Some(n / 2));
                 }
             }
         }

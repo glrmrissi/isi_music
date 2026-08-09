@@ -2,6 +2,7 @@
 use crate::config::AppConfig;
 use crate::settings::Settings;
 use crate::utils::cache::{CacheManager, CacheStats};
+use crate::utils::theme::Theme;
 use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
@@ -61,17 +62,17 @@ const SECTIONS: &[SettingsSection] = &[
     SettingsSection::Help,
 ];
 
-fn bg_style() -> Style {
-    Style::default().bg(Color::Rgb(14, 14, 18))
+fn bg_style(theme: &Theme) -> Style {
+    Style::default().bg(theme.background)
 }
 
-fn section_block(title: &str) -> Block<'static> {
+fn section_block(title: &str, theme: &Theme) -> Block<'static> {
     Block::default()
         .title(format!(" {} ", title))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Rgb(60, 60, 70)))
-        .style(bg_style())
+        .border_style(Style::default().fg(theme.border_subtle))
+        .style(bg_style(theme))
 }
 
 impl SettingsPanel {
@@ -131,7 +132,11 @@ impl SettingsPanel {
     fn items_in_section(&self) -> usize {
         match self.focused_section {
             SettingsSection::General => {
-                #[cfg(feature = "album-art")]
+                #[cfg(all(feature = "album-art", feature = "palette"))]
+                {
+                    8
+                }
+                #[cfg(all(feature = "album-art", not(feature = "palette")))]
                 {
                     7
                 }
@@ -286,16 +291,21 @@ impl SettingsPanel {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, state: &UiState) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        state: &UiState,
+        theme: &Theme,
+        autoplay_enabled: bool,
+    ) {
         if !self.visible {
             return;
         }
 
-        // Clean color scheme
-        let bg = Style::default().bg(Color::Rgb(14, 14, 18));
-        let border_color = Color::Rgb(60, 60, 70);
-        let accent_color = Color::Rgb(140, 180, 220);
-        let muted_color = Color::Rgb(120, 120, 130);
+        let bg = Style::default().bg(theme.background);
+        let border_color = theme.border_subtle;
+        let accent_color = theme.accent_color;
+        let muted_color = theme.text_secondary;
 
         let area = frame.area();
 
@@ -340,8 +350,8 @@ impl SettingsPanel {
         frame.render_widget(Clear, content_area);
         frame.render_widget(Paragraph::new("").style(bg), content_area);
 
-        self.render_sections(frame, sections_area);
-        self.render_content(frame, state, content_area);
+        self.render_sections(frame, sections_area, theme);
+        self.render_content(frame, state, content_area, theme, autoplay_enabled);
 
         // Clean footer
         frame.render_widget(Clear, footer_area);
@@ -362,11 +372,11 @@ impl SettingsPanel {
         );
     }
 
-    fn render_sections(&self, frame: &mut Frame, area: Rect) {
-        let accent_color = Color::Rgb(140, 180, 220);
-        let text_color = Color::Rgb(200, 200, 200);
-        let bg_color = Color::Rgb(14, 14, 18);
-        let border_color = Color::Rgb(60, 60, 70);
+    fn render_sections(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let accent_color = theme.accent_color;
+        let text_color = theme.text_primary;
+        let bg_color = theme.background;
+        let border_color = theme.border_subtle;
 
         let items: Vec<ListItem> = SECTIONS
             .iter()
@@ -405,7 +415,7 @@ impl SettingsPanel {
             .style(Style::default().bg(bg_color))
             .highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(30, 30, 40))
+                    .bg(theme.highlight_bg)
                     .fg(accent_color)
                     .add_modifier(Modifier::BOLD),
             )
@@ -414,13 +424,22 @@ impl SettingsPanel {
         frame.render_stateful_widget(list, area, &mut list_state);
     }
 
-    fn render_content(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+    fn render_content(
+        &self,
+        frame: &mut Frame,
+        state: &UiState,
+        area: Rect,
+        theme: &Theme,
+        autoplay_enabled: bool,
+    ) {
         match self.focused_section {
-            SettingsSection::General => self.render_general_section(frame, state, area),
-            SettingsSection::Account => self.render_account_section(frame, state, area),
-            SettingsSection::Cache => self.render_cache_section(frame, area),
-            SettingsSection::QuickAccess => self.render_quick_access_section(frame, area),
-            SettingsSection::Help => self.render_help_section(frame, area),
+            SettingsSection::General => {
+                self.render_general_section(frame, state, area, theme, autoplay_enabled)
+            }
+            SettingsSection::Account => self.render_account_section(frame, state, area, theme),
+            SettingsSection::Cache => self.render_cache_section(frame, area, theme),
+            SettingsSection::QuickAccess => self.render_quick_access_section(frame, area, theme),
+            SettingsSection::Help => self.render_help_section(frame, area, theme),
         }
     }
 
@@ -430,13 +449,14 @@ impl SettingsPanel {
         area: Rect,
         title: &str,
         items: &[(&str, &str, bool)],
+        theme: &Theme,
     ) {
-        let accent_color = Color::Rgb(140, 180, 220);
-        let text_color = Color::Rgb(200, 200, 200);
-        let enabled_color = Color::Rgb(120, 180, 120);
-        let disabled_color = Color::Rgb(180, 120, 120);
+        let accent_color = theme.accent_color;
+        let text_color = theme.text_primary;
+        let enabled_color = theme.success;
+        let disabled_color = theme.error;
 
-        let block = section_block(title);
+        let block = section_block(title, theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -450,7 +470,7 @@ impl SettingsPanel {
                     let color = if enabled {
                         enabled_color
                     } else if custom_status.starts_with("Pending") {
-                        Color::Rgb(220, 180, 100)
+                        theme.warning
                     } else {
                         disabled_color
                     };
@@ -475,8 +495,8 @@ impl SettingsPanel {
             .collect();
 
         let list = List::new(list_items)
-            .style(bg_style())
-            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 40)));
+            .style(bg_style(theme))
+            .highlight_style(Style::default().bg(theme.highlight_bg));
 
         let mut list_state =
             ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
@@ -484,14 +504,21 @@ impl SettingsPanel {
         frame.render_stateful_widget(list, inner, &mut list_state);
     }
 
-    fn render_general_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+    fn render_general_section(
+        &self,
+        frame: &mut Frame,
+        state: &UiState,
+        area: Rect,
+        theme: &Theme,
+        autoplay_enabled: bool,
+    ) {
         let mut items = vec![];
         #[cfg(feature = "album-art")]
-        items.push(("Cover Images", "", self.config.show_cover_images()));
+        items.push(("Cover Images", "", state.show_album_art));
         items.push(("Lyrics Fetching", "", self.config.enable_lyrics()));
-        items.push(("Visualizer Display", "", self.config.show_visualizer()));
-        items.push(("Compact Mode", "", self.config.compact_mode_default()));
-        items.push(("Breadcrumb", "", self.config.show_breadcrumb()));
+        items.push(("Visualizer Display", "", state.show_visualizer));
+        items.push(("Compact Mode", "", state.compact_mode));
+        items.push(("Breadcrumb", "", state.show_breadcrumb));
 
         let lastfm_text = if state.lastfm_connected {
             "Connected"
@@ -502,19 +529,26 @@ impl SettingsPanel {
         };
         items.push(("Last.fm Scrobbling", lastfm_text, state.lastfm_connected));
 
-        items.push(("Autoplay", "", self.config.autoplay_enabled()));
+        items.push(("Autoplay", "", autoplay_enabled));
 
-        self.render_item_list(frame, area, "General", &items);
+        #[cfg(all(feature = "album-art", feature = "palette"))]
+        items.push((
+            "Reactive Theme (album colors)",
+            "",
+            state.reactive_theme_enabled,
+        ));
+
+        self.render_item_list(frame, area, "General", &items, theme);
     }
 
-    fn render_account_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
-        let accent_color = Color::Rgb(140, 180, 220);
-        let text_color = Color::Rgb(200, 200, 200);
-        let muted_color = Color::Rgb(120, 120, 130);
-        let enabled_color = Color::Rgb(120, 180, 120);
-        let disabled_color = Color::Rgb(180, 120, 120);
+    fn render_account_section(&self, frame: &mut Frame, state: &UiState, area: Rect, theme: &Theme) {
+        let accent_color = theme.accent_color;
+        let text_color = theme.text_primary;
+        let muted_color = theme.text_secondary;
+        let enabled_color = theme.success;
+        let disabled_color = theme.error;
 
-        let block = section_block("Account & Integrations");
+        let block = section_block("Account & Integrations", theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -527,7 +561,7 @@ impl SettingsPanel {
         let lastfm_status = if state.lastfm_connected {
             ("Connected", enabled_color)
         } else if state.lastfm_pending {
-            ("Pending", Color::Rgb(220, 180, 100))
+            ("Pending", theme.warning)
         } else {
             ("Not configured", disabled_color)
         };
@@ -588,8 +622,8 @@ impl SettingsPanel {
             .collect();
 
         let list = List::new(list_items)
-            .style(bg_style())
-            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 40)));
+            .style(bg_style(theme))
+            .highlight_style(Style::default().bg(theme.highlight_bg));
 
         let mut list_state =
             ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
@@ -601,26 +635,26 @@ impl SettingsPanel {
             let hint = " Type path, Enter to save, Esc to cancel ";
             frame.render_widget(
                 Paragraph::new(hint)
-                    .style(Style::default().fg(accent_color).bg(Color::Rgb(14, 14, 18)))
+                    .style(Style::default().fg(accent_color).bg(theme.background))
                     .alignment(Alignment::Center),
                 area,
             );
         }
     }
 
-    fn render_cache_section(&self, frame: &mut Frame, area: Rect) {
-        let accent_color = Color::Rgb(140, 180, 220);
-        let text_color = Color::Rgb(200, 200, 200);
-        let muted_color = Color::Rgb(120, 120, 130);
+    fn render_cache_section(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let accent_color = theme.accent_color;
+        let text_color = theme.text_primary;
+        let muted_color = theme.text_secondary;
 
-        let block = section_block("Cache Management");
+        let block = section_block("Cache Management", theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         if self.loading {
             let loading_text = Paragraph::new("Loading cache statistics...")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(accent_color).bg(Color::Rgb(14, 14, 18)));
+                .style(Style::default().fg(accent_color).bg(theme.background));
             frame.render_widget(loading_text, inner);
             return;
         }
@@ -684,8 +718,8 @@ impl SettingsPanel {
         }
 
         let list = List::new(rows)
-            .style(bg_style())
-            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 40)));
+            .style(bg_style(theme))
+            .highlight_style(Style::default().bg(theme.highlight_bg));
 
         let mut list_state =
             ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
@@ -693,8 +727,8 @@ impl SettingsPanel {
         frame.render_stateful_widget(list, inner, &mut list_state);
     }
 
-    fn render_quick_access_section(&self, frame: &mut Frame, area: Rect) {
-        let block = section_block("Quick Access Setup");
+    fn render_quick_access_section(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let block = section_block("Quick Access Setup", theme);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -710,25 +744,25 @@ impl SettingsPanel {
 
         frame.render_widget(
             Paragraph::new(content)
-                .style(bg_style())
+                .style(bg_style(theme))
                 .wrap(Wrap { trim: false }),
             inner,
         );
     }
 
-    fn render_help_section(&self, frame: &mut Frame, area: Rect) {
+    fn render_help_section(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Clean backdrop
-        let backdrop_style = Style::default().bg(Color::Rgb(12, 12, 16));
+        let backdrop_style = Style::default().bg(theme.background);
         frame.render_widget(Clear, area);
         frame.render_widget(Paragraph::new("").style(backdrop_style), area);
 
         let scroll = self.help_scroll;
 
-        // Clean color scheme
-        let accent_color = Color::Rgb(140, 180, 220);
-        let header_color = Color::Rgb(200, 180, 140);
-        let text_color = Color::Rgb(200, 200, 200);
-        let border_color = Color::Rgb(60, 60, 70);
+        // Use theme colors
+        let accent_color = theme.accent_color;
+        let header_color = theme.warning;
+        let text_color = theme.text_primary;
+        let border_color = theme.border_subtle;
 
         let lines: Vec<Line> = self
             .help_text
@@ -801,7 +835,7 @@ impl SettingsPanel {
                     .add_modifier(Modifier::BOLD),
             )
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(Color::Rgb(16, 16, 20)));
+            .style(Style::default().bg(theme.background));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -809,7 +843,7 @@ impl SettingsPanel {
         // Clear the inner area before rendering to prevent scroll accumulation
         frame.render_widget(Clear, inner);
         frame.render_widget(
-            Paragraph::new("").style(Style::default().bg(Color::Rgb(16, 16, 20))),
+            Paragraph::new("").style(Style::default().bg(theme.background)),
             inner,
         );
 
@@ -817,7 +851,7 @@ impl SettingsPanel {
         let text: Vec<Line> = visible_lines.into_iter().cloned().collect();
 
         let paragraph = Paragraph::new(Text::from(text))
-            .style(Style::default().bg(Color::Rgb(16, 16, 20)))
+            .style(Style::default().bg(theme.background))
             .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, inner);
     }

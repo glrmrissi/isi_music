@@ -1,9 +1,10 @@
 use crate::app::metadata::sanitize_control_chars;
 use crate::spotify::RepeatState;
+use crate::utils::theme::UiWidget;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
@@ -12,6 +13,23 @@ use ratatui_image::protocol::StatefulProtocol;
 use unicode_width::UnicodeWidthStr;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
+
+fn color_to_rgb(c: Color) -> (u8, u8, u8) {
+    match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0, 0, 0),
+    }
+}
+
+fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| {
+        (f32::from(a) + (f32::from(b) - f32::from(a)) * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    (lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2))
+}
 
 fn clamp_text(text: &str, max_width: usize) -> String {
     if text.width() <= max_width {
@@ -47,19 +65,53 @@ fn calculate_number_width(total: usize) -> usize {
     total.to_string().len()
 }
 
-/// Build all `ListItem`s for a list. ratatui's `List` widget already renders
-/// only the visible rows internally, so we just need to provide every item and
-/// let the widget manage scrolling via `ListState`.
+struct ListWindow {
+    items: Vec<ListItem<'static>>,
+    start: usize,
+    selected: Option<usize>,
+}
+
 fn build_list_window<F>(
     total: usize,
-    _height: usize,
-    _list_state: &mut ListState,
+    height: usize,
+    list_state: &ListState,
     mut item_fn: F,
-) -> Vec<ListItem<'static>>
+) -> ListWindow
 where
     F: FnMut(usize) -> ListItem<'static>,
 {
-    (0..total).map(|i| item_fn(i)).collect()
+    let visible = height.max(1);
+    let selected = list_state
+        .selected()
+        .map(|index| index.min(total.saturating_sub(1)));
+    let selected_index = selected.unwrap_or(0);
+    let start = selected_index
+        .saturating_sub(visible / 2)
+        .min(total.saturating_sub(visible));
+    let end = (start + visible).min(total);
+    let items = (start..end).map(|index| item_fn(index)).collect();
+    let local_selected = selected.and_then(|index| {
+        (index >= start && index < end).then_some(index - start)
+    });
+
+    ListWindow {
+        items,
+        start,
+        selected: local_selected,
+    }
+}
+
+fn render_list_window<'a>(
+    frame: &mut Frame,
+    list: List<'a>,
+    area: Rect,
+    global_state: &mut ListState,
+    start: usize,
+    selected: Option<usize>,
+) {
+    let mut local_state = ListState::default().with_selected(selected);
+    frame.render_stateful_widget(list, area, &mut local_state);
+    *global_state.offset_mut() = start + local_state.offset();
 }
 
 impl Ui {
@@ -67,10 +119,14 @@ impl Ui {
         if state.compact_effective {
             let total = state.sorted_track_indices.len();
             let width = area.width as usize;
-            let items = build_list_window(
+            let ListWindow {
+                items,
+                start,
+                selected,
+            } = build_list_window(
                 total,
                 area.height as usize,
-                &mut state.local_tree_list,
+                &state.local_tree_list,
                 |display_idx| {
                     let vi = state.sorted_track_indices[display_idx];
                     let Some(node) = state.local_tree.get_visible(vi) else {
@@ -99,7 +155,7 @@ impl Ui {
                             let icon = if is_playing { " " } else { " " };
                             let title_style = if is_playing {
                                 Style::default()
-                                    .fg(self.theme.border_active)
+                                    .fg(self.theme.primary)
                                     .add_modifier(Modifier::BOLD)
                             } else {
                                 Style::default().fg(self.theme.text_primary)
@@ -121,16 +177,16 @@ impl Ui {
                             );
                             ListItem::new(Line::from(vec![
                                 Span::raw(indent),
-                                Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
+                                Span::styled(icon, Style::default().fg(self.theme.text_secondary)),
                                 Span::styled(name_text, title_style),
                                 Span::styled(
                                     format!("  {artist_text}"),
-                                    Style::default().fg(self.theme.border_inactive),
+                                    Style::default().fg(self.theme.text_secondary),
                                 ),
                                 Span::styled(
                                     dur,
                                     Style::default()
-                                        .fg(self.theme.border_inactive)
+                                        .fg(self.theme.text_secondary)
                                         .add_modifier(Modifier::DIM),
                                 ),
                             ]))
@@ -142,11 +198,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(list, area, &mut state.local_tree_list);
+            render_list_window(
+                frame,
+                list,
+                area,
+                &mut state.local_tree_list,
+                start,
+                selected,
+            );
             return;
         }
 
@@ -159,30 +222,27 @@ impl Ui {
             .filter(|n| !n.is_folder())
             .count();
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Local Files ")
+        let block = self
+            .build_panel_block(UiWidget::MainContent, focused, "Local Files")
             .title_bottom(Line::from(vec![Span::styled(
                 format!(
                     " {} tracks  [ENTER] play/expand  [A] queue  [Ctrl+F] search ",
                     total_tracks
                 ),
-                Style::default().fg(self.theme.border_inactive),
-            )]))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+                Style::default().fg(self.theme.text_secondary),
+            )]));
 
         let inner = block.inner(area);
         let total = state.sorted_track_indices.len();
         let content_w = inner.width as usize;
-        let items = build_list_window(
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(
             total,
             inner.height as usize,
-            &mut state.local_tree_list,
+            &state.local_tree_list,
             |display_idx| {
                 let vi = state.sorted_track_indices[display_idx];
                 let Some(node) = state.local_tree.get_visible(vi) else {
@@ -209,7 +269,7 @@ impl Ui {
                             ),
                             Span::styled(
                                 format!("  ({} tracks)", child_count),
-                                Style::default().fg(self.theme.border_inactive),
+                                Style::default().fg(self.theme.text_secondary),
                             ),
                         ]))
                     }
@@ -219,7 +279,7 @@ impl Ui {
                         let icon = if is_playing { " " } else { " " };
                         let title_style = if is_playing {
                             Style::default()
-                                .fg(self.theme.border_active)
+                                .fg(self.theme.primary)
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(self.theme.text_primary)
@@ -238,16 +298,16 @@ impl Ui {
                             pad_right(&clamp_text(&clean_artist, artist_w.max(6)), artist_w.max(6));
                         ListItem::new(Line::from(vec![
                             Span::raw(indent),
-                            Span::styled(icon, Style::default().fg(self.theme.border_inactive)),
+                            Span::styled(icon, Style::default().fg(self.theme.text_secondary)),
                             Span::styled(name_text, title_style),
                             Span::styled(
                                 format!("  {artist_text}"),
-                                Style::default().fg(self.theme.border_inactive),
+                                Style::default().fg(self.theme.text_secondary),
                             ),
                             Span::styled(
                                 dur,
                                 Style::default()
-                                    .fg(self.theme.border_inactive)
+                                    .fg(self.theme.text_secondary)
                                     .add_modifier(Modifier::DIM),
                             ),
                         ]))
@@ -260,13 +320,20 @@ impl Ui {
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .bg(self.theme.background_element)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.local_tree_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.local_tree_list,
+            start,
+            selected,
+        );
     }
 
     pub fn render_visualizer(
@@ -288,11 +355,47 @@ impl Ui {
             return;
         }
 
+        let viz_color = self.theme.visualizer.color.unwrap_or(self.theme.accent_color);
+
+        let effective_h = self
+            .theme
+            .visualizer
+            .height
+            .map(|h| h.min(inner.height))
+            .unwrap_or(inner.height);
+        if effective_h == 0 {
+            return;
+        }
+        let viz_top = inner.y + (inner.height - effective_h);
+
+        match self.theme.visualizer.style {
+            crate::utils::theme::VisualizerStyle::BrailleBars => {
+                self.render_braille_bars(frame, pb, viz_bands, inner, viz_top, effective_h, viz_color);
+            }
+            crate::utils::theme::VisualizerStyle::Plasma => {
+                self.render_plasma_wave(frame, pb, viz_bands, inner, viz_top, effective_h, viz_color);
+            }
+            crate::utils::theme::VisualizerStyle::AnimeArt => {
+                self.render_anime_art_viz(frame, pb, viz_bands, inner, viz_top, effective_h, viz_color);
+            }
+        }
+    }
+
+    fn render_braille_bars(
+        &self,
+        frame: &mut Frame,
+        pb: &PlaybackState,
+        viz_bands: &[f32],
+        inner: Rect,
+        viz_top: u16,
+        effective_h: u16,
+        viz_color: ratatui::style::Color,
+    ) {
         const LEFT: [u8; 4] = [1 << 6, 1 << 2, 1 << 1, 1 << 0];
         const RIGHT: [u8; 4] = [1 << 7, 1 << 5, 1 << 4, 1 << 3];
 
         let n_bars = inner.width as usize;
-        let px_rows = inner.height as usize * 4;
+        let px_rows = effective_h as usize * 4;
 
         for bar in 0..n_bars {
             let amp: f64 = if !pb.is_playing {
@@ -312,13 +415,13 @@ impl Ui {
             let color = if amp > 0.75 {
                 self.theme.text_primary
             } else if amp > 0.25 {
-                self.theme.accent_color
+                viz_color
             } else {
-                self.theme.border_inactive
+                self.theme.border_subtle
             };
 
-            for cell_y in 0..inner.height as usize {
-                let bottom_idx = inner.height as usize - 1 - cell_y;
+            for cell_y in 0..effective_h as usize {
+                let bottom_idx = effective_h as usize - 1 - cell_y;
                 let px_base = bottom_idx * 4;
                 if px_base >= bar_h {
                     continue;
@@ -337,11 +440,108 @@ impl Ui {
 
                 let ch = char::from_u32(0x2800 | bits as u32).unwrap_or(' ');
                 let bx = inner.x + bar as u16;
-                let by = inner.y + cell_y as u16;
-                if bx < inner.x + inner.width && by < inner.y + inner.height {
+                let by = viz_top + cell_y as u16;
+                if bx < inner.x + inner.width && by < viz_top + effective_h {
                     if let Some(cell) = frame.buffer_mut().cell_mut((bx, by)) {
                         cell.set_char(ch).set_fg(color);
                     }
+                }
+            }
+        }
+    }
+
+    fn render_plasma_wave(
+        &self,
+        frame: &mut Frame,
+        pb: &PlaybackState,
+        viz_bands: &[f32],
+        inner: Rect,
+        viz_top: u16,
+        effective_h: u16,
+        viz_color: ratatui::style::Color,
+    ) {
+        let mid = effective_h as f64 / 2.0;
+        let n_bars = inner.width as usize;
+        let energy: f64 = if !pb.is_playing || viz_bands.is_empty() {
+            0.0
+        } else {
+            viz_bands.iter().map(|&b| b as f64).sum::<f64>() / viz_bands.len() as f64
+        };
+
+        for x in 0..n_bars {
+            let phase = x as f64 * 0.3;
+            let band_idx = (x * viz_bands.len() / n_bars.max(1)).min(viz_bands.len().saturating_sub(1));
+            let band = if viz_bands.is_empty() { 0.0 } else { viz_bands[band_idx] as f64 };
+            let amp = (band * 0.6 + energy * 0.4).clamp(0.0, 1.0);
+            let wave = (phase + (band * 6.0)).sin() * amp * mid * 0.8;
+            let y = (mid + wave).round() as i64;
+
+            let bx = inner.x + x as u16;
+            let by = viz_top + y.clamp(0, effective_h as i64 - 1) as u16;
+            if bx < inner.x + inner.width && by < viz_top + effective_h {
+                if let Some(cell) = frame.buffer_mut().cell_mut((bx, by)) {
+                    cell.set_char('●').set_fg(viz_color);
+                }
+            }
+        }
+    }
+
+    fn render_anime_art_viz(
+        &self,
+        frame: &mut Frame,
+        pb: &PlaybackState,
+        viz_bands: &[f32],
+        inner: Rect,
+        viz_top: u16,
+        effective_h: u16,
+        viz_color: ratatui::style::Color,
+    ) {
+        let art: Vec<String> = if let Some(path) = &self.theme.visualizer.art_path {
+            match std::fs::read_to_string(path) {
+                Ok(content) => content.lines().map(|l| l.to_string()).collect(),
+                Err(_) => vec!["  ♪  ".to_string()],
+            }
+        } else {
+            vec!["  ♪  ".to_string()]
+        };
+
+        let bass = if viz_bands.is_empty() || !pb.is_playing {
+            0.0
+        } else {
+            viz_bands.iter().take(8).map(|&b| b as f64).sum::<f64>() / 8.0
+        };
+
+        let art_h = art.len() as u16;
+        let start_y = if art_h < effective_h {
+            viz_top + (effective_h - art_h) / 2
+        } else {
+            viz_top
+        };
+
+        for (row, line) in art.iter().enumerate().take(effective_h as usize) {
+            let y = start_y + row as u16;
+            if y >= viz_top + effective_h {
+                break;
+            }
+            for (col, ch) in line.chars().enumerate() {
+                if ch == ' ' || ch == '\t' {
+                    continue;
+                }
+                let x = inner.x + col as u16;
+                if x >= inner.x + inner.width {
+                    break;
+                }
+                let bright = ch != ' ';
+                if !bright && bass < 0.1 {
+                    continue;
+                }
+                let color = if bass > 0.5 {
+                    self.theme.text_primary
+                } else {
+                    viz_color
+                };
+                if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+                    cell.set_char(ch).set_fg(color);
                 }
             }
         }
@@ -369,7 +569,7 @@ impl Ui {
             let bc = self.breadcrumb(state);
             let content = if state.search_active {
                 let mut spans = vec![
-                    Span::styled(" Search: ", Style::default().fg(self.theme.border_active)),
+                    Span::styled(" Search: ", Style::default().fg(self.theme.primary)),
                     Span::styled(
                         &state.search_query,
                         Style::default().fg(self.theme.text_primary),
@@ -377,7 +577,7 @@ impl Ui {
                     Span::styled(
                         "█",
                         Style::default()
-                            .fg(self.theme.border_active)
+                            .fg(self.theme.primary)
                             .add_modifier(Modifier::SLOW_BLINK),
                     ),
                 ];
@@ -393,7 +593,7 @@ impl Ui {
                 let mut spans = vec![
                     Span::styled(
                         " Quick Search: ",
-                        Style::default().fg(self.theme.border_active),
+                        Style::default().fg(self.theme.primary),
                     ),
                     Span::styled(
                         &state.quick_search_query,
@@ -402,7 +602,7 @@ impl Ui {
                     Span::styled(
                         "█",
                         Style::default()
-                            .fg(self.theme.border_active)
+                            .fg(self.theme.primary)
                             .add_modifier(Modifier::SLOW_BLINK),
                     ),
                 ];
@@ -417,7 +617,7 @@ impl Ui {
             } else if let Some(msg) = &state.status_msg {
                 let mut spans = vec![Span::styled(
                     msg.clone(),
-                    Style::default().fg(self.theme.border_active),
+                    Style::default().fg(self.theme.primary),
                 )];
                 if !bc.is_empty() {
                     spans.push(Span::raw("  "));
@@ -431,7 +631,7 @@ impl Ui {
                 let mut spans = vec![Span::styled(
                     " Search Results",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )];
                 if !bc.is_empty() {
@@ -443,12 +643,8 @@ impl Ui {
                 }
                 Line::from(spans)
             } else {
-                let mut spans = vec![Span::styled(
-                    " isi-music ",
-                    Style::default().fg(self.theme.border_inactive),
-                )];
+                let mut spans: Vec<Span> = Vec::new();
                 if !bc.is_empty() {
-                    spans.push(Span::raw("  "));
                     spans.push(Span::styled(
                         &bc,
                         Style::default().fg(self.theme.text_secondary),
@@ -466,19 +662,20 @@ impl Ui {
         }
 
         let mut block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
+            .borders(Borders::LEFT)
+            .border_type(BorderType::Thick)
             .border_style(Style::default().fg(
                 if state.search_active || state.quick_search_active || state.command_mode {
                     self.theme.border_active
                 } else {
-                    self.theme.border_inactive
+                    self.theme.border_subtle
                 },
-            ));
+            ))
+            .style(Style::default().bg(self.theme.background_panel));
 
         let bc = self.breadcrumb(state);
         if !bc.is_empty() {
-            block = block.title(
+            block = block.title_top(
                 Line::from(Span::styled(
                     bc,
                     Style::default().fg(self.theme.text_secondary),
@@ -492,7 +689,7 @@ impl Ui {
 
         let content = if state.command_mode {
             Line::from(vec![
-                Span::styled("   ~", Style::default().fg(self.theme.border_active)),
+                Span::styled("   ~", Style::default().fg(self.theme.accent_color)),
                 Span::styled(
                     &state.command_buffer,
                     Style::default().fg(self.theme.text_primary),
@@ -500,7 +697,7 @@ impl Ui {
                 Span::styled(
                     "█",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.accent_color)
                         .add_modifier(Modifier::SLOW_BLINK),
                 ),
             ])
@@ -508,7 +705,7 @@ impl Ui {
             Line::from(vec![
                 Span::styled(
                     "   Quick Search: ",
-                    Style::default().fg(self.theme.border_active),
+                    Style::default().fg(self.theme.accent_color),
                 ),
                 Span::styled(
                     &state.quick_search_query,
@@ -517,13 +714,13 @@ impl Ui {
                 Span::styled(
                     "█",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.accent_color)
                         .add_modifier(Modifier::SLOW_BLINK),
                 ),
             ])
         } else if state.search_active {
             Line::from(vec![
-                Span::styled("   Search: ", Style::default().fg(self.theme.border_active)),
+                Span::styled("   Search: ", Style::default().fg(self.theme.accent_color)),
                 Span::styled(
                     &state.search_query,
                     Style::default().fg(self.theme.text_primary),
@@ -531,33 +728,30 @@ impl Ui {
                 Span::styled(
                     "█",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.accent_color)
                         .add_modifier(Modifier::SLOW_BLINK),
                 ),
             ])
         } else if let Some(msg) = &state.status_msg {
             Line::from(Span::styled(
                 msg.clone(),
-                Style::default().fg(self.theme.border_active),
+                Style::default().fg(self.theme.info),
             ))
         } else if state.search_results.is_some() {
             Line::from(vec![
                 Span::styled(
                     "  Search Results",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     "  [TAB] switch panel  [ENTER] open  [ESC] close",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
             ])
         } else {
-            Line::from(vec![Span::styled(
-                "",
-                Style::default().fg(self.theme.border_inactive),
-            )])
+            Line::from("")
         };
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Left), inner);
     }
@@ -565,15 +759,7 @@ impl Ui {
     pub fn render_library(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Library;
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(Line::from(vec![Span::raw(" Library ")]).alignment(Alignment::Left))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+        let block = self.build_panel_block(UiWidget::Library, focused, "Library");
 
         let items: Vec<ListItem> = LIBRARY_ITEMS
             .iter()
@@ -584,8 +770,8 @@ impl Ui {
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .bg(self.theme.background_element)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
@@ -604,40 +790,41 @@ impl Ui {
             RepeatState::Track => " Rep1 ".to_string(),
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(Line::from(vec![Span::raw(" Playlists ")]).alignment(Alignment::Left))
+        let block = self
+            .build_panel_block(UiWidget::Playlists, focused, "Playlists")
             .title_bottom(Line::from(vec![
                 Span::styled(
                     format!(" Vol: {}% ", pb.volume),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::styled(
                     format!(" {} ", status_icon),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(if pb.is_playing {
+                        self.theme.success
+                    } else {
+                        self.theme.text_secondary
+                    }),
                 ),
-                Span::styled(repeat_str, Style::default().fg(self.theme.border_active)),
-            ]))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+                Span::styled(repeat_str, Style::default().fg(self.theme.accent_color)),
+            ]));
 
         let inner = block.inner(area);
         let total = state.playlists.len();
-        let items = build_list_window(
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(
             total,
             inner.height as usize,
-            &mut state.playlist_list,
+            &state.playlist_list,
             |idx| {
                 let p = &state.playlists[idx];
                 ListItem::new(Line::from(vec![
                     Span::raw(format!(" {} ", p.name)),
                     Span::styled(
                         format!("({})", p.total_tracks),
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                 ]))
             },
@@ -647,13 +834,20 @@ impl Ui {
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .bg(self.theme.background_element)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.playlist_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.playlist_list,
+            start,
+            selected,
+        );
     }
 
     pub fn render_welcome(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -663,7 +857,7 @@ impl Ui {
             items.push(ListItem::new(Line::from(Span::styled(
                 " Default",
                 Style::default()
-                    .fg(self.theme.border_inactive)
+                    .fg(self.theme.text_secondary)
                     .add_modifier(Modifier::BOLD),
             ))));
 
@@ -677,7 +871,7 @@ impl Ui {
                 items.push(ListItem::new(Line::from(Span::styled(
                     " Playlists",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::BOLD),
                 ))));
 
@@ -693,7 +887,7 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
@@ -704,7 +898,7 @@ impl Ui {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(self.theme.border_inactive));
+            .border_style(Style::default().fg(self.theme.border_subtle));
         frame.render_widget(&block, area);
         let inner = block.inner(area);
 
@@ -714,7 +908,7 @@ impl Ui {
                 Line::from(Span::styled(
                     " Loading...",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::SLOW_BLINK),
                 )),
                 Line::from(""),
@@ -726,13 +920,13 @@ impl Ui {
                 Line::from(Span::styled(
                     " Welcome to isi-music!",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Choose how to get started:",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -748,7 +942,7 @@ impl Ui {
                 Line::from(Span::styled(
                     "   Then select Liked Songs or a playlist from the left panel",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 )),
                 Line::from(""),
@@ -765,14 +959,14 @@ impl Ui {
                 Line::from(Span::styled(
                     "   Then select Local Files from the Library panel and press ENTER",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     " [TAB] navigate   [ENTER] select   [/] search   [?] help   [q] quit",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 )),
             ]
@@ -783,23 +977,23 @@ impl Ui {
                 Line::from(Span::styled(
                     " isi-music",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Select a playlist from the Library or Playlists panel,",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(Span::styled(
                     "or press / to search Spotify.",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     " [TAB] navigate   [ENTER] select   [/] search   [Ctrl+F] quick search",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 )),
             ]
@@ -810,13 +1004,13 @@ impl Ui {
                 Line::from(Span::styled(
                     " isi-music",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Local files loaded! Select Local Files and press ENTER to play.",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -827,7 +1021,7 @@ impl Ui {
                 Line::from(Span::styled(
                     " [TAB] navigate   [ENTER] select   [/] search   [?] help   [q] quit",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 )),
             ]
@@ -838,23 +1032,23 @@ impl Ui {
                 Line::from(Span::styled(
                     " isi-music",
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Select a playlist from the Library or Playlists panel,",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(Span::styled(
                     "or press / to search Spotify.",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "[TAB] navigate panels   [ENTER] select   [/] search   [Ctrl+F] quick search",
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 )),
             ]
@@ -893,7 +1087,7 @@ impl Ui {
 
             frame.render_widget(
                 Paragraph::new(msg)
-                    .style(Style::default().fg(self.theme.border_inactive))
+                    .style(Style::default().fg(self.theme.text_secondary))
                     .alignment(Alignment::Center),
                 vertical_center[1],
             );
@@ -918,7 +1112,7 @@ impl Ui {
                             Line::from(Span::styled(
                                 format!("{}", line.text),
                                 Style::default()
-                                    .fg(self.theme.border_active)
+                                    .fg(self.theme.primary)
                                     .add_modifier(Modifier::BOLD),
                             ))
                             .alignment(Alignment::Center),
@@ -929,7 +1123,7 @@ impl Ui {
                             Style::default().fg(self.theme.text_primary)
                         } else {
                             Style::default()
-                                .fg(self.theme.border_inactive)
+                                .fg(self.theme.text_secondary)
                                 .add_modifier(Modifier::DIM)
                         };
                         ListItem::new(
@@ -991,7 +1185,7 @@ impl Ui {
                         Line::from(Span::styled(
                             t,
                             Style::default()
-                                .fg(self.theme.border_active)
+                                .fg(self.theme.primary)
                                 .add_modifier(Modifier::BOLD),
                         ))
                         .alignment(Alignment::Center)
@@ -1003,7 +1197,7 @@ impl Ui {
                     Line::from(Span::styled(
                         t,
                         Style::default()
-                            .fg(self.theme.border_inactive)
+                            .fg(self.theme.text_secondary)
                             .add_modifier(Modifier::DIM),
                     ))
                     .alignment(Alignment::Center)
@@ -1024,10 +1218,14 @@ impl Ui {
             let num_width = calculate_number_width(total.max(state.tracks.len()));
             let content_w = area.width as usize;
 
-            let items = build_list_window(
+            let ListWindow {
+                items,
+                start,
+                selected,
+            } = build_list_window(
                 total,
                 area.height as usize,
-                &mut state.track_list,
+                &state.track_list,
                 |display_idx| {
                     let real_idx = state.sorted_track_indices[display_idx];
                     let Some(t) = state.tracks.get(real_idx) else {
@@ -1036,7 +1234,7 @@ impl Ui {
                     let is_playing = state.playback.title == t.name;
                     let style = if is_playing {
                         Style::default()
-                            .fg(self.theme.border_active)
+                            .fg(self.theme.success)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(self.theme.text_primary)
@@ -1057,14 +1255,14 @@ impl Ui {
                     ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>width$}. ", display_idx + 1, width = num_width),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                         Span::styled(name_text, style),
                         Span::styled(
                             format!("  {artist_text}"),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
-                        Span::styled(added, Style::default().fg(self.theme.border_inactive)),
+                        Span::styled(added, Style::default().fg(self.theme.text_secondary)),
                         Span::raw(" "),
                         Span::styled(dur, Style::default().fg(self.theme.text_secondary)),
                     ]))
@@ -1074,20 +1272,27 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(list, area, &mut state.track_list);
+            render_list_window(
+                frame,
+                list,
+                area,
+                &mut state.track_list,
+                start,
+                selected,
+            );
             return;
         }
 
         let focused = state.focus == Focus::Tracks;
 
         let title = if state.active_playlist_uri.as_deref() == Some("liked_songs") {
-            " Liked Songs ".to_string()
+            "Liked Songs"
         } else {
-            " Tracks ".to_string()
+            "Tracks"
         };
 
         let sort_label = format!("[Sort: {}]", state.track_sort_by.label());
@@ -1100,36 +1305,33 @@ impl Ui {
         } else {
             state.sorted_track_indices.len().to_string()
         };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(title.as_str())
+        let block = self
+            .build_panel_block(UiWidget::MainContent, focused, title)
             .title_bottom(Line::from(vec![
                 Span::styled(
                     format!(" {count} ",),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::styled(sort_label, Style::default().fg(self.theme.accent_color)),
                 Span::styled(
                     " [Ctrl+F] search  [O] sort ",
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
-            ]))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+            ]));
 
         let inner = block.inner(area);
         let total = state.sorted_track_indices.len();
         let num_width = calculate_number_width(total.max(state.tracks.len()));
         let content_w = inner.width as usize;
 
-        let items = build_list_window(
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(
             total,
             inner.height as usize,
-            &mut state.track_list,
+            &state.track_list,
             |display_idx| {
                 let real_idx = state.sorted_track_indices[display_idx];
                 let Some(t) = state.tracks.get(real_idx) else {
@@ -1138,7 +1340,7 @@ impl Ui {
                 let is_playing = state.playback.title == t.name;
                 let style = if is_playing {
                     Style::default()
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.success)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(self.theme.text_primary)
@@ -1159,14 +1361,14 @@ impl Ui {
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("{:>width$}. ", display_idx + 1, width = num_width),
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                     Span::styled(name_text, style),
                     Span::styled(
                         format!("  {artist_text}"),
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ),
-                    Span::styled(added, Style::default().fg(self.theme.border_inactive)),
+                    Span::styled(added, Style::default().fg(self.theme.text_secondary)),
                     Span::raw(" "),
                     Span::styled(dur, Style::default().fg(self.theme.text_secondary)),
                 ]))
@@ -1178,29 +1380,39 @@ impl Ui {
             .highlight_style(
                 Style::default()
                     .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.track_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.track_list,
+            start,
+            selected,
+        );
     }
 
     pub fn render_albums(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.compact_effective {
             let total = state.albums.len();
-            let items =
-                build_list_window(total, area.height as usize, &mut state.album_list, |idx| {
+            let ListWindow {
+                items,
+                start,
+                selected,
+            } = build_list_window(total, area.height as usize, &state.album_list, |idx| {
                     let a = &state.albums[idx];
                     ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                         Span::raw(clamp_text(&a.name, 30)),
                         Span::styled(
                             format!("  {}", clamp_text(&a.artist, 20)),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ]))
                 });
@@ -1208,11 +1420,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(list, area, &mut state.album_list);
+            render_list_window(
+                frame,
+                list,
+                area,
+                &mut state.album_list,
+                start,
+                selected,
+            );
             return;
         }
 
@@ -1224,38 +1443,35 @@ impl Ui {
             state.albums.len().to_string()
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Albums ")
+        let block = self
+            .build_panel_block(UiWidget::MainContent, focused, "Albums")
             .title_bottom(Line::from(vec![Span::styled(
                 format!(" {count} "),
-                Style::default().fg(self.theme.border_inactive),
-            )]))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+                Style::default().fg(self.theme.text_secondary),
+            )]));
 
         let inner = block.inner(area);
         let total = state.albums.len();
-        let items = build_list_window(total, inner.height as usize, &mut state.album_list, |idx| {
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(total, inner.height as usize, &state.album_list, |idx| {
             let a = &state.albums[idx];
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{:>3}. ", idx + 1),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::raw(clamp_text(&a.name, 35)),
                 Span::styled(
                     format!(" - {}", clamp_text(&a.artist, 25)),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::styled(
                     format!(" ({} tracks)", a.total_tracks),
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 ),
             ]))
@@ -1266,24 +1482,34 @@ impl Ui {
             .highlight_style(
                 Style::default()
                     .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.album_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.album_list,
+            start,
+            selected,
+        );
     }
 
     pub fn render_artists(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.compact_effective {
             let total = state.artists.len();
-            let items =
-                build_list_window(total, area.height as usize, &mut state.artist_list, |idx| {
+            let ListWindow {
+                items,
+                start,
+                selected,
+            } = build_list_window(total, area.height as usize, &state.artist_list, |idx| {
                     let a = &state.artists[idx];
                     ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                         Span::raw(clamp_text(&a.name, 30)),
                     ]))
@@ -1292,42 +1518,46 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(list, area, &mut state.artist_list);
+            render_list_window(
+                frame,
+                list,
+                area,
+                &mut state.artist_list,
+                start,
+                selected,
+            );
             return;
         }
 
         let focused = state.focus == Focus::Tracks;
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Artists ")
+        let block = self
+            .build_panel_block(UiWidget::MainContent, focused, "Artists")
             .title_bottom(Line::from(vec![Span::styled(
                 format!(" {} ", state.artists.len()),
-                Style::default().fg(self.theme.border_inactive),
-            )]))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+                Style::default().fg(self.theme.text_secondary),
+            )]));
 
         let inner = block.inner(area);
         let total = state.artists.len();
-        let items = build_list_window(
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(
             total,
             inner.height as usize,
-            &mut state.artist_list,
+            &state.artist_list,
             |idx| {
                 let a = &state.artists[idx];
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("{:>3}. ", idx + 1),
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                     Span::raw(clamp_text(&a.name, 35)),
                     Span::styled(
@@ -1336,7 +1566,7 @@ impl Ui {
                         } else {
                             format!("  {}", clamp_text(&a.genres, 25))
                         },
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                 ]))
             },
@@ -1347,24 +1577,34 @@ impl Ui {
             .highlight_style(
                 Style::default()
                     .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.artist_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.artist_list,
+            start,
+            selected,
+        );
     }
 
     pub fn render_shows(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if state.compact_effective {
             let total = state.shows.len();
-            let items =
-                build_list_window(total, area.height as usize, &mut state.show_list, |idx| {
+            let ListWindow {
+                items,
+                start,
+                selected,
+            } = build_list_window(total, area.height as usize, &state.show_list, |idx| {
                     let s = &state.shows[idx];
                     ListItem::new(Line::from(vec![
                         Span::styled(
                             format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                         Span::raw(clamp_text(&s.name, 30)),
                     ]))
@@ -1373,11 +1613,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(list, area, &mut state.show_list);
+            render_list_window(
+                frame,
+                list,
+                area,
+                &mut state.show_list,
+                start,
+                selected,
+            );
             return;
         }
 
@@ -1389,38 +1636,35 @@ impl Ui {
             state.shows.len().to_string()
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Podcasts ")
+        let block = self
+            .build_panel_block(UiWidget::MainContent, focused, "Podcasts")
             .title_bottom(Line::from(vec![Span::styled(
                 format!(" {count} "),
-                Style::default().fg(self.theme.border_inactive),
-            )]))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+                Style::default().fg(self.theme.text_secondary),
+            )]));
 
         let inner = block.inner(area);
         let total = state.shows.len();
-        let items = build_list_window(total, inner.height as usize, &mut state.show_list, |idx| {
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(total, inner.height as usize, &state.show_list, |idx| {
             let s = &state.shows[idx];
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{:>3}. ", idx + 1),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::raw(clamp_text(&s.name, 35)),
                 Span::styled(
                     format!("  {}", clamp_text(&s.publisher, 25)),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::styled(
                     format!(" ({} eps)", s.total_episodes),
                     Style::default()
-                        .fg(self.theme.border_inactive)
+                        .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
                 ),
             ]))
@@ -1431,12 +1675,19 @@ impl Ui {
             .highlight_style(
                 Style::default()
                     .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.show_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.show_list,
+            start,
+            selected,
+        );
     }
 
     pub fn render_search_panels(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -1456,7 +1707,7 @@ impl Ui {
             if is_focused && focus_panel == panel {
                 Style::default().fg(self.theme.border_active)
             } else {
-                Style::default().fg(self.theme.border_inactive)
+                Style::default().fg(self.theme.border_subtle)
             }
         };
 
@@ -1477,7 +1728,7 @@ impl Ui {
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
                         title,
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ))),
                     area,
                 );
@@ -1490,20 +1741,20 @@ impl Ui {
                 if list_area.height == 0 {
                     return;
                 }
-                let items: Vec<ListItem> = match focus_panel {
+                let window = match focus_panel {
                     SearchPanel::Tracks => {
-                        build_list_window(sr.tracks.len(), list_height, &mut sr.track_list, |idx| {
+                        build_list_window(sr.tracks.len(), list_height, &sr.track_list, |idx| {
                             let t = &sr.tracks[idx];
                             ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::styled(
                                     format!("{:>3}. ", idx + 1),
-                                    Style::default().fg(self.theme.border_inactive),
+                                    Style::default().fg(self.theme.text_secondary),
                                 ),
                                 Span::raw(t.name.clone()),
                                 Span::styled(
                                     format!("  {}", t.artist),
-                                    Style::default().fg(self.theme.border_inactive),
+                                    Style::default().fg(self.theme.text_secondary),
                                 ),
                             ]))
                         })
@@ -1511,24 +1762,24 @@ impl Ui {
                     SearchPanel::Artists => build_list_window(
                         sr.artists.len(),
                         list_height,
-                        &mut sr.artist_list,
+                        &sr.artist_list,
                         |idx| {
                             let a = &sr.artists[idx];
                             ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::raw(a.name.clone()),
                             ]))
                         },
                     ),
                     SearchPanel::Albums => {
-                        build_list_window(sr.albums.len(), list_height, &mut sr.album_list, |idx| {
+                        build_list_window(sr.albums.len(), list_height, &sr.album_list, |idx| {
                             let a = &sr.albums[idx];
                             ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::raw(a.name.clone()),
                                 Span::styled(
                                     format!("  {}", a.artist),
-                                    Style::default().fg(self.theme.border_inactive),
+                                    Style::default().fg(self.theme.text_secondary),
                                 ),
                             ]))
                         })
@@ -1536,37 +1787,62 @@ impl Ui {
                     SearchPanel::Playlists => build_list_window(
                         sr.playlists.len(),
                         list_height,
-                        &mut sr.playlist_list,
+                        &sr.playlist_list,
                         |idx| {
                             let p = &sr.playlists[idx];
                             ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.border_active)),
+                                Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::raw(p.name.clone()),
                             ]))
                         },
                     ),
                 };
+                let ListWindow {
+                    items,
+                    start,
+                    selected,
+                } = window;
                 let list = List::new(items)
                     .highlight_style(
                         Style::default()
                             .bg(self.theme.highlight_bg)
-                            .fg(self.theme.border_active)
+                            .fg(self.theme.primary)
                             .add_modifier(Modifier::BOLD),
                     )
                     .highlight_symbol(&self.theme.highlight_symbol);
                 match focus_panel {
-                    SearchPanel::Tracks => {
-                        frame.render_stateful_widget(list, list_area, &mut sr.track_list)
-                    }
-                    SearchPanel::Artists => {
-                        frame.render_stateful_widget(list, list_area, &mut sr.artist_list)
-                    }
-                    SearchPanel::Albums => {
-                        frame.render_stateful_widget(list, list_area, &mut sr.album_list)
-                    }
-                    SearchPanel::Playlists => {
-                        frame.render_stateful_widget(list, list_area, &mut sr.playlist_list)
-                    }
+                    SearchPanel::Tracks => render_list_window(
+                        frame,
+                        list,
+                        list_area,
+                        &mut sr.track_list,
+                        start,
+                        selected,
+                    ),
+                    SearchPanel::Artists => render_list_window(
+                        frame,
+                        list,
+                        list_area,
+                        &mut sr.artist_list,
+                        start,
+                        selected,
+                    ),
+                    SearchPanel::Albums => render_list_window(
+                        frame,
+                        list,
+                        list_area,
+                        &mut sr.album_list,
+                        start,
+                        selected,
+                    ),
+                    SearchPanel::Playlists => render_list_window(
+                        frame,
+                        list,
+                        list_area,
+                        &mut sr.playlist_list,
+                        start,
+                        selected,
+                    ),
                 }
             }
             return;
@@ -1602,22 +1878,26 @@ impl Ui {
                 .title(ptitle(SearchPanel::Tracks, " Tracks "))
                 .border_style(panel_style(SearchPanel::Tracks));
             let track_inner = track_block.inner(top_cols[0]);
-            let track_items = build_list_window(
+            let ListWindow {
+                items: track_items,
+                start: track_start,
+                selected: track_selected,
+            } = build_list_window(
                 sr.tracks.len(),
                 track_inner.height as usize,
-                &mut sr.track_list,
+                &sr.track_list,
                 |idx| {
                     let t = &sr.tracks[idx];
                     ListItem::new(Line::from(vec![
-                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.primary)),
                         Span::styled(
                             format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                         Span::raw(t.name.clone()),
                         Span::styled(
                             format!(" - {}", t.artist),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ]))
                 },
@@ -1627,11 +1907,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(track_list, top_cols[0], &mut sr.track_list);
+            render_list_window(
+                frame,
+                track_list,
+                top_cols[0],
+                &mut sr.track_list,
+                track_start,
+                track_selected,
+            );
 
             let artist_block = Block::default()
                 .borders(Borders::ALL)
@@ -1639,14 +1926,18 @@ impl Ui {
                 .title(ptitle(SearchPanel::Artists, " Artists "))
                 .border_style(panel_style(SearchPanel::Artists));
             let artist_inner = artist_block.inner(top_cols[1]);
-            let artist_items = build_list_window(
+            let ListWindow {
+                items: artist_items,
+                start: artist_start,
+                selected: artist_selected,
+            } = build_list_window(
                 sr.artists.len(),
                 artist_inner.height as usize,
-                &mut sr.artist_list,
+                &sr.artist_list,
                 |idx| {
                     let a = &sr.artists[idx];
                     ListItem::new(Line::from(vec![
-                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.primary)),
                         Span::raw(a.name.clone()),
                         Span::styled(
                             if a.genres.is_empty() {
@@ -1654,7 +1945,7 @@ impl Ui {
                             } else {
                                 format!("  {}", a.genres)
                             },
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ]))
                 },
@@ -1664,11 +1955,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(artist_list, top_cols[1], &mut sr.artist_list);
+            render_list_window(
+                frame,
+                artist_list,
+                top_cols[1],
+                &mut sr.artist_list,
+                artist_start,
+                artist_selected,
+            );
 
             let album_block = Block::default()
                 .borders(Borders::ALL)
@@ -1676,18 +1974,22 @@ impl Ui {
                 .title(ptitle(SearchPanel::Albums, " Albums "))
                 .border_style(panel_style(SearchPanel::Albums));
             let album_inner = album_block.inner(bot_cols[0]);
-            let album_items = build_list_window(
+            let ListWindow {
+                items: album_items,
+                start: album_start,
+                selected: album_selected,
+            } = build_list_window(
                 sr.albums.len(),
                 album_inner.height as usize,
-                &mut sr.album_list,
+                &sr.album_list,
                 |idx| {
                     let a = &sr.albums[idx];
                     ListItem::new(Line::from(vec![
-                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.primary)),
                         Span::raw(a.name.clone()),
                         Span::styled(
                             format!(" - {}", a.artist),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ]))
                 },
@@ -1697,11 +1999,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(album_list, bot_cols[0], &mut sr.album_list);
+            render_list_window(
+                frame,
+                album_list,
+                bot_cols[0],
+                &mut sr.album_list,
+                album_start,
+                album_selected,
+            );
 
             let pl_block = Block::default()
                 .borders(Borders::ALL)
@@ -1709,18 +2018,22 @@ impl Ui {
                 .title(ptitle(SearchPanel::Playlists, " Playlists "))
                 .border_style(panel_style(SearchPanel::Playlists));
             let pl_inner = pl_block.inner(bot_cols[1]);
-            let pl_items = build_list_window(
+            let ListWindow {
+                items: pl_items,
+                start: pl_start,
+                selected: pl_selected,
+            } = build_list_window(
                 sr.playlists.len(),
                 pl_inner.height as usize,
-                &mut sr.playlist_list,
+                &sr.playlist_list,
                 |idx| {
                     let p = &sr.playlists[idx];
                     ListItem::new(Line::from(vec![
-                        Span::styled(" ", Style::default().fg(self.theme.border_active)),
+                        Span::styled(" ", Style::default().fg(self.theme.primary)),
                         Span::raw(p.name.clone()),
                         Span::styled(
                             format!("  ({})", p.total_tracks),
-                            Style::default().fg(self.theme.border_inactive),
+                            Style::default().fg(self.theme.text_secondary),
                         ),
                     ]))
                 },
@@ -1730,11 +2043,18 @@ impl Ui {
                 .highlight_style(
                     Style::default()
                         .bg(self.theme.highlight_bg)
-                        .fg(self.theme.border_active)
+                        .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(&self.theme.highlight_symbol);
-            frame.render_stateful_widget(pl_list, bot_cols[1], &mut sr.playlist_list);
+            render_list_window(
+                frame,
+                pl_list,
+                bot_cols[1],
+                &mut sr.playlist_list,
+                pl_start,
+                pl_selected,
+            );
         }
     }
 
@@ -1761,37 +2081,70 @@ impl Ui {
                 .collect::<String>()
         } else {
             format!(
-                "{}{}{}",
-                "⣿".repeat(filled),
-                "⡷",
-                "⠶".repeat(width.saturating_sub(filled))
+                "{}{}",
+                "█".repeat(filled),
+                "░".repeat(width.saturating_sub(filled))
             )
         };
 
-        // Split the waveform into played / unplayed spans for color.
         let chars: Vec<char> = bar.chars().collect();
-        let played: String = chars.iter().take(filled).collect();
+        let played_chars: Vec<char> = chars.iter().take(filled).copied().collect();
         let unplayed: String = chars.iter().skip(filled).collect();
 
-        let content = Line::from(vec![
+        let primary_rgb = color_to_rgb(self.theme.primary);
+        let accent_rgb = color_to_rgb(self.theme.accent_color);
+        let track_rgb = color_to_rgb(self.theme.border_subtle);
+
+        let played_spans: Vec<Span> = if filled > 0 {
+            played_chars
+                .iter()
+                .enumerate()
+                .map(|(i, ch)| {
+                    let t = if filled > 1 {
+                        i as f32 / (filled - 1) as f32
+                    } else {
+                        0.0
+                    };
+                    let c = lerp_rgb(primary_rgb, accent_rgb, t);
+                    Span::styled(
+                        ch.to_string(),
+                        Style::default().fg(Color::Rgb(c.0, c.1, c.2)),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut line_spans = vec![
             Span::styled(
                 fmt_duration(pb.progress_ms),
                 Style::default()
-                    .fg(self.theme.accent_color)
+                    .fg(self.theme.text_secondary)
                     .add_modifier(Modifier::ITALIC),
             ),
             Span::raw(" "),
-            Span::styled(played, Style::default().fg(self.theme.accent_color)),
-            Span::styled(unplayed, Style::default().fg(self.theme.border_inactive)),
-            Span::raw(" "),
-            Span::styled(
-                fmt_duration(pb.duration_ms),
-                Style::default()
-                    .fg(self.theme.accent_color)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled(shuffle_label, Style::default().fg(self.theme.accent_color)),
-        ]);
+        ];
+        line_spans.extend(played_spans);
+        line_spans.push(Span::styled(
+            unplayed,
+            Style::default().fg(Color::Rgb(track_rgb.0, track_rgb.1, track_rgb.2)),
+        ));
+        line_spans.push(Span::raw(" "));
+        line_spans.push(Span::styled(
+            fmt_duration(pb.duration_ms),
+            Style::default()
+                .fg(self.theme.text_secondary)
+                .add_modifier(Modifier::ITALIC),
+        ));
+        if pb.shuffle {
+            line_spans.push(Span::styled(
+                shuffle_label,
+                Style::default().fg(self.theme.accent_color),
+            ));
+        }
+
+        let content = Line::from(line_spans);
         frame.render_widget(Paragraph::new(content).alignment(Alignment::Center), area);
     }
 
@@ -1833,7 +2186,7 @@ impl Ui {
             result
         };
         frame.render_widget(
-            Paragraph::new(display).style(Style::default().fg(self.theme.border_inactive)),
+            Paragraph::new(display).style(Style::default().fg(self.theme.text_secondary)),
             area,
         );
     }
@@ -1866,7 +2219,7 @@ impl Ui {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(" Cover ")
-            .border_style(Style::default().fg(self.theme.border_inactive));
+            .border_style(Style::default().fg(self.theme.border_subtle));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -1888,25 +2241,18 @@ impl Ui {
     pub fn render_queue(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         let focused = state.focus == Focus::Queue;
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(" Queue ")
+        let block = self
+            .build_panel_block(UiWidget::Queue, focused, "Queue")
             .title_bottom(Line::from(Span::styled(
                 format!(" {} tracks ", state.queue_items.len()),
-                Style::default().fg(self.theme.border_inactive),
-            )))
-            .border_style(if focused {
-                Style::default().fg(self.theme.border_active)
-            } else {
-                Style::default().fg(self.theme.border_inactive)
-            });
+                Style::default().fg(self.theme.text_secondary),
+            )));
 
         if state.queue_items.is_empty() {
             frame.render_widget(
                 Paragraph::new("  Queue empty — press [A] on a track to add")
                     .block(block)
-                    .style(Style::default().fg(self.theme.border_inactive)),
+                    .style(Style::default().fg(self.theme.text_secondary)),
                 area,
             );
             return;
@@ -1914,17 +2260,21 @@ impl Ui {
 
         let inner = block.inner(area);
         let total = state.queue_items.len();
-        let items = build_list_window(total, inner.height as usize, &mut state.queue_list, |idx| {
+        let ListWindow {
+            items,
+            start,
+            selected,
+        } = build_list_window(total, inner.height as usize, &state.queue_list, |idx| {
             let (name, artist) = &state.queue_items[idx];
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{:>2}. ", idx + 1),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
                 Span::styled(name.clone(), Style::default().fg(self.theme.text_primary)),
                 Span::styled(
                     format!(" - {}", artist),
-                    Style::default().fg(self.theme.border_inactive),
+                    Style::default().fg(self.theme.text_secondary),
                 ),
             ]))
         });
@@ -1933,13 +2283,20 @@ impl Ui {
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .bg(self.theme.background_element)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
 
-        frame.render_stateful_widget(list, area, &mut state.queue_list);
+        render_list_window(
+            frame,
+            list,
+            area,
+            &mut state.queue_list,
+            start,
+            selected,
+        );
     }
 }
 
@@ -1948,13 +2305,42 @@ fn fmt_duration(ms: u64) -> String {
     format!("{:>2}:{:02}", s / 60, s % 60)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_window_centers_global_selection() {
+        let state = ListState::default().with_selected(Some(100));
+        let window = build_list_window(2_240, 10, &state, |index| {
+            ListItem::new(index.to_string())
+        });
+
+        assert_eq!(window.start, 95);
+        assert_eq!(window.items.len(), 10);
+        assert_eq!(window.selected, Some(5));
+    }
+
+    #[test]
+    fn list_window_clamps_to_list_edges() {
+        let state = ListState::default().with_selected(Some(2_239));
+        let window = build_list_window(2_240, 10, &state, |index| {
+            ListItem::new(index.to_string())
+        });
+
+        assert_eq!(window.start, 2_230);
+        assert_eq!(window.items.len(), 10);
+        assert_eq!(window.selected, Some(9));
+    }
+}
+
 impl Ui {
     pub fn render_now_playing_widget(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
         if area.width < 10 || area.height < 5 {
             return;
         }
 
-        let pb = &state.playback;
+        let pb = state.playback.clone();
 
         #[cfg(feature = "album-art")]
         let info_area = if state.show_album_art {
@@ -1993,7 +2379,7 @@ impl Ui {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Min(0),
             ])
             .split(info_area);
@@ -2002,6 +2388,7 @@ impl Ui {
         let artist_area = info_grid[1];
         let album_area = info_grid[2];
         let progress_area = info_grid[4];
+        state.store_widget_rect(UiWidget::Progress, progress_area);
 
         frame.render_widget(
             Paragraph::new(vec![Line::from(Span::styled(
@@ -2077,7 +2464,7 @@ impl Ui {
                     Span::raw(format!(" {} ", p.name)),
                     Span::styled(
                         format!("({})", p.total_tracks),
-                        Style::default().fg(self.theme.border_inactive),
+                        Style::default().fg(self.theme.text_secondary),
                     ),
                 ]))
             })
@@ -2095,7 +2482,7 @@ impl Ui {
             .highlight_style(
                 Style::default()
                     .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
@@ -2137,7 +2524,7 @@ impl Ui {
             .highlight_style(
                 Style::default()
                     .bg(self.theme.highlight_bg)
-                    .fg(self.theme.border_active)
+                    .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(&self.theme.highlight_symbol);
