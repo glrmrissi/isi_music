@@ -8,7 +8,8 @@ use crate::spotify::TrackSummary;
 use crate::ui::PlaybackState;
 use anyhow::{Context, Result};
 use librespot_core::{
-    authentication::Credentials, config::SessionConfig, session::Session, spotify_uri::SpotifyUri,
+    authentication::Credentials, cache::Cache, config::SessionConfig, session::Session,
+    spotify_uri::SpotifyUri,
 };
 use librespot_playback::{
     audio_backend::{self, Sink},
@@ -25,7 +26,7 @@ use std::sync::{
 };
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub enum RepeatMode {
@@ -42,6 +43,7 @@ pub enum PlayerNotification {
     Paused,
     SessionLost,
     FreeAccountDetected,
+    PreloadNextTrack,
 }
 
 pub trait AudioPlayer: Send {
@@ -89,6 +91,7 @@ pub trait AudioPlayer: Send {
     fn cycle_repeat(&mut self);
 
     fn try_recv_event(&mut self) -> Option<PlayerNotification>;
+    fn preload_next(&mut self) {}
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (vec![], None)
@@ -137,7 +140,33 @@ impl NativePlayer {
         bitrate: librespot_playback::config::Bitrate,
         gapless: bool,
     ) -> Result<Self> {
-        let session = Session::new(SessionConfig::default(), None);
+        let cache_dir = dirs::cache_dir()
+            .or_else(|| dirs::config_dir())
+            .map(|mut p| {
+                p.push("isi-music");
+                p.push("audio-cache");
+                p
+            });
+
+        let cache = cache_dir.and_then(|dir| {
+            match Cache::new::<std::path::PathBuf>(
+                None,
+                None,
+                Some(dir.clone()),
+                Some(1024 * 1024 * 1024),
+            ) {
+                Ok(c) => {
+                    info!("Spotify audio cache enabled at {:?}", dir);
+                    Some(c)
+                }
+                Err(e) => {
+                    warn!("Failed to create audio cache at {:?}: {e}", dir);
+                    None
+                }
+            }
+        });
+
+        let session = Session::new(SessionConfig::default(), cache);
         let credentials = Credentials::with_access_token(access_token);
         session
             .connect(credentials, false)
@@ -232,6 +261,13 @@ impl NativePlayer {
                     PlayerEvent::Loading { track_id, .. } => {
                         info!("Loading: {}", track_id);
                     }
+                    PlayerEvent::TimeToPreloadNextTrack { .. } => {
+                        debug!("Time to preload next track");
+                        let _ = notif_tx.send(PlayerNotification::PreloadNextTrack);
+                    }
+                    PlayerEvent::Preloading { track_id, .. } => {
+                        debug!("Preloading: {}", track_id);
+                    }
                     PlayerEvent::PositionChanged { position_ms, .. } => {
                         if let Ok(mut pos) = sp.lock() {
                             *pos = (position_ms as u64, Instant::now());
@@ -318,8 +354,52 @@ impl NativePlayer {
                 self.current_index = Some(index);
                 self.is_playing = true;
                 self.playing_queued = None;
+                self.preload_next();
             }
             Err(e) => error!("Invalid URI '{uri}': {e}"),
+        }
+    }
+
+    pub fn preload_next(&mut self) {
+        if self.repeat == RepeatMode::Track || self.shuffle {
+            return;
+        }
+
+        if self.playing_queued.is_some() {
+            if let Some(track) = self.user_queue.first()
+                && let Ok(uri) = SpotifyUri::from_uri(&track.uri)
+            {
+                debug!("Preloading next user-queue track");
+                self.player.preload(uri);
+            }
+            return;
+        }
+
+        let next_idx = self.next_index();
+
+        if let Some(idx) = next_idx {
+            if let Some(uri) = self.queue.get(idx) {
+                if let Ok(spotify_uri) = SpotifyUri::from_uri(uri) {
+                    debug!("Preloading next track at index {idx}: {uri}");
+                    self.player.preload(spotify_uri);
+                }
+            }
+        }
+    }
+
+    fn next_index(&self) -> Option<usize> {
+        let current = self.current_index?;
+        let len = self.queue.len();
+        if len == 0 {
+            return None;
+        }
+        if self.repeat == RepeatMode::Queue {
+            return Some((current + 1) % len);
+        }
+        if current + 1 < len {
+            Some(current + 1)
+        } else {
+            None
         }
     }
 
@@ -360,6 +440,7 @@ impl NativePlayer {
                     self.player.load(spotify_uri, true, 0);
                     self.is_playing = true;
                     self.playing_queued = Some(track);
+                    self.preload_next();
                     return true;
                 }
                 Err(e) => error!("Invalid URI in user queue: {e}"),
@@ -472,6 +553,7 @@ impl AudioPlayer for NativePlayer {
                 self.player.load(spotify_uri, true, 0);
                 self.is_playing = true;
                 self.playing_queued = Some(track);
+                self.preload_next();
                 true
             }
             Err(e) => {
@@ -548,6 +630,10 @@ impl AudioPlayer for NativePlayer {
             _ => {}
         }
         Some(notif)
+    }
+
+    fn preload_next(&mut self) {
+        self.preload_next();
     }
 
     fn set_visualizer_enabled(&mut self, enabled: bool) {
