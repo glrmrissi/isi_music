@@ -76,6 +76,30 @@ if (-not $SkipDownload) {
 }
 Write-Host ""
 
+$StartMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+$ShortcutPath = Join-Path $StartMenuDir "isi-music.lnk"
+$WindowsTerminal = Get-Command wt.exe -ErrorAction SilentlyContinue
+
+if ($WindowsTerminal) {
+    try {
+        New-Item -ItemType Directory -Force -Path $StartMenuDir | Out-Null
+        $escapedTargetPath = $TargetPath.Replace("'", "''")
+        $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = $WindowsTerminal.Source
+        $shortcut.Arguments = "new-tab --title `"isi-music`" -- powershell.exe -NoLogo -NoExit -Command `"& '$escapedTargetPath'`"
+        $shortcut.WorkingDirectory = $InstallDir
+        $shortcut.IconLocation = "$TargetPath,0"
+        $shortcut.Description = "isi-music in Windows Terminal"
+        $shortcut.Save()
+        Write-Ok "Start Menu shortcut created (Windows Terminal + PowerShell)"
+    } catch {
+        Write-Warn "Could not create Windows Terminal shortcut: $($_.Exception.Message)"
+    }
+} else {
+    Write-Warn "Windows Terminal not found; isi-music will use the current console"
+}
+Write-Host ""
+
 # Step 2: Nerd Font
 Write-Step "Step 2/3: Nerd Font"
 Write-Host ""

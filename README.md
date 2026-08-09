@@ -22,7 +22,9 @@ isi-music is a terminal audio player for Spotify streaming and local file playba
 - **Daemon mode** -- keep playback after closing the terminal, control via CLI
 - **Playlist management** -- add and remove tracks via keyboard (tiling picker)
 - **Command mode** -- `:` prefix commands like `ap <search>`, `newplaylist <name>`
-- **Session restoration** -- focus, active view, compact mode, and volume are saved on quit
+- **Session restoration** -- active view, compact mode, and volume are saved on quit; startup focus returns to Library
+- **Large-library pagination** -- playlists load 50 items at a time as you approach the end; liked songs synchronize across all API pages
+- **Bounded search and audio caches** -- cached results are evicted instead of growing without limit
 - **Virtualized list rendering** -- smooth navigation in large libraries and playlists
 - **Mouse support** -- scroll wheel navigation in lists and lyrics
 - **Direct panel shortcuts** -- `1`/`2`/`3`/`4` jump to Library / Playlists / Tracks / Queue
@@ -47,6 +49,8 @@ irm https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.p
 ```
 
 After installation, run `isi-music` to start. If something isn't working, run `isi-music doctor` to diagnose common issues.
+
+On Windows, the installer also creates an `isi-music` shortcut in the Start Menu when Windows Terminal is installed. The shortcut opens the app in Windows Terminal with PowerShell; running `isi-music.exe` directly still works from any console.
 
 ## Getting Started
 
@@ -97,7 +101,7 @@ mkdir "$env:LOCALAPPDATA\Programs\isi-music" -Force
 move isi-music.exe "$env:LOCALAPPDATA\Programs\isi-music\"
 ```
 
-No audio dependencies are needed on Windows (WASAPI is built in). For the best experience use a modern terminal such as Windows Terminal.
+No audio dependencies are needed on Windows (WASAPI is built in). Windows Terminal is recommended for true-color rendering, mouse support, and the best TUI experience. PowerShell is the default shell used by the installer shortcut.
 
 **Linux audio dependencies:**
 
@@ -149,7 +153,7 @@ enabled = true
 musixmatch_api_key = "your_musixmatch_api_key"
 ```
 
-The `[session]` section is written automatically when you quit and stores the last focus, active view, compact mode, and volume:
+The `[session]` section is written automatically when you quit and stores the active view, compact mode, and volume. The saved focus value is retained for compatibility, but the app starts with focus on Library:
 
 ```toml
 [session]
@@ -161,6 +165,22 @@ volume = 80
 ```
 
 See [Spotify Setup](#spotify-setup) for obtaining a Client ID.
+
+### Library and cache behavior
+
+Large Spotify collections are loaded incrementally where possible:
+
+- **Liked Songs** are synchronized across all Spotify API pages and stored in the local SQLite library cache.
+- **Playlists, albums, and shows** load additional 50-item pages when navigation reaches the end of the currently loaded list.
+- The in-memory search cache keeps at most 32 recent queries and expires entries after 10 minutes.
+- The Spotify audio cache is stored on disk, with a limit of 1 GiB. It is not a permanent in-memory allocation.
+
+Relevant paths:
+
+| Data | Linux | Windows |
+|------|-------|---------|
+| Library/search database | `~/.local/share/isi-music/library.db` | `%APPDATA%\\isi-music\\library.db` |
+| Spotify audio cache | `~/.cache/isi-music/audio-cache/` | `%LOCALAPPDATA%\\isi-music\\audio-cache\\` |
 
 ### Theme
 
@@ -185,17 +205,58 @@ options_panel_symbol = "▶ "
 | Variable | Purpose |
 |----------|---------|
 | `border_active` | Focused panel borders, active indicators |
-| `border_inactive` | Unfocused borders, secondary text |
+| `border_inactive` | Unfocused borders |
+| `border_subtle` | Subtle panel borders and dividers |
+| `border_dimmest` | Lowest-contrast borders |
 | `highlight_bg` | Selected list items background |
 | `text_primary` | Titles, artists, primary text |
 | `accent_color` | Progress bars, icons, seek bar |
 | `background` | Root background fill |
+| `background_panel` | Panel background layer |
+| `background_element` | Element/background layer |
 | `text_secondary` | Subtle text, timestamps, metadata |
 | `status_bar` | Bottom status bar background |
+| `primary` | Primary accent role |
+| `success`, `warning`, `error`, `info` | Semantic status colors |
 | `highlight_symbol` | List selection indicator (default: `"> "`) |
 | `options_panel_symbol` | Options panel selection indicator (default: `"▶ "`) |
 
 Colors can be specified as hex (`#rrggbb`), named (`white`, `red`, `green`, etc.), or RGB function (`rgb(r,g,b)`).
+
+#### Visualizer and reactive theme
+
+The visualizer can be configured per theme:
+
+```toml
+[visualizer]
+style = "braille_bars" # braille_bars, plasma, or anime_art
+color = "#82aaff"     # optional; defaults to accent_color
+height = 8             # optional maximum height in terminal rows
+art_path = "assets/anime_art.txt" # used by anime_art
+```
+
+To derive colors from the current album art and cross-fade between tracks:
+
+```toml
+reactive_theme = true
+reactive_cross_fade_ms = 800
+```
+
+The same reactive-theme toggle is available in the options panel.
+
+#### Per-widget borders
+
+Border style and colors can be overridden for individual widgets. Supported styles are `rounded`, `thick`, `left_bar`, and `none`:
+
+```toml
+[borders.library]
+style = "rounded"
+color_focused = "#82aaff"
+color_unfocused = "#737aa2"
+
+[borders.visualizer]
+style = "none"
+```
 
 The theme file supports custom layout trees, widget styles, and ASCII art:
 
@@ -388,7 +449,7 @@ widget = "fullscreen_lyrics"
 widget = "visualizer"
 ```
 
-Run the wizard (`isi-music setup`) to choose from 8 color presets that preserve your existing layout settings.
+The default palette is Neutral Dark: a restrained dark theme that leaves Tokyo Night and other color schemes as explicit presets. Run the wizard (`isi-music setup`) to choose from the available color presets while preserving your existing layout settings.
 
 ### Custom Keybindings
 
@@ -400,6 +461,7 @@ focus_library = ["1"]
 focus_playlists = ["2"]
 focus_tracks = ["3"]
 focus_queue = ["4"]
+nav_middle = ["M"]
 jump_to_playing = ["c"]
 
 [modes]
@@ -438,6 +500,7 @@ The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser
 | `Tab` / `Shift+Tab` | Next / previous panel |
 | `↑` / `↓` or `k` / `j` | Navigate within a panel |
 | `Ctrl+↑` / `Ctrl+↓` | First / last item |
+| `M` | Jump to the middle of the current list |
 | `1` / `2` / `3` / `4` | Focus Library / Playlists / Tracks / Queue |
 | `c` | Jump to the currently playing track in the list |
 | `Enter` | Play selected / open album or artist |
@@ -447,6 +510,7 @@ The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser
 | `r` | Cycle repeat (off -> queue -> track) |
 | `+` / `-` | Volume up / down |
 | `←` / `→` | Seek +/- 5s (hold for +/- 10s) |
+| `5` | Seek to 50% of the current track |
 | `/` | Search |
 | `Esc` | Back / close search / exit fullscreen |
 | `q` or `Ctrl+C` | Quit |
@@ -617,7 +681,7 @@ cargo build --release
 # Run with debug logging
 RUST_LOG=isi_music=debug cargo run   # PowerShell: $env:RUST_LOG="isi_music=debug"; cargo run
 
-# Run tests (154 tests)
+# Run tests
 cargo test
 ```
 
