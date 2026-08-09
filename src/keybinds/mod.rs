@@ -17,6 +17,7 @@ pub enum Action {
     VolumeDown,
     SeekForward,
     SeekBackward,
+    SeekMiddle,
     ToggleShuffle,
     CycleRepeat,
     ToggleRadio,
@@ -29,6 +30,7 @@ pub enum Action {
     NavDown,
     NavFirst,
     NavLast,
+    NavMiddle,
     TabNext,
     TabPrev,
     Enter,
@@ -69,6 +71,7 @@ impl Action {
             ("volume_down", &["-"], VolumeDown),
             ("seek_forward", &["right"], SeekForward),
             ("seek_backward", &["left"], SeekBackward),
+            ("seek_middle", &["5"], SeekMiddle),
             ("toggle_shuffle", &["s"], ToggleShuffle),
             ("cycle_repeat", &["r"], CycleRepeat),
             ("toggle_radio", &["´"], ToggleRadio),
@@ -81,6 +84,7 @@ impl Action {
             ("nav_down", &["down", "j"], NavDown),
             ("nav_first", &["ctrl+up"], NavFirst),
             ("nav_last", &["ctrl+down"], NavLast),
+            ("nav_middle", &["M"], NavMiddle),
             ("tab_next", &["tab"], TabNext),
             ("tab_prev", &["backtab"], TabPrev),
             ("enter", &["enter"], Enter),
@@ -437,6 +441,7 @@ impl Keybinds {
                     Action::VolumeDown,
                     Action::SeekForward,
                     Action::SeekBackward,
+                    Action::SeekMiddle,
                     Action::ToggleShuffle,
                     Action::CycleRepeat,
                     Action::ToggleRadio,
@@ -450,6 +455,7 @@ impl Keybinds {
                     Action::NavDown,
                     Action::NavFirst,
                     Action::NavLast,
+                    Action::NavMiddle,
                     Action::TabNext,
                     Action::TabPrev,
                     Action::Enter,
@@ -554,6 +560,7 @@ impl KeybindsTomlOutput {
                 | Action::VolumeDown
                 | Action::SeekForward
                 | Action::SeekBackward
+                | Action::SeekMiddle
                 | Action::ToggleShuffle
                 | Action::CycleRepeat
                 | Action::ToggleRadio
@@ -563,6 +570,7 @@ impl KeybindsTomlOutput {
                 | Action::NavDown
                 | Action::NavFirst
                 | Action::NavLast
+                | Action::NavMiddle
                 | Action::TabNext
                 | Action::TabPrev
                 | Action::Enter
