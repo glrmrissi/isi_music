@@ -23,6 +23,10 @@ pub enum SettingsAction {
     CleanupExpired,
     RefreshStats,
     RefreshPlaylists,
+    SetupSpotify,
+    SetupLastfm,
+    EditMusicDir,
+    SaveMusicDir,
 }
 
 pub struct SettingsPanel {
@@ -36,11 +40,14 @@ pub struct SettingsPanel {
     pub loading: bool,
     pub help_text: Vec<String>,
     pub help_scroll: usize,
+    pub music_dir_editing: bool,
+    pub music_dir_input: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SettingsSection {
     General,
+    Account,
     Cache,
     QuickAccess,
     Help,
@@ -48,6 +55,7 @@ pub enum SettingsSection {
 
 const SECTIONS: &[SettingsSection] = &[
     SettingsSection::General,
+    SettingsSection::Account,
     SettingsSection::Cache,
     SettingsSection::QuickAccess,
     SettingsSection::Help,
@@ -83,6 +91,8 @@ impl SettingsPanel {
             loading: false,
             help_text: Vec::new(),
             help_scroll: 0,
+            music_dir_editing: false,
+            music_dir_input: String::new(),
         }
     }
 
@@ -130,6 +140,7 @@ impl SettingsPanel {
                     6
                 }
             }
+            SettingsSection::Account => 4,
             SettingsSection::Cache => 8,
             SettingsSection::QuickAccess => 1,
             SettingsSection::Help => 1,
@@ -137,6 +148,43 @@ impl SettingsPanel {
     }
 
     pub fn handle_key(&mut self, code: KeyCode) -> SettingsAction {
+        // Music dir inline text input mode takes priority
+        if self.music_dir_editing {
+            return match code {
+                KeyCode::Esc => {
+                    self.music_dir_editing = false;
+                    self.music_dir_input.clear();
+                    SettingsAction::None
+                }
+                KeyCode::Enter => {
+                    let path = self.music_dir_input.trim().to_string();
+                    let path = if cfg!(windows) {
+                        path.replace('\\', "/")
+                    } else {
+                        path
+                    };
+                    if !path.is_empty() {
+                        self.config.local.music_dir = Some(path);
+                    } else {
+                        self.config.local.music_dir = None;
+                    }
+                    self.save_config();
+                    self.music_dir_editing = false;
+                    self.music_dir_input.clear();
+                    SettingsAction::SaveMusicDir
+                }
+                KeyCode::Backspace => {
+                    self.music_dir_input.pop();
+                    SettingsAction::None
+                }
+                KeyCode::Char(c) => {
+                    self.music_dir_input.push(c);
+                    SettingsAction::None
+                }
+                _ => SettingsAction::None,
+            };
+        }
+
         if self.focused_section == SettingsSection::Help {
             match code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -187,6 +235,22 @@ impl SettingsPanel {
                     5 => SettingsAction::CleanupExpired,
                     6 => SettingsAction::RefreshStats,
                     7 => SettingsAction::RefreshPlaylists,
+                    _ => SettingsAction::None,
+                },
+                SettingsSection::Account => match self.selected_item {
+                    0 => SettingsAction::SetupSpotify,
+                    1 => SettingsAction::SetupLastfm,
+                    2 => {
+                        self.music_dir_editing = true;
+                        self.music_dir_input = self
+                            .config
+                            .local
+                            .music_dir
+                            .clone()
+                            .unwrap_or_default();
+                        SettingsAction::EditMusicDir
+                    }
+                    3 => SettingsAction::ToggleItem,
                     _ => SettingsAction::None,
                 },
                 _ => SettingsAction::ToggleItem,
@@ -309,6 +373,7 @@ impl SettingsPanel {
             .map(|section| {
                 let label = match section {
                     SettingsSection::General => "Features",
+                    SettingsSection::Account => "Account",
                     SettingsSection::Cache => "Cache",
                     SettingsSection::QuickAccess => "Quick Access",
                     SettingsSection::Help => "Help",
@@ -352,6 +417,7 @@ impl SettingsPanel {
     fn render_content(&self, frame: &mut Frame, state: &UiState, area: Rect) {
         match self.focused_section {
             SettingsSection::General => self.render_general_section(frame, state, area),
+            SettingsSection::Account => self.render_account_section(frame, state, area),
             SettingsSection::Cache => self.render_cache_section(frame, area),
             SettingsSection::QuickAccess => self.render_quick_access_section(frame, area),
             SettingsSection::Help => self.render_help_section(frame, area),
@@ -439,6 +505,107 @@ impl SettingsPanel {
         items.push(("Autoplay", "", self.config.autoplay_enabled()));
 
         self.render_item_list(frame, area, "General", &items);
+    }
+
+    fn render_account_section(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+        let accent_color = Color::Rgb(140, 180, 220);
+        let text_color = Color::Rgb(200, 200, 200);
+        let muted_color = Color::Rgb(120, 120, 130);
+        let enabled_color = Color::Rgb(120, 180, 120);
+        let disabled_color = Color::Rgb(180, 120, 120);
+
+        let block = section_block("Account & Integrations");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let spotify_status = if state.spotify_authenticated {
+            ("Connected", enabled_color)
+        } else {
+            ("Not configured", disabled_color)
+        };
+
+        let lastfm_status = if state.lastfm_connected {
+            ("Connected", enabled_color)
+        } else if state.lastfm_pending {
+            ("Pending", Color::Rgb(220, 180, 100))
+        } else {
+            ("Not configured", disabled_color)
+        };
+
+        let music_dir_status: String = if self.music_dir_editing {
+            format!("Editing: {}", self.music_dir_input)
+        } else {
+            self.config
+                .local
+                .music_dir
+                .clone()
+                .unwrap_or_else(|| "Not set".to_string())
+        };
+
+        let discord_enabled = self.config.discord.enabled.unwrap_or(false);
+        let discord_status = if discord_enabled {
+            ("Enabled", enabled_color)
+        } else {
+            ("Disabled", disabled_color)
+        };
+
+        let rows: Vec<(&str, &str, Color)> = vec![
+            ("Spotify", spotify_status.0, spotify_status.1),
+            ("Last.fm", lastfm_status.0, lastfm_status.1),
+            ("Music dir", &music_dir_status, if self.music_dir_editing { accent_color } else { text_color }),
+            ("Discord", discord_status.0, discord_status.1),
+        ];
+
+        let list_items: Vec<ListItem> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, (label, status, color))| {
+                let is_selected = i == self.selected_item;
+                let prefix = if is_selected { " " } else { " " };
+                let line_style = if is_selected {
+                    Style::default()
+                        .fg(accent_color)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(text_color)
+                };
+                let mut spans = vec![
+                    Span::styled(format!("{}{}: ", prefix, label), line_style),
+                    Span::styled(*status, Style::default().fg(*color)),
+                ];
+                if is_selected && !self.music_dir_editing {
+                    let hint = match i {
+                        0 => "  (Enter: setup instructions)",
+                        1 => "  (Enter: setup instructions)",
+                        2 => "  (Enter: edit path)",
+                        3 => "  (Enter: toggle)",
+                        _ => "",
+                    };
+                    spans.push(Span::styled(hint, Style::default().fg(muted_color)));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+
+        let list = List::new(list_items)
+            .style(bg_style())
+            .highlight_style(Style::default().bg(Color::Rgb(30, 30, 40)));
+
+        let mut list_state =
+            ratatui::widgets::ListState::default().with_selected(Some(self.selected_item));
+
+        frame.render_stateful_widget(list, inner, &mut list_state);
+
+        // Show a hint at the bottom when editing music dir
+        if self.music_dir_editing {
+            let hint = " Type path, Enter to save, Esc to cancel ";
+            frame.render_widget(
+                Paragraph::new(hint)
+                    .style(Style::default().fg(accent_color).bg(Color::Rgb(14, 14, 18)))
+                    .alignment(Alignment::Center),
+                area,
+            );
+        }
     }
 
     fn render_cache_section(&self, frame: &mut Frame, area: Rect) {

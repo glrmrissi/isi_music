@@ -91,6 +91,7 @@ impl Ui {
     }
 
     pub fn render(&mut self, frame: &mut Frame, state: &mut UiState) {
+        state.clear_widget_rects();
         let area = frame.area();
 
         let root_area = Rect {

@@ -77,6 +77,7 @@ impl Ui {
         node: &LayoutNode,
     ) {
         if let Some(widget_type) = &node.widget {
+            state.store_widget_rect(*widget_type, area);
             match widget_type {
                 UiWidget::Header => self.render_header(frame, state, area),
                 UiWidget::Library => self.render_library(frame, state, area),

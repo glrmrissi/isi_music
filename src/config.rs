@@ -21,6 +21,17 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     #[serde(default)]
     pub audio: AudioConfig,
+    #[serde(default)]
+    pub session: SessionState,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SessionState {
+    pub focus: Option<String>,
+    pub active_content: Option<String>,
+    pub compact_mode: Option<bool>,
+    pub library_selected: Option<usize>,
+    pub volume: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]

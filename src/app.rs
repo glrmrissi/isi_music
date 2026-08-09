@@ -120,6 +120,9 @@ pub struct App {
     pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     audio: crate::config::AudioConfig,
+    needs_redraw: bool,
+    last_click_time: Option<Instant>,
+    last_click_pos: (u16, u16),
 }
 
 impl App {
@@ -184,6 +187,7 @@ impl App {
         };
 
         let volume = crate::config::load_volume();
+        let mut saved_volume = volume;
         let db_path = crate::config::get_local_db_path();
 
         let mut state = UiState::new();
@@ -191,6 +195,8 @@ impl App {
         state.show_visualizer = cfg.show_visualizer();
         state.show_breadcrumb = cfg.show_breadcrumb();
         state.compact_mode = cfg.compact_mode_default();
+        state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
+        state.spotify_authenticated = spotify.authenticated;
 
         if let Some(msg) = startup_warning {
             state.status_msg = Some(msg);
@@ -216,6 +222,11 @@ impl App {
         let initial_art = pb.art_url.clone();
         state.art_url = initial_art.clone();
         state.playback = pb;
+        state.restore_session(&cfg.session);
+        if let Some(vol) = cfg.session.volume {
+            state.playback.volume = vol.min(100);
+            saved_volume = state.playback.volume;
+        }
 
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         let mpris = match crate::utils::mpris::spawn().await {
@@ -276,7 +287,7 @@ impl App {
             player: None,
             parked_player: None,
             local_active: false,
-            saved_volume: volume,
+            saved_volume,
             local_db_path: db_path,
             lastfm,
             pending_lastfm_token: None,
@@ -332,6 +343,9 @@ impl App {
             pending_fetch: None,
             pending_pagination: None,
             audio: cfg.audio.clone(),
+            needs_redraw: true,
+            last_click_time: None,
+            last_click_pos: (0, 0),
         })
     }
 
@@ -427,6 +441,9 @@ impl App {
             pending_fetch: None,
             pending_pagination: None,
             audio: crate::config::AudioConfig::default(),
+            needs_redraw: true,
+            last_click_time: None,
+            last_click_pos: (0, 0),
         }
     }
 
@@ -451,11 +468,13 @@ impl App {
                     self.pending_fetch = None;
                     self.state.loading = false;
                     self.handle_fetch_result(result);
+                    self.needs_redraw = true;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                     self.pending_fetch = None;
                     self.state.loading = false;
                     self.state.status_msg = Some("Fetch task failed".to_string());
+                    self.needs_redraw = true;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
             }
@@ -466,9 +485,11 @@ impl App {
                 Ok(result) => {
                     self.pending_pagination = None;
                     self.handle_fetch_result(result);
+                    self.needs_redraw = true;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                     self.pending_pagination = None;
+                    self.needs_redraw = true;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
             }
@@ -728,6 +749,29 @@ impl App {
         }
     }
 
+    fn save_session(&self) -> Result<()> {
+        let mut cfg = crate::config::AppConfig::load().unwrap_or_default();
+        cfg.session.focus = Some(match self.state.focus {
+            crate::ui::Focus::Library => "library".to_string(),
+            crate::ui::Focus::Playlists => "playlists".to_string(),
+            crate::ui::Focus::Tracks => "tracks".to_string(),
+            crate::ui::Focus::Queue => "queue".to_string(),
+            crate::ui::Focus::Search => "search".to_string(),
+        });
+        cfg.session.active_content = Some(match self.state.active_content {
+            crate::ui::ActiveContent::None => "none".to_string(),
+            crate::ui::ActiveContent::Tracks => "tracks".to_string(),
+            crate::ui::ActiveContent::Albums => "albums".to_string(),
+            crate::ui::ActiveContent::Artists => "artists".to_string(),
+            crate::ui::ActiveContent::Shows => "shows".to_string(),
+            crate::ui::ActiveContent::LocalFiles => "local_files".to_string(),
+        });
+        cfg.session.compact_mode = Some(self.state.compact_mode);
+        cfg.session.library_selected = self.state.library_list.selected();
+        cfg.session.volume = Some(self.saved_volume);
+        cfg.save()
+    }
+
     pub async fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -848,6 +892,7 @@ impl App {
                         self.state.playback.lyrics_loading = false;
                         self.state.playback.lyrics =
                             if data.is_empty() { None } else { Some(data) };
+                        self.needs_redraw = true;
                     }
                     (None, true) => {
                         self.state.playback.lyrics_loading = true;
@@ -1325,6 +1370,7 @@ impl App {
                             self.state.album_art = Some(AlbumArtData {
                                 image_state: Some(image_state),
                             });
+                            self.needs_redraw = true;
                         }
                         Err(e) => {
                             self.debug_overlay
@@ -1375,28 +1421,62 @@ impl App {
             #[cfg(feature = "album-art")]
             self.maybe_fetch_album_art().await;
 
-            terminal.draw(|f| {
-                self.ui.render(f, &mut self.state);
-                if let Some(ref panel) = self.settings_panel {
-                    panel.render(f, &self.state);
-                }
-            })?;
+            let active = self.state.playback.is_playing
+                || self.state.loading
+                || self.state.search_active
+                || self.state.quick_search_active
+                || self.state.command_mode
+                || self.state.add_to_playlist_mode
+                || self.state.delete_playlist_confirm
+                || self.settings_panel.as_ref().map_or(false, |p| p.visible)
+                || self.pending_fetch.is_some()
+                || self.pending_pagination.is_some()
+                || self.local_scan_rx.is_some()
+                || self.album_art_pending.is_some()
+                || self.lyrics.as_ref().map_or(false, |l| l.is_loading())
+                || self.state.status_msg.is_some();
 
-            let timeout = tick_rate
-                .checked_sub(now.elapsed())
-                .unwrap_or_else(|| Duration::from_secs(0));
-
-            if crossterm::event::poll(timeout)? {
-                if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
-                    // Windows consoles also emit Release events — handle only
-                    // Press/Repeat or every physical keypress is processed twice
-                    if matches!(
-                        key_event.kind,
-                        crossterm::event::KeyEventKind::Press
-                            | crossterm::event::KeyEventKind::Repeat
-                    ) {
-                        self.handle_key(key_event.code, key_event.modifiers).await?;
+            if self.needs_redraw || active {
+                terminal.draw(|f| {
+                    self.ui.render(f, &mut self.state);
+                    if let Some(ref panel) = self.settings_panel {
+                        panel.render(f, &self.state);
                     }
+                })?;
+                self.needs_redraw = false;
+            }
+
+            let timeout = if active {
+                tick_rate
+            } else {
+                Duration::from_millis(100)
+            }
+            .checked_sub(now.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+
+            let mut event_received = false;
+            if crossterm::event::poll(timeout)? {
+                match crossterm::event::read()? {
+                    crossterm::event::Event::Key(key_event) => {
+                        // Windows consoles also emit Release events — handle only
+                        // Press/Repeat or every physical keypress is processed twice
+                        if matches!(
+                            key_event.kind,
+                            crossterm::event::KeyEventKind::Press
+                                | crossterm::event::KeyEventKind::Repeat
+                        ) {
+                            self.handle_key(key_event.code, key_event.modifiers).await?;
+                            event_received = true;
+                        }
+                    }
+                    crossterm::event::Event::Mouse(mouse_event) => {
+                        self.handle_mouse(mouse_event).await?;
+                        event_received = true;
+                    }
+                    _ => {}
+                }
+                if event_received {
+                    self.needs_redraw = true;
                 }
             }
 
@@ -1476,6 +1556,7 @@ impl App {
             }
 
             if self.should_quit {
+                let _ = self.save_session();
                 break;
             }
         }

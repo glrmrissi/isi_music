@@ -1,7 +1,9 @@
 // TODO: modularize this file (~780 lines) into smaller modules
 use ratatui::widgets::ListState;
+use std::collections::HashMap;
 
 use super::{LIBRARY_ITEMS, LocalNode, SearchResults};
+use crate::utils::theme::UiWidget;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
@@ -170,6 +172,9 @@ pub struct UiState {
     pub delete_playlist_target: Option<String>,
     pub lastfm_connected: bool,
     pub lastfm_pending: bool,
+    pub first_run: bool,
+    pub spotify_authenticated: bool,
+    pub widget_rects: HashMap<UiWidget, ratatui::layout::Rect>,
 }
 
 impl UiState {
@@ -240,11 +245,32 @@ impl UiState {
             delete_playlist_target: None,
             lastfm_connected: false,
             lastfm_pending: false,
+            first_run: false,
+            spotify_authenticated: false,
+            widget_rects: HashMap::new(),
         }
     }
 
     pub fn selected_track_index(&self) -> Option<usize> {
         self.track_list.selected()
+    }
+
+    /// Clear stored widget rects at the start of a render pass.
+    pub fn clear_widget_rects(&mut self) {
+        self.widget_rects.clear();
+    }
+
+    /// Record the rect for a widget during rendering.
+    pub fn store_widget_rect(&mut self, widget: UiWidget, rect: ratatui::layout::Rect) {
+        self.widget_rects.insert(widget, rect);
+    }
+
+    /// Find which widget contains the given (x, y) point.
+    pub fn widget_at(&self, x: u16, y: u16) -> Option<UiWidget> {
+        self.widget_rects
+            .iter()
+            .find(|(_, r)| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+            .map(|(w, _)| *w)
     }
 
     pub fn selected_album_index(&self) -> Option<usize> {
@@ -445,6 +471,36 @@ impl UiState {
             ActiveContent::Artists => "Artists".to_string(),
             ActiveContent::Shows => "Shows".to_string(),
             ActiveContent::LocalFiles => "Local Files".to_string(),
+        }
+    }
+
+    pub fn restore_session(&mut self, session: &crate::config::SessionState) {
+        if let Some(ref focus) = session.focus {
+            match focus.as_str() {
+                "library" => self.focus = Focus::Library,
+                "playlists" => self.focus = Focus::Playlists,
+                "tracks" => self.focus = Focus::Tracks,
+                "queue" => self.focus = Focus::Queue,
+                "search" => self.focus = Focus::Search,
+                _ => {}
+            }
+        }
+        if let Some(ref content) = session.active_content {
+            match content.as_str() {
+                "tracks" => self.active_content = ActiveContent::Tracks,
+                "albums" => self.active_content = ActiveContent::Albums,
+                "artists" => self.active_content = ActiveContent::Artists,
+                "shows" => self.active_content = ActiveContent::Shows,
+                "local_files" => self.active_content = ActiveContent::LocalFiles,
+                _ => {}
+            }
+        }
+        if let Some(compact) = session.compact_mode {
+            self.compact_mode = compact;
+            self.compact_effective = compact;
+        }
+        if let Some(sel) = session.library_selected {
+            self.library_list.select(Some(sel));
         }
     }
 
