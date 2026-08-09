@@ -209,4 +209,20 @@ pub fn reveal_secret(idx: usize) -> String {{
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("secrets.rs");
     fs::write(&dest_path, generated_code).expect("Failed to write generated secrets");
+
+    // Embed icon in Windows .exe
+    #[cfg(target_os = "windows")]
+    {
+        let rc_path = Path::new("assets/isi-music.rc");
+        let icon_path = Path::new("assets/isi-music.ico");
+        if rc_path.exists() && icon_path.exists() {
+            if let Err(e) = embed_resource::compile("assets/isi-music", embed_resource::NONE)
+                .manifest_required()
+            {
+                println!("cargo:warning=Failed to embed icon: {e:?}");
+            }
+            println!("cargo:rerun-if-changed=assets/isi-music.rc");
+            println!("cargo:rerun-if-changed=assets/isi-music.ico");
+        }
+    }
 }

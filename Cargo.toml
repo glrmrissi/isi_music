@@ -135,6 +135,9 @@ dotenvy = "0.15"
 chacha20poly1305 = "0.10"
 rand = "0.8"
 
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
 [profile.release]
 opt-level = "z"
 lto = "fat"

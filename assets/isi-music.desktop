@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=isi-music
+Comment=Spotify + local music TUI player
+Exec=isi-music
+Terminal=true
+Icon=isi-music
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=music;spotify;player;tui;
