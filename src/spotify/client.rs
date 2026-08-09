@@ -1475,12 +1475,14 @@ impl SpotifyClient {
 
         let is_playing = json["is_playing"].as_bool().unwrap_or(false);
         let progress_ms = json["progress_ms"].as_u64().unwrap_or(0);
+        let context_uri = json["context"]["uri"].as_str().map(|s| s.to_string());
 
         let item = &json["item"];
         if item.is_null() {
             return Ok(PlaybackState {
                 is_playing,
                 progress_ms,
+                context_uri,
                 ..Default::default()
             });
         }
@@ -1552,6 +1554,7 @@ impl SpotifyClient {
             lyrics_scroll: 0,
             lyrics_loading: false,
             waveform: None,
+            context_uri,
         })
     }
 

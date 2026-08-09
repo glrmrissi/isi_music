@@ -19,6 +19,7 @@ pub struct PlaybackState {
     pub lyrics_scroll: usize,
     pub lyrics_loading: bool,
     pub waveform: Option<Vec<u8>>,
+    pub context_uri: Option<String>,
 }
 
 impl Default for PlaybackState {
@@ -41,6 +42,7 @@ impl Default for PlaybackState {
             lyrics_scroll: 0,
             lyrics_loading: false,
             waveform: None,
+            context_uri: None,
         }
     }
 }
