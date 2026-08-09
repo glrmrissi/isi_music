@@ -87,7 +87,6 @@ impl App {
             let result = spotify
                 .fetch_playlist_tracks(&playlist_id, 0)
                 .await
-                .map(|(t, total, _)| (t, total))
                 .map_err(|e| e.to_string());
             let _ = tx.send(FetchResult::PlaylistTracks(result));
         });

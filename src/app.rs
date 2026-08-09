@@ -41,7 +41,7 @@ pub enum FetchResult {
     LikedTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     Albums(Result<(Vec<crate::spotify::AlbumSummary>, u32), String>),
     Artists(Result<Vec<crate::spotify::ArtistSummary>, String>),
-    PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, u32), String>),
     AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     MoreTracks(
@@ -129,10 +129,21 @@ pub struct App {
     trim_counter: u64,
     pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
+    pending_nav_down: bool,
     audio: crate::config::AudioConfig,
     needs_redraw: bool,
     last_click_time: Option<Instant>,
     last_click_pos: (u16, u16),
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_target: Option<Theme>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_from: Option<Theme>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_start: Option<Instant>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_swatches: Option<Vec<crate::utils::palette::Rgb>>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_toggle_pending: bool,
 }
 
 impl App {
@@ -205,6 +216,7 @@ impl App {
         state.show_visualizer = cfg.show_visualizer();
         state.show_breadcrumb = cfg.show_breadcrumb();
         state.compact_mode = cfg.compact_mode_default();
+        state.reactive_theme_enabled = theme.reactive_theme;
         state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
         state.spotify_authenticated = spotify.authenticated;
 
@@ -362,10 +374,21 @@ impl App {
             trim_counter: 0,
             pending_fetch: None,
             pending_pagination: None,
+            pending_nav_down: false,
             audio: cfg.audio.clone(),
             needs_redraw: true,
             last_click_time: None,
             last_click_pos: (0, 0),
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_target: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_from: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_start: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_swatches: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_toggle_pending: false,
         })
     }
 
@@ -470,10 +493,21 @@ impl App {
             )),
             pending_fetch: None,
             pending_pagination: None,
+            pending_nav_down: false,
             audio: crate::config::AudioConfig::default(),
             needs_redraw: true,
             last_click_time: None,
             last_click_pos: (0, 0),
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_target: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_from: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_start: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_swatches: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_toggle_pending: false,
         }
     }
 
@@ -519,6 +553,7 @@ impl App {
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                     self.pending_pagination = None;
+                    self.pending_nav_down = false;
                     self.needs_redraw = true;
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
@@ -610,11 +645,11 @@ impl App {
                     self.state.status_msg = Some(format!("Error: {e}"));
                 }
             }
-            FetchResult::PlaylistTracks(Ok((tracks, total))) => {
+            FetchResult::PlaylistTracks(Ok((tracks, total, page_items))) => {
                 self.state.tracks = tracks;
                 self.state.tracks_total = total;
                 self.state.tracks_offset = self.state.tracks.len() as u32;
-                self.state.tracks_api_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = page_items;
                 self.state
                     .track_list
                     .select(if self.state.tracks.is_empty() {
@@ -680,6 +715,13 @@ impl App {
                 self.state.status_msg = Some(format!("Error: {e}"));
             }
             FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor, page_items))) => {
+                let advance_selection = self.pending_nav_down;
+                self.pending_nav_down = false;
+                let selected_display = self.state.track_list.selected();
+                let selected_raw = selected_display
+                    .and_then(|display_idx| self.state.sorted_track_indices.get(display_idx))
+                    .copied();
+                let old_track_len = self.state.tracks.len();
                 self.state.tracks_loading = false;
                 self.state.status_msg = None;
                 if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
@@ -700,8 +742,27 @@ impl App {
                 }
                 self.state.tracks.append(&mut new_tracks);
                 self.state.rebuild_sort_indices();
+                if advance_selection {
+                    let next_display = selected_raw
+                        .and_then(|raw_idx| {
+                            self.state
+                                .sorted_track_indices
+                                .iter()
+                                .position(|&idx| idx == raw_idx)
+                        })
+                        .map(|display_idx| display_idx + 1)
+                        .or_else(|| selected_display.map(|display_idx| display_idx + 1));
+                    if let Some(next_display) = next_display {
+                        if next_display < self.state.sorted_track_indices.len()
+                            && self.state.tracks.len() > old_track_len
+                        {
+                            self.state.track_list.select(Some(next_display));
+                        }
+                    }
+                }
             }
             FetchResult::MoreTracks(Err(e)) => {
+                self.pending_nav_down = false;
                 self.state.tracks_loading = false;
                 self.state.status_msg = Some(format!("Load more error: {e}"));
             }
@@ -802,6 +863,29 @@ impl App {
         cfg.save()
     }
 
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    fn toggle_reactive_theme(&mut self, enabled: bool) -> anyhow::Result<()> {
+        use crate::utils::theme::Theme;
+        let path = Theme::get_path().unwrap_or_else(|| std::path::PathBuf::from("theme.toml"));
+        let content = std::fs::read_to_string(&path)?;
+        let mut theme: Theme = toml::from_str(&content).unwrap_or_default();
+        theme.reactive_theme = enabled;
+        let new_content = toml::to_string_pretty(&theme)?;
+        std::fs::write(&path, new_content)?;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    fn start_reactive_theme(&mut self, swatches: &[crate::utils::palette::Rgb]) {
+        if swatches.is_empty() {
+            return;
+        }
+        let new_theme = crate::utils::palette::derive_theme(swatches, &self.theme);
+        self.reactive_from = Some(self.ui.theme_snapshot());
+        self.reactive_target = Some(new_theme);
+        self.reactive_start = Some(Instant::now());
+    }
+
     pub async fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -813,8 +897,30 @@ impl App {
 
         loop {
             while let Ok(new_theme) = self.theme_rx.try_recv() {
+                let preserve_reactive_transition = {
+                    #[cfg(all(feature = "palette", feature = "album-art"))]
+                    {
+                        let preserve =
+                            self.reactive_toggle_pending && self.reactive_start.is_some();
+                        self.reactive_toggle_pending = false;
+                        preserve
+                    }
+                    #[cfg(not(all(feature = "palette", feature = "album-art")))]
+                    {
+                        false
+                    }
+                };
                 self.theme = new_theme.clone();
-                self.ui = Ui::new(new_theme, self.debug_overlay.clone());
+                if !preserve_reactive_transition {
+                    self.ui = Ui::new(new_theme, self.debug_overlay.clone());
+                    #[cfg(all(feature = "palette", feature = "album-art"))]
+                    {
+                        self.reactive_start = None;
+                        self.reactive_from = None;
+                        self.reactive_target = None;
+                    }
+                }
+                self.state.reactive_theme_enabled = self.theme.reactive_theme;
             }
             while let Ok(new_keybinds) = self.keybinds_rx.rx.try_recv() {
                 self.keybinds = new_keybinds;
@@ -823,6 +929,24 @@ impl App {
             let now = Instant::now();
             let delta_ms = now.duration_since(self.last_tick).as_millis() as u64;
             self.last_tick = now;
+
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            if let (Some(start), Some(from), Some(target)) =
+                (self.reactive_start, self.reactive_from.as_ref(), self.reactive_target.as_ref())
+            {
+                let elapsed = now.duration_since(start).as_millis() as f32;
+                let dur = self.theme.reactive_cross_fade_ms.max(1) as f32;
+                let t = (elapsed / dur).min(1.0);
+                let blended = Theme::lerp(from, target, t);
+                self.ui = Ui::new(blended, self.debug_overlay.clone());
+                self.needs_redraw = true;
+                if t >= 1.0 {
+                    self.theme = target.clone();
+                    self.reactive_start = None;
+                    self.reactive_from = None;
+                    self.reactive_target = None;
+                }
+            }
 
             self.poll_local_scan();
             self.poll_pending_fetch();
@@ -1024,6 +1148,9 @@ impl App {
 
                                 needs_player_swap = true;
                             }
+                        }
+                        PlayerNotification::PreloadNextTrack => {
+                            player.preload_next();
                         }
                     }
                 }
@@ -1466,6 +1593,16 @@ impl App {
                     .await;
                     match decoded {
                         Ok(Ok(img)) => {
+                            #[cfg(all(feature = "palette", feature = "album-art"))]
+                            {
+                                let swatches =
+                                    crate::utils::palette::extract_palette(&img, 5);
+                                self.reactive_swatches = Some(swatches.clone());
+                                if self.theme.reactive_theme {
+                                    self.start_reactive_theme(&swatches);
+                                }
+                            }
+
                             let image_state = self.picker.new_resize_protocol(img);
                             self.state.album_art = Some(AlbumArtData {
                                 image_state: Some(image_state),
@@ -1544,7 +1681,7 @@ impl App {
                 terminal.draw(|f| {
                     self.ui.render(f, &mut self.state);
                     if let Some(ref panel) = self.settings_panel {
-                        panel.render(f, &self.state);
+                        panel.render(f, &self.state, &self.theme, self.autoplay_enabled);
                     }
                 })?;
                 self.needs_redraw = false;
@@ -1585,20 +1722,20 @@ impl App {
             }
 
             if self.state.playback.is_playing {
-                if self.player.is_some() && !self.local_active {
-                    // NativePlayer: progress already interpolated inside
-                    // current_playback_state() - nothing to do here
-                } else {
-                    if self.playing_started_at.is_none() {
-                        self.playing_started_at = Some(Instant::now());
-                        self.progress_at_play_start = self.state.playback.progress_ms;
-                    }
-                    let elapsed = self
-                        .playing_started_at
-                        .map(|t| t.elapsed().as_millis() as u64)
-                        .unwrap_or(0);
-                    self.state.playback.progress_ms = self.progress_at_play_start + elapsed;
+                // Interpolate progress locally using progress_at_play_start
+                // + elapsed time. For Spotify, progress_at_play_start is
+                // synced from current_playback_state() every tick (line ~954),
+                // so this produces a smooth progress bar without relying on
+                // the player's (potentially stale) reported position.
+                if self.playing_started_at.is_none() {
+                    self.playing_started_at = Some(Instant::now());
+                    self.progress_at_play_start = self.state.playback.progress_ms;
                 }
+                let elapsed = self
+                    .playing_started_at
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                self.state.playback.progress_ms = self.progress_at_play_start + elapsed;
                 if self.state.playback.progress_ms >= self.state.playback.duration_ms {
                     if self.player.is_none() {
                         self.state.playback.is_playing = false;

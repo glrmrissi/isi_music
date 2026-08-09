@@ -212,6 +212,62 @@ impl App {
         }
     }
 
+    pub(crate) fn current_list_at_end(&self) -> bool {
+        let at_end = |selected: Option<usize>, len: usize| {
+            len > 0 && selected.unwrap_or(0) >= len.saturating_sub(1)
+        };
+
+        match self.state.focus {
+            Focus::Search => self
+                .state
+                .search_results
+                .as_ref()
+                .map(|sr| {
+                    let selected = match sr.panel {
+                        SearchPanel::Tracks => sr.track_list.selected(),
+                        SearchPanel::Artists => sr.artist_list.selected(),
+                        SearchPanel::Albums => sr.album_list.selected(),
+                        SearchPanel::Playlists => sr.playlist_list.selected(),
+                    };
+                    at_end(selected, sr.current_len())
+                })
+                .unwrap_or(false),
+            Focus::Tracks => match self.state.active_content {
+                ActiveContent::Albums => {
+                    at_end(self.state.album_list.selected(), self.state.albums.len())
+                }
+                ActiveContent::Shows => {
+                    at_end(self.state.show_list.selected(), self.state.shows.len())
+                }
+                ActiveContent::LocalFiles => false,
+                ActiveContent::Tracks | ActiveContent::None => {
+                    self.state.active_playlist_id.is_some()
+                        && at_end(
+                            self.state.track_list.selected(),
+                            self.state.sorted_track_indices.len(),
+                        )
+                }
+                ActiveContent::Artists => false,
+            },
+            Focus::Library | Focus::Playlists | Focus::Queue => false,
+        }
+    }
+
+    pub(crate) fn current_list_loading(&self) -> bool {
+        match self.state.focus {
+            Focus::Search => self
+                .state
+                .search_results
+                .as_ref()
+                .map(|sr| sr.loading)
+                .unwrap_or(false),
+            Focus::Tracks => {
+                self.state.tracks_loading || self.pending_pagination.is_some()
+            }
+            Focus::Library | Focus::Playlists | Focus::Queue => false,
+        }
+    }
+
     #[cfg(feature = "album-art")]
     pub async fn maybe_fetch_album_art(&mut self) {
         #[cfg(windows)]

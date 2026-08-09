@@ -419,6 +419,43 @@ impl App {
                                     "Autoplay disabled".to_string()
                                 });
                             }
+                            #[cfg(all(feature = "album-art", feature = "palette"))]
+                            6 => {
+                                let enabled = !self.theme.reactive_theme;
+                                if let Err(e) = self.toggle_reactive_theme(enabled) {
+                                    self.state.status_msg = Some(format!(
+                                        "Failed to toggle reactive theme: {e}"
+                                    ));
+                                } else {
+                                    self.state.reactive_theme_enabled = enabled;
+                                    #[cfg(all(feature = "palette", feature = "album-art"))]
+                                    if enabled {
+                                        self.theme.reactive_theme = true;
+                                        self.reactive_toggle_pending = true;
+                                        if let Some(swatches) = self.reactive_swatches.clone() {
+                                            self.start_reactive_theme(&swatches);
+                                        } else {
+                                            self.last_art_uri.clear();
+                                        }
+                                    } else {
+                                        self.reactive_toggle_pending = false;
+                                        self.reactive_start = None;
+                                        self.reactive_from = None;
+                                        self.reactive_target = None;
+                                        let restored = crate::utils::theme::Theme::load();
+                                        self.theme = restored.clone();
+                                        self.ui = crate::ui::Ui::new(
+                                            restored,
+                                            self.debug_overlay.clone(),
+                                        );
+                                    }
+                                    self.state.status_msg = Some(if enabled {
+                                        "Reactive theme enabled — colors will adapt to album art".to_string()
+                                    } else {
+                                        "Reactive theme disabled".to_string()
+                                    });
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -764,6 +801,15 @@ impl App {
             }
             A::SeekForward => {}
             A::SeekBackward => {}
+            A::SeekMiddle => {
+                let new_pos = self.state.playback.duration_ms / 2;
+                self.state.playback.progress_ms = new_pos;
+                self.progress_at_play_start = new_pos;
+                if self.state.playback.is_playing {
+                    self.playing_started_at = Some(Instant::now());
+                }
+                let _ = self.seek_tx.send(new_pos as u32);
+            }
             A::ToggleShuffle => {
                 if self.player.is_none() {
                     self.ensure_spotify_player().await;
@@ -961,6 +1007,17 @@ impl App {
             }
             A::NavDown => {
                 if !self.state.fullscreen_player {
+                    let at_end = self.current_list_at_end();
+                    if at_end {
+                        if self.current_list_loading() {
+                            return;
+                        }
+                        self.maybe_load_more().await;
+                        if self.pending_pagination.is_some() {
+                            self.pending_nav_down = true;
+                            return;
+                        }
+                    }
                     self.state.nav_down();
                     self.maybe_load_more().await;
                 }
@@ -973,6 +1030,12 @@ impl App {
             A::NavLast => {
                 if !self.state.fullscreen_player {
                     self.state.nav_last();
+                    self.maybe_load_more().await;
+                }
+            }
+            A::NavMiddle => {
+                if !self.state.fullscreen_player {
+                    self.state.nav_middle();
                     self.maybe_load_more().await;
                 }
             }
@@ -1864,6 +1927,10 @@ impl App {
                                 .iter()
                                 .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                 .count();
+                            if let Some(track) = self.state.tracks.get(actual_idx) {
+                                self.state.status_msg =
+                                    Some(format!("Loading {}…", track.name));
+                            }
                             player.set_queue(uris, adjusted_idx);
                             self.playing_tracks = self.state.tracks.clone();
                             if let Some(track) = self.state.tracks.get(actual_idx) {
