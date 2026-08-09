@@ -287,9 +287,15 @@ impl AnalyzerSink {
     }
 
     fn push_stereo_f64(&mut self, samples: &[f64]) {
+        if !self.handle.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(mut producer) = self.handle.producer.lock() else {
+            return;
+        };
         for ch in samples.chunks_exact(2) {
             let mono = ((ch[0] + ch[1]) * 0.5) as f32;
-            self.handle.push_mono(mono);
+            let _ = producer.try_push(mono);
         }
     }
 }
