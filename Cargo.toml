@@ -123,11 +123,12 @@ console   = "0.15"
 
 # Filesystem watcher (theme/keybinds hot-reload)
 notify = "7"
+sysinfo = { version = "0.36.1", default-features = false, features = ["system"] }
 
 # Global media hotkeys + native toasts + SMTC (Windows)
 [target.'cfg(windows)'.dependencies]
 global-hotkey = "0.6.4"
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_Foundation"] }
 windows = { version = "0.61", features = ["Media", "Media_Playback", "Storage_Streams", "Foundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
@@ -148,14 +149,14 @@ opt-level = 0
 opt-level = 3
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
 
 [profile.release.package."*"]
-opt-level = 3
+opt-level = "z"
 
 [profile.release-dev]
 inherits = "release"
@@ -168,5 +169,6 @@ debug = true
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]
 album-art = ["image", "ratatui-image"]
-default = ["discord", "spotify", "album-art"]
+palette = ["album-art"]
+default = ["discord", "spotify", "album-art", "palette"]
 spotify = []
