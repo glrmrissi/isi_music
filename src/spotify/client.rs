@@ -26,6 +26,8 @@ use crate::ui::PlaybackState;
 static SPOTIFY_RATE_LIMITER: LazyLock<Mutex<Instant>> =
     LazyLock::new(|| Mutex::new(Instant::now()));
 
+const MAX_SEARCH_CACHE_ENTRIES: usize = 32;
+
 #[derive(Clone, Debug)]
 pub struct Device {
     pub id: String,
@@ -100,8 +102,12 @@ impl SearchCache {
             params![now, ttl_secs],
         )?;
 
-        let mut stmt = conn.prepare("SELECT key, data FROM search_cache")?;
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM search_cache
+             ORDER BY saved_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![MAX_SEARCH_CACHE_ENTRIES as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
 
@@ -117,20 +123,32 @@ impl SearchCache {
     }
 
     async fn get(&self, key: &str) -> Option<FullSearchResults> {
-        let guard = self.store.read().await;
-        if let Some((ts, results)) = guard.get(key) {
-            if ts.elapsed() < self.ttl {
-                return Some(results.clone());
-            }
+        let mut guard = self.store.write().await;
+        let expired = guard
+            .get(key)
+            .map(|(ts, _)| ts.elapsed() >= self.ttl)
+            .unwrap_or(false);
+        if expired {
+            guard.remove(key);
+            return None;
         }
-        None
+        guard.get(key).map(|(_, results)| results.clone())
     }
 
     async fn insert(&self, key: String, results: FullSearchResults) {
-        self.store
-            .write()
-            .await
-            .insert(key.clone(), (Instant::now(), results.clone()));
+        let mut guard = self.store.write().await;
+        guard.retain(|_, (ts, _)| ts.elapsed() < self.ttl);
+        if guard.len() >= MAX_SEARCH_CACHE_ENTRIES && !guard.contains_key(&key) {
+            let oldest_key = guard
+                .iter()
+                .min_by_key(|(_, (ts, _))| *ts)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest_key) = oldest_key {
+                guard.remove(&oldest_key);
+            }
+        }
+        guard.insert(key.clone(), (Instant::now(), results.clone()));
+        drop(guard);
 
         let conn = self.conn.clone();
         let now = Self::unix_now();
@@ -145,6 +163,13 @@ impl SearchCache {
             let _ = conn.execute(
                 "INSERT OR REPLACE INTO search_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
                 params![key, data, now],
+            );
+            let _ = conn.execute(
+                "DELETE FROM search_cache
+                 WHERE key NOT IN (
+                     SELECT key FROM search_cache ORDER BY saved_at DESC LIMIT ?1
+                 )",
+                params![MAX_SEARCH_CACHE_ENTRIES as i64],
             );
         });
     }
@@ -991,23 +1016,11 @@ impl SpotifyClient {
             return Ok((Vec::new(), 0));
         }
 
-        // Check cache first — return immediately if valid
-        if let Some((tracks, total, _)) =
-            self.library_cache.get_liked_tracks_page(None, u32::MAX)
-        {
-            if !tracks.is_empty() {
-                info!("sync_liked_tracks: cache hit ({} tracks)", tracks.len());
-                return Ok((tracks, total));
-            }
-        }
-
-        // Cache empty — fetch ALL pages from API
         let token = self
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        // Fetch page 0 to get total count
         spotify_rate_limit().await;
         let response = self
             .http
@@ -1032,7 +1045,19 @@ impl SpotifyClient {
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
 
-        // Parse first page
+        if let Some((tracks, cached_total, _)) =
+            self.library_cache.get_liked_tracks_page(None, u32::MAX)
+        {
+            if !tracks.is_empty() && cached_total == total {
+                info!("sync_liked_tracks: cache hit ({} tracks)", tracks.len());
+                return Ok((tracks, total));
+            }
+            info!(
+                "sync_liked_tracks: cache has {} but API total is {} — refetching",
+                cached_total, total
+            );
+        }
+
         let mut all_tracks: Vec<TrackSummary> = Vec::with_capacity(total as usize);
         let mut all_added_ats: Vec<String> = Vec::with_capacity(total as usize);
 
@@ -1291,7 +1316,7 @@ impl SpotifyClient {
         if let Some(cached) = self.library_cache.get_tracks(&key) {
             if !cached.0.is_empty() {
                 info!("Library cache hit: playlist {playlist_id} offset={offset}");
-                let page_items = cached.0.len() as u32;
+                let page_items = cached.1.saturating_sub(offset).min(50);
                 return Ok((cached.0, cached.1, page_items));
             }
         }
