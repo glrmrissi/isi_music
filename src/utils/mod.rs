@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod debug_overlay;
 pub mod discord;
+pub mod doctor;
 pub mod ipc;
 pub mod lastfm;
 pub mod lyrics;
@@ -11,5 +12,6 @@ pub mod mpris;
 #[cfg(windows)]
 pub mod smtc;
 pub mod theme;
+pub mod updater;
 pub mod waveform;
 pub mod wizard;

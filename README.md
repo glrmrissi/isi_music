@@ -22,10 +22,31 @@ isi-music is a terminal audio player for Spotify streaming and local file playba
 - **Daemon mode** -- keep playback after closing the terminal, control via CLI
 - **Playlist management** -- add and remove tracks via keyboard (tiling picker)
 - **Command mode** -- `:` prefix commands like `ap <search>`, `newplaylist <name>`
+- **Session restoration** -- focus, active view, compact mode, and volume are saved on quit
+- **Virtualized list rendering** -- smooth navigation in large libraries and playlists
+- **Mouse support** -- scroll wheel navigation in lists and lyrics
+- **Direct panel shortcuts** -- `1`/`2`/`3`/`4` jump to Library / Playlists / Tracks / Queue
+- **Jump to playing track** -- `c` centers the current track in the list
 - **Seek support** for all audio formats
 
 > Spotify Premium is required for streaming. Local file playback works without any Spotify account.
 > See the [Spotify Setup](#spotify-setup) section below.
+
+## Quick Install
+
+The install scripts download the latest binary, install a Nerd Font (if missing), install audio dependencies (Linux), and launch the setup wizard automatically.
+
+**Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.ps1 | iex
+```
+
+After installation, run `isi-music` to start. If something isn't working, run `isi-music doctor` to diagnose common issues.
 
 ## Getting Started
 
@@ -103,6 +124,8 @@ Individual setup commands:
 ```bash
 isi-music setup-spotify   # Spotify Client ID + PKCE OAuth
 isi-music setup-lastfm    # Last.fm authentication (no API key needed!)
+isi-music doctor          # Diagnose common issues (Nerd Font, audio deps, config, etc.)
+isi-music update          # Update to the latest release from GitHub
 ```
 
 ## Configuration
@@ -124,6 +147,17 @@ enabled = true
 
 [musixmatch]
 musixmatch_api_key = "your_musixmatch_api_key"
+```
+
+The `[session]` section is written automatically when you quit and stores the last focus, active view, compact mode, and volume:
+
+```toml
+[session]
+focus = "tracks"
+active_content = "tracks"
+compact_mode = false
+library_selected = 0
+volume = 80
 ```
 
 See [Spotify Setup](#spotify-setup) for obtaining a Client ID.
@@ -360,6 +394,25 @@ Run the wizard (`isi-music setup`) to choose from 8 color presets that preserve 
 
 Create `~/.config/isi-music/keybinds.toml` to override default keybindings. See the full action list in the [Keybindings](#keybindings) section.
 
+```toml
+[navigation]
+focus_library = ["1"]
+focus_playlists = ["2"]
+focus_tracks = ["3"]
+focus_queue = ["4"]
+jump_to_playing = ["c"]
+
+[modes]
+quick_search = ["ctrl+f"]
+toggle_compact = ["m"]
+toggle_fullscreen = ["z"]
+
+[actions]
+command_prompt = [":"]
+```
+
+Each key is a string of the form `modifier+key` (e.g. `ctrl+f`, `alt+d`, `shift+b`). Uppercase letters infer `shift`. Multiple keys can map to the same action (`["up", "k"]`).
+
 ## Spotify Setup
 
 The February 2026 Spotify Web API changes require a Client ID for all API requests.
@@ -385,6 +438,8 @@ The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser
 | `Tab` / `Shift+Tab` | Next / previous panel |
 | `↑` / `↓` or `k` / `j` | Navigate within a panel |
 | `Ctrl+↑` / `Ctrl+↓` | First / last item |
+| `1` / `2` / `3` / `4` | Focus Library / Playlists / Tracks / Queue |
+| `c` | Jump to the currently playing track in the list |
 | `Enter` | Play selected / open album or artist |
 | `Space` | Play / pause |
 | `n` / `p` | Next / previous track |
@@ -424,7 +479,8 @@ The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser
 | `t` | Open options panel |
 | `?` | Open help panel |
 | `Ctrl+f` | Quick search (filter current track list) |
-| `PgUp` / `PgDown` | Scroll lyrics |
+| `PgUp` / `PgDown` | Scroll lists / lyrics |
+| Mouse wheel | Scroll the focused list or lyrics |
 All keybindings are customizable in `keybinds.toml`.
 
 ### Daemon Mode

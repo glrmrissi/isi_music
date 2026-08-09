@@ -160,13 +160,21 @@ fn confirm_overwrite(path: &PathBuf) -> Result<bool> {
 }
 
 fn detect_music_dir() -> Option<String> {
-    let candidates: &[&str] = &[
-        "~/Music",
-        "~/music",
-        "~/Downloads/Music",
-        "/mnt/music",
-        "/media/music",
-    ];
+    let candidates: &[&str] = if cfg!(windows) {
+        &[
+            "~/Music",
+            "~/Downloads/Music",
+            "~/Documents/Music",
+        ]
+    } else {
+        &[
+            "~/Music",
+            "~/music",
+            "~/Downloads/Music",
+            "/mnt/music",
+            "/media/music",
+        ]
+    };
 
     for candidate in candidates {
         let expanded = if candidate.starts_with("~/") {
@@ -186,12 +194,35 @@ fn detect_music_dir() -> Option<String> {
         .and_then(|p| p.to_str().map(|s| s.to_string()))
 }
 
-fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
+async fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
     println!();
     println!(
         "  {}",
         style("Configure Spotify (optional but recommended)").bold()
     );
+    println!();
+
+    // Auto-open the Spotify Developer Dashboard in the browser
+    let redirect_uri = "http://127.0.0.1:8888/callback";
+    println!(
+        "  {}  {}",
+        style("[..]").cyan(),
+        style("Opening Spotify Developer Dashboard in your browser...").dim()
+    );
+    let _ = open::that("https://developer.spotify.com/dashboard");
+
+    // Auto-copy the Redirect URI to clipboard
+    let clipboard_msg = match arboard::Clipboard::new() {
+        Ok(mut cb) => {
+            if cb.set_text(redirect_uri).is_ok() {
+                "(already copied to your clipboard — just paste it)"
+            } else {
+                "(copy it from below)"
+            }
+        }
+        Err(_) => "(copy it from below)",
+    };
+
     println!();
     println!(
         "  {}",
@@ -200,29 +231,28 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
     println!(
         "  {}  {}",
         style("1.").cyan(),
-        style("Go to https://developer.spotify.com/dashboard")
-            .cyan()
-            .underlined()
+        style("Click \"Create app\" (dashboard should be open in your browser)").dim()
     );
     println!(
         "  {}  {}",
         style("2.").cyan(),
-        style("Click \"Create app\", give it any name & description").dim()
+        style("Give it any name & description, accept the terms").dim()
     );
     println!(
-        "  {}  {}",
+        "  {}  {}  {}",
         style("3.").cyan(),
-        style("Add Redirect URI:").dim()
+        style("Add this Redirect URI:").dim(),
+        style(clipboard_msg).yellow()
     );
     println!(
         "  {}       {}",
         "",
-        style("http://127.0.0.1:8888/callback").yellow()
+        style(redirect_uri).yellow().bold()
     );
     println!(
         "  {}  {}",
         style("4.").cyan(),
-        style("Copy the Client ID and paste it below").dim()
+        style("Click \"Save\", then copy the Client ID and paste it below").dim()
     );
     println!(
         "  {}  {}",
@@ -249,12 +279,47 @@ fn configure_spotify(cfg: &mut AppConfig) -> Result<()> {
             );
         }
         cfg.spotify.client_id = Some(trimmed);
+
+        // Auto-start OAuth flow after saving Client ID
+        println!();
+        let do_auth = Confirm::with_theme(&theme())
+            .with_prompt("Authenticate with Spotify now? (opens browser)")
+            .default(true)
+            .interact()?;
+        if do_auth {
+            println!();
+            println!(
+                "  {}  {}",
+                style("[..]").cyan(),
+                style("Opening Spotify authorization in your browser...").dim()
+            );
+            match crate::spotify::auth::SpotifyAuth::authenticate().await {
+                Ok((_access_token, refresh_token, _expires_in)) => {
+                    crate::config::save_refresh_token(&refresh_token);
+                    println!(
+                        "  {}  {}",
+                        style("[OK]").green(),
+                        style("Authenticated successfully!").bold()
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "  {}  Authentication failed: {e}",
+                        style("[ERROR]").red()
+                    );
+                    println!(
+                        "  {}",
+                        style("You can authenticate later by launching isi-music normally.").dim()
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
-fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
+async fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
     header(term, "— Quick Start");
 
     println!("  {}", style("Generating a default configuration…").dim());
@@ -288,7 +353,7 @@ fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         .interact()?;
 
     if configure_now {
-        configure_spotify(&mut cfg)?;
+        configure_spotify(&mut cfg).await?;
     } else {
         println!(
             "  {}",
@@ -351,7 +416,7 @@ async fn interactive_setup(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
         .interact()?;
 
     if configure_now {
-        configure_spotify(&mut cfg)?;
+        configure_spotify(&mut cfg).await?;
     } else {
         println!(
             "  {}",
@@ -546,7 +611,7 @@ pub async fn run() -> Result<()> {
     println!();
 
     let (cfg, chosen_theme) = match path_idx {
-        0 => quick_start(&term)?,
+        0 => quick_start(&term).await?,
         1 => interactive_setup(&term).await?,
         2 => template_gallery(&term)?,
         _ => unreachable!(),

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use sha2::{Digest, Sha256};
+use std::io::Write as _;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -125,7 +126,21 @@ fn extract_code_from_request(request: &str) -> Result<String> {
 async fn run_oauth_flow(authorize_url: &str) -> Result<String> {
     let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
         .await
-        .with_context(|| format!("Port {CALLBACK_PORT} is already in use"))?;
+        .map_err(|e| {
+            let pid_info = find_port_owner(CALLBACK_PORT);
+            let hint = if let Some((pid, name)) = pid_info {
+                format!(
+                    "Port {CALLBACK_PORT} is in use by PID {pid} ({name}). \
+                     Close that process and retry."
+                )
+            } else {
+                format!(
+                    "Port {CALLBACK_PORT} is in use. \
+                     Close the process using it and retry."
+                )
+            };
+            anyhow::anyhow!("{hint} (bind error: {e})")
+        })?;
 
     open_browser(authorize_url);
 
@@ -146,6 +161,72 @@ async fn run_oauth_flow(authorize_url: &str) -> Result<String> {
     extract_code_from_request(&request)
 }
 
+/// Try to find which process owns a given TCP port.
+/// Returns (pid, process_name) if found.
+fn find_port_owner(port: u16) -> Option<(String, String)> {
+    #[cfg(target_os = "linux")]
+    {
+        // Try ss first (faster), fall back to lsof
+        if let Ok(out) = std::process::Command::new("ss")
+            .args(["-tlnp", "-H", &format!("sport = :{port}")])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                // ss output: "LISTEN 0 4096 0.0.0.0:8888 0.0.0.0:* users:(("process",pid=123,fd=4))"
+                if let Some(pid_start) = line.find("pid=") {
+                    let rest = &line[pid_start + 4..];
+                    let pid_end = rest
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(rest.len());
+                    let pid = &rest[..pid_end];
+                    let name = line
+                        .find("users:((\"")
+                        .and_then(|i| {
+                            let after = &line[i + 9..];
+                            after.find('"').map(|e| &after[..e])
+                        })
+                        .unwrap_or("unknown");
+                    return Some((pid.to_string(), name.to_string()));
+                }
+            }
+        }
+        if let Ok(out) = std::process::Command::new("lsof")
+            .args(["-i", &format!(":{port}"), "-t"])
+            .output()
+        {
+            let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !pid.is_empty() {
+                return Some((pid, "unknown".to_string()));
+            }
+        }
+        None
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(out) = std::process::Command::new("netstat")
+            .args(["-ano"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                if line.contains(&format!(":{port}")) && line.contains("LISTENING") {
+                    let pid = line.split_whitespace().last().unwrap_or("?");
+                    return Some((pid.to_string(), "unknown".to_string()));
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = port;
+        None
+    }
+}
+
 pub struct SpotifyAuth;
 
 impl SpotifyAuth {
@@ -157,11 +238,33 @@ impl SpotifyAuth {
              or as an environment variable.",
         )?;
 
-        let verifier = generate_code_verifier();
-        let challenge = generate_code_challenge(&verifier);
+        loop {
+            let verifier = generate_code_verifier();
+            let challenge = generate_code_challenge(&verifier);
 
-        let url = build_authorize_url(&client_id, &challenge);
-        let code = run_oauth_flow(&url).await?;
-        exchange_code(&code, &verifier, &client_id).await
+            let url = build_authorize_url(&client_id, &challenge);
+            match run_oauth_flow(&url).await {
+                Ok(code) => {
+                    return exchange_code(&code, &verifier, &client_id).await;
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    if msg.contains("Port") && msg.contains("in use") {
+                        println!();
+                        println!("  Error: {msg}");
+                        print!("  Retry? (Y/n): ");
+                        std::io::stdout().flush().ok();
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input).ok();
+                        if input.trim().eq_ignore_ascii_case("n") {
+                            return Err(anyhow::anyhow!("Authentication cancelled by user"));
+                        }
+                        println!("  Retrying...");
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
     }
 }

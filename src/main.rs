@@ -1,6 +1,7 @@
 // TODO: modularize this file (~570 lines) into smaller modules
 use anyhow::Result;
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -126,28 +127,41 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
     println!(
         "{}",
-        bl!("  To stream from Spotify you need your own Client ID:")
+        bl!("  Opening Spotify Developer Dashboard in your browser...")
     );
     println!("{}", bl!(""));
+
+    // Auto-open the Spotify Developer Dashboard
+    let _ = open::that("https://developer.spotify.com/dashboard");
+
+    // Auto-copy the Redirect URI to clipboard
+    let redirect_uri = "http://127.0.0.1:8888/callback";
+    let clipboard_msg = match arboard::Clipboard::new() {
+        Ok(mut cb) => {
+            if cb.set_text(redirect_uri).is_ok() {
+                "copied to clipboard"
+            } else {
+                "copy from below"
+            }
+        }
+        Err(_) => "copy from below",
+    };
+
     println!(
         "{}",
         bl!(format!(
-            "  {BOLD}1.{RESET} Go to: {GREEN}https://developer.spotify.com/dashboard{RESET}"
+            "  {BOLD}1.{RESET} Click {BOLD}\"Create app\"{RESET} (dashboard is open)"
         ))
     );
     println!(
         "{}",
+        bl!(format!("  {BOLD}2.{RESET} Give it any name & description"))
+    );
+    println!(
+        "{}",
         bl!(format!(
-            "  {BOLD}2.{RESET} Click {BOLD}\"Create app\"{RESET}"
+            "  {BOLD}3.{RESET} Add Redirect URI ({YELLOW}{clipboard_msg}{RESET}):"
         ))
-    );
-    println!(
-        "{}",
-        bl!(format!("  {BOLD}3.{RESET} Give it any name & description"))
-    );
-    println!(
-        "{}",
-        bl!(format!("  {BOLD}4.{RESET} Add this Redirect URI:"))
     );
     println!(
         "{}",
@@ -157,12 +171,12 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     );
     println!(
         "{}",
-        bl!(format!("  {BOLD}5.{RESET} Click {BOLD}\"Save\"{RESET}"))
+        bl!(format!("  {BOLD}4.{RESET} Click {BOLD}\"Save\"{RESET}"))
     );
     println!(
         "{}",
         bl!(format!(
-            "  {BOLD}6.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below"
+            "  {BOLD}5.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below"
         ))
     );
     println!("{}", bl!(""));
@@ -276,6 +290,8 @@ SETUP
   isi-music setup                    First config (wizard)
   isi-music setup-spotify            Configure Spotify streaming
   isi-music setup-lastfm             Configure Last.fm scrobbling
+  isi-music doctor                   Diagnose common issues
+  isi-music update                   Update to the latest release
   isi-music --clear-logs             Clear the log file
 
 SPOTIFY STREAMING
@@ -414,6 +430,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if arg1 == Some("doctor") {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(utils::doctor::run());
+    }
+
+    if arg1 == Some("update") {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(utils::updater::run());
+    }
+
     let ipc_cmd: Option<String> = match arg1 {
         Some("setup") => {
             return tokio::runtime::Builder::new_current_thread()
@@ -513,13 +543,21 @@ fn main() -> Result<()> {
         .map(|p| !p.exists())
         .unwrap_or(true);
 
+    let mut first_run = false;
     if config_missing {
+        first_run = true;
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
             .block_on(utils::wizard::run())?;
         // Re-load config after wizard writes it
         cfg = config::AppConfig::load()?;
+    }
+
+    if first_run {
+        // Safety: set_var is unsafe in edition 2024 because it's not thread-safe.
+        // We call this before any threads are spawned.
+        unsafe { std::env::set_var("ISI_MUSIC_FIRST_RUN", "1"); }
     }
 
     if cfg.spotify.client_id.is_none() && std::env::var("SPOTIFY_CLIENT_ID").is_err() {
@@ -573,7 +611,7 @@ fn main() -> Result<()> {
 
             enable_raw_mode()?;
             let mut stdout = io::stdout();
-            execute!(stdout, EnterAlternateScreen)?;
+            execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
             let backend = CrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
             terminal.clear()?;
@@ -590,7 +628,11 @@ fn main() -> Result<()> {
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            execute!(
+                terminal.backend_mut(),
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            )?;
             terminal.show_cursor()?;
 
             if let Err(err) = res {

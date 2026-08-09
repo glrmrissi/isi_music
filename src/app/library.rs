@@ -9,8 +9,10 @@ use crate::ui::{ActiveContent, Focus, LocalNode};
 impl App {
     pub async fn handle_library_item(&mut self, idx: usize) -> bool {
         if idx != 4 && !self.spotify.authenticated {
-            self.state.status_msg =
-                Some("Spotify not connected — only Local Files available".to_string());
+            self.state.status_msg = Some(
+                "Spotify not connected - only Local Files available. Run: isi-music setup-spotify"
+                    .to_string(),
+            );
             return false;
         }
         match idx {
@@ -337,6 +339,7 @@ impl App {
             } else {
                 self.state.status_msg = Some(format!("{track_count} local tracks loaded"));
             }
+            self.needs_redraw = true;
         }
     }
 }
