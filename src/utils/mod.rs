@@ -5,6 +5,8 @@ pub mod doctor;
 pub mod ipc;
 pub mod lastfm;
 pub mod lyrics;
+#[cfg(all(feature = "palette", feature = "album-art"))]
+pub mod palette;
 #[cfg(windows)]
 pub mod media_keys;
 #[cfg(all(feature = "mpris", target_os = "linux"))]

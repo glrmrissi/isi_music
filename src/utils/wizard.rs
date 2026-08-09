@@ -23,16 +23,16 @@ struct Preset {
 
 const PRESETS: &[Preset] = &[
     Preset {
-        name: "Default (green)",
-        border_active: "#00ff00",
-        border_inactive: "#555555",
-        highlight_bg: "#282828",
-        text_primary: "#ffffff",
-        text_secondary: "#888888",
-        accent: "#00ff00",
+        name: "Neutral Dark",
+        border_active: "#d0d0d0",
+        border_inactive: "#777777",
+        highlight_bg: "#2a2a2a",
+        text_primary: "#e6e6e6",
+        text_secondary: "#9e9e9e",
+        accent: "#c4c4c4",
         background: "#141414",
-        status_bar: "#1e1e1e",
-        preview: "  ▐\x1b[32m████\x1b[0m▌ green on dark  ",
+        status_bar: "#1c1c1c",
+        preview: "  ▐\x1b[37m████\x1b[0m▌ neutral dark     ",
     },
     Preset {
         name: "Catppuccin Mocha",
