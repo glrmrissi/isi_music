@@ -872,9 +872,28 @@ impl App {
                         self.state.playback.shuffle = pb.shuffle;
                         self.state.playback.repeat = pb.repeat;
                         if pb.is_playing {
+                            // Only adopt the player's progress if we have no
+                            // local clock running yet, or if it has drifted
+                            // significantly (>2s). This prevents the progress
+                            // bar from jumping back and forth between the
+                            // locally-interpolated value and the player's
+                            // (potentially stale) reported position.
+                            let local_progress = self
+                                .playing_started_at
+                                .map(|t| {
+                                    self.progress_at_play_start
+                                        + t.elapsed().as_millis() as u64
+                                })
+                                .unwrap_or(u64::MAX);
+                            if self.playing_started_at.is_none()
+                                || local_progress.abs_diff(pb.progress_ms) > 2000
+                            {
+                                self.progress_at_play_start = pb.progress_ms;
+                                self.playing_started_at = Some(Instant::now());
+                            }
+                        } else {
                             self.state.playback.progress_ms = pb.progress_ms;
-                        }
-                        if self.playing_started_at.is_none() {
+                            self.playing_started_at = None;
                             self.progress_at_play_start = pb.progress_ms;
                         }
                     }
@@ -1072,15 +1091,23 @@ impl App {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
+                        // Preserve locally-interpolated progress to avoid
+                        // the bar jumping backwards when the API reports a
+                        // slightly stale position.
+                        let local_progress = self.state.playback.progress_ms;
+                        let local_playing = self.state.playback.is_playing;
                         self.state.playback.merge_from_api(current_pb);
-                        if self.playing_started_at.is_none() {
-                            self.state.playback.is_playing = false;
-                        }
-                        if pb_playing {
-                            if self.playing_started_at.is_some() {
-                                self.playing_started_at = Some(Instant::now());
+                        if local_playing && pb_playing {
+                            // Keep our local progress if it's close to API's
+                            if local_progress.abs_diff(pb_progress) <= 2000 {
+                                self.state.playback.progress_ms = local_progress;
+                            } else {
                                 self.progress_at_play_start = pb_progress;
+                                self.playing_started_at = Some(Instant::now());
                             }
+                        } else if pb_playing {
+                            self.progress_at_play_start = pb_progress;
+                            self.playing_started_at = Some(Instant::now());
                         } else {
                             self.playing_started_at = None;
                             self.progress_at_play_start = pb_progress;
@@ -1119,15 +1146,19 @@ impl App {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
+                        let local_progress = self.state.playback.progress_ms;
+                        let local_playing = self.state.playback.is_playing;
                         self.state.playback.merge_from_api(current_pb);
-                        if self.playing_started_at.is_none() {
-                            self.state.playback.is_playing = false;
-                        }
-                        if pb_playing {
-                            if self.playing_started_at.is_some() {
-                                self.playing_started_at = Some(Instant::now());
+                        if local_playing && pb_playing {
+                            if local_progress.abs_diff(pb_progress) <= 2000 {
+                                self.state.playback.progress_ms = local_progress;
+                            } else {
                                 self.progress_at_play_start = pb_progress;
+                                self.playing_started_at = Some(Instant::now());
                             }
+                        } else if pb_playing {
+                            self.progress_at_play_start = pb_progress;
+                            self.playing_started_at = Some(Instant::now());
                         } else {
                             self.playing_started_at = None;
                             self.progress_at_play_start = pb_progress;
