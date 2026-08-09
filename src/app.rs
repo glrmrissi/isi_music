@@ -1063,7 +1063,12 @@ impl App {
                 self.sync_track_selection();
                 self.sync_queue_display();
                 if self.player.is_none() {
-                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                    if let Ok(Ok(current_pb)) = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        self.spotify.fetch_playback(),
+                    )
+                    .await
+                    {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
@@ -1099,10 +1104,18 @@ impl App {
             {
                 self.last_playback_health_check = Instant::now();
 
-                if let Some(_token) = self.spotify.get_access_token().await {}
+                if let Ok(Some(_token)) =
+                    tokio::time::timeout(Duration::from_secs(5), self.spotify.get_access_token())
+                        .await
+                {}
 
                 if self.player.is_none() {
-                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                    if let Ok(Ok(current_pb)) = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        self.spotify.fetch_playback(),
+                    )
+                    .await
+                    {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();

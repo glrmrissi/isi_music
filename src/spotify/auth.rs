@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::io::Write as _;
+use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -54,7 +55,10 @@ async fn exchange_code(
     verifier: &str,
     client_id: &str,
 ) -> Result<(String, String, u64)> {
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let resp = http
         .post("https://accounts.spotify.com/api/token")
         .form(&[

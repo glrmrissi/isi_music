@@ -8,6 +8,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
+
+/// Build a reqwest client with a sane timeout so network drops don't hang the TUI.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 use tracing::{info, warn};
 
 use super::auth::SpotifyAuth;
@@ -746,7 +754,7 @@ pub struct SpotifyClient {
 
 impl SpotifyClient {
     pub async fn new_unauthenticated() -> Self {
-        let http = reqwest::Client::new();
+        let http = http_client();
         let dummy_token = TokenManager::new(String::new(), http.clone());
         Self {
             token_manager: dummy_token,
@@ -769,7 +777,7 @@ impl SpotifyClient {
             return Ok(Self::new_unauthenticated().await);
         }
 
-        let http = reqwest::Client::new();
+        let http = http_client();
         let token_manager = TokenManager::new(client_id.clone(), http.clone());
 
         let saved_rt = config::load_refresh_token();

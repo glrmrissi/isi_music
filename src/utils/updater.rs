@@ -58,6 +58,7 @@ async fn fetch_latest_release() -> Result<Release> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let client = reqwest::Client::builder()
         .user_agent("isi-music-updater")
+        .timeout(std::time::Duration::from_secs(15))
         .build()?;
     let resp = client.get(&url).send().await?;
     if !resp.status().is_success() {
@@ -73,6 +74,7 @@ async fn fetch_latest_release() -> Result<Release> {
 async fn download_asset(url: &str, dest: &std::path::Path) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("isi-music-updater")
+        .timeout(std::time::Duration::from_secs(60))
         .build()?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use tracing::{info, warn};
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
@@ -28,7 +29,10 @@ impl LastfmClient {
             api_key,
             api_secret,
             session_key,
-            http: Client::new(),
+            http: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
         }
     }
 
