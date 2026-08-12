@@ -10,7 +10,6 @@ use tokio::{
 
 use crate::config;
 
-const CALLBACK_PORT: u16 = 8888;
 const SCOPES: &[&str] = &[
     "streaming",
     "user-read-private",
@@ -40,13 +39,13 @@ fn generate_code_challenge(verifier: &str) -> String {
     base64url_encode(&hash)
 }
 
-fn build_authorize_url(client_id: &str, challenge: &str) -> String {
+fn build_authorize_url(client_id: &str, challenge: &str, redirect_uri: &str) -> String {
     let encoded_scopes = SCOPES.join("%20");
+    let encoded_redirect = urlencoding::encode(redirect_uri);
     format!(
         "https://accounts.spotify.com/authorize?client_id={}&response_type=code&\
-         redirect_uri=http%3A%2F%2F127.0.0.1%3A{CALLBACK_PORT}%2Fcallback&\
-         code_challenge_method=S256&code_challenge={}&scope={}",
-        client_id, challenge, encoded_scopes
+         redirect_uri={}&code_challenge_method=S256&code_challenge={}&scope={}",
+        client_id, encoded_redirect, challenge, encoded_scopes
     )
 }
 
@@ -54,6 +53,7 @@ async fn exchange_code(
     code: &str,
     verifier: &str,
     client_id: &str,
+    redirect_uri: &str,
 ) -> Result<(String, String, u64)> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -64,10 +64,7 @@ async fn exchange_code(
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", code),
-            (
-                "redirect_uri",
-                &format!("http://127.0.0.1:{CALLBACK_PORT}/callback"),
-            ),
+            ("redirect_uri", redirect_uri),
             ("client_id", client_id),
             ("code_verifier", verifier),
         ])
@@ -97,7 +94,19 @@ async fn exchange_code(
 
 fn open_browser(url: &str) {
     #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    {
+        let is_wsl = std::fs::read_to_string("/proc/version")
+            .map(|v| v.to_lowercase().contains("microsoft"))
+            .unwrap_or(false);
+        if is_wsl {
+            let quoted_url = format!("\"{url}\"");
+            let _ = std::process::Command::new("cmd.exe")
+                .args(["/c", "start", "", &quoted_url])
+                .spawn();
+        } else {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
+    }
 
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
@@ -127,19 +136,29 @@ fn extract_code_from_request(request: &str) -> Result<String> {
     bail!("'code' parameter not found in callback")
 }
 
-async fn run_oauth_flow(authorize_url: &str) -> Result<String> {
-    let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
+async fn run_oauth_flow(authorize_url: &str, callback_port: u16) -> Result<String> {
+    #[cfg(target_os = "linux")]
+    let bind_addr: &str = {
+        let is_wsl = std::fs::read_to_string("/proc/version")
+            .map(|v| v.to_lowercase().contains("microsoft"))
+            .unwrap_or(false);
+        if is_wsl { "0.0.0.0" } else { "127.0.0.1" }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let bind_addr: &str = "127.0.0.1";
+
+    let listener = TcpListener::bind((bind_addr, callback_port))
         .await
         .map_err(|e| {
-            let pid_info = find_port_owner(CALLBACK_PORT);
+            let pid_info = find_port_owner(callback_port);
             let hint = if let Some((pid, name)) = pid_info {
                 format!(
-                    "Port {CALLBACK_PORT} is in use by PID {pid} ({name}). \
+                    "Port {callback_port} is in use by PID {pid} ({name}). \
                      Close that process and retry."
                 )
             } else {
                 format!(
-                    "Port {CALLBACK_PORT} is in use. \
+                    "Port {callback_port} is in use. \
                      Close the process using it and retry."
                 )
             };
@@ -148,21 +167,40 @@ async fn run_oauth_flow(authorize_url: &str) -> Result<String> {
 
     open_browser(authorize_url);
 
-    println!("Waiting for authorization in browser... (port {CALLBACK_PORT})");
+    println!("Waiting for authorization in browser... (port {callback_port})");
+    println!("If the browser doesn't open, visit:");
+    println!("  {authorize_url}");
 
-    let (mut stream, _) = listener.accept().await?;
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
 
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    loop {
+        let (mut stream, _) = tokio::select! {
+            _ = &mut ctrl_c => bail!("Authentication cancelled by user"),
+            result = listener.accept() => result?,
+        };
 
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-        <html><body><h2>isi-music authorized!</h2>\
-        <p>You can close this tab.</p>\
-        <script>window.close();</script></body></html>";
-    stream.write_all(response.as_bytes()).await?;
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::select! {
+            _ = &mut ctrl_c => bail!("Authentication cancelled by user"),
+            result = stream.read(&mut buf) => result?,
+        };
+        let request = String::from_utf8_lossy(&buf[..n]);
 
-    extract_code_from_request(&request)
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+            <html><body><h2>isi-music authorized!</h2>\
+            <p>You can close this tab.</p>\
+            <script>window.close();</script></body></html>";
+        tokio::select! {
+            _ = &mut ctrl_c => bail!("Authentication cancelled by user"),
+            result = stream.write_all(response.as_bytes()) => result?,
+        }
+
+        match extract_code_from_request(&request) {
+            Ok(code) => return Ok(code),
+            Err(_) => continue,
+        }
+    }
 }
 
 /// Try to find which process owns a given TCP port.
@@ -236,20 +274,27 @@ pub struct SpotifyAuth;
 impl SpotifyAuth {
     pub async fn authenticate() -> Result<(String, String, u64)> {
         let cfg = config::AppConfig::load()?;
+        let client_id = cfg.get_client_id().ok_or_else(|| {
+            anyhow::anyhow!("Spotify Web API Client ID is not configured; run setup-spotify first")
+        })?;
+        Self::authenticate_with_client_id(&client_id).await
+    }
 
-        let client_id = cfg.get_client_id().context(
-            "SPOTIFY_CLIENT_ID not found.\nSet it in ~/.config/isi-music/config.toml \
-             or as an environment variable.",
-        )?;
+    pub async fn authenticate_with_client_id(client_id: &str) -> Result<(String, String, u64)> {
+        let (redirect_uri, callback_port) = if client_id == config::OFFICIAL_CLIENT_ID {
+            (config::OFFICIAL_REDIRECT_URI, 8898)
+        } else {
+            (config::CUSTOM_REDIRECT_URI, 8888)
+        };
 
         loop {
             let verifier = generate_code_verifier();
             let challenge = generate_code_challenge(&verifier);
 
-            let url = build_authorize_url(&client_id, &challenge);
-            match run_oauth_flow(&url).await {
+            let url = build_authorize_url(client_id, &challenge, redirect_uri);
+            match run_oauth_flow(&url, callback_port).await {
                 Ok(code) => {
-                    return exchange_code(&code, &verifier, &client_id).await;
+                    return exchange_code(&code, &verifier, client_id, redirect_uri).await;
                 }
                 Err(e) => {
                     let msg = format!("{e:#}");

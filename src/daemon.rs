@@ -60,13 +60,12 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     };
 
     let mut spotify = crate::spotify::SpotifyClient::new().await?;
-    let token = spotify
-        .get_access_token()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("No Spotify access token"))?;
+    let access_token = spotify.get_access_token().await;
+    crate::player::ensure_streaming_auth().await?;
+
     let mut player: Box<dyn AudioPlayer> = Box::new(
         NativePlayer::new(
-            token,
+            access_token,
             true,
             cfg.audio.librespot_bitrate(),
             cfg.audio.gapless,

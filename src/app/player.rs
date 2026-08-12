@@ -279,9 +279,8 @@ impl App {
                 self.state.tracks_api_offset = count as u32;
                 self.state.active_playlist_uri = Some("radio:recommendations".to_string());
                 self.state.active_playlist_id = Some("radio:recommendations".to_string());
-                self.state
-                    .track_list
-                    .select(if count == 0 { None } else { Some(0) });
+                self.state.track_sort_by = crate::ui::state::TrackSortBy::Default;
+                self.state.rebuild_sort_indices();
                 self.state.push_nav();
                 self.state.active_content = crate::ui::ActiveContent::Tracks;
                 self.state.search_results = None;
@@ -368,15 +367,7 @@ impl App {
         self.player = None;
         self.band_energies = None;
 
-        let Some(token) = self.spotify.get_access_token().await else {
-            warn!("Could not get access token for reconnect");
-            self.debug_overlay.log(
-                crate::utils::debug_overlay::LogLevel::Warn,
-                format!("Could not get access token for reconnect"),
-            );
-            self.state.status_msg = Some("Reconnect failed: no token".to_string());
-            return;
-        };
+        let token = self.spotify.get_access_token().await;
 
         match NativePlayer::new(
             token,

@@ -539,7 +539,9 @@ impl LibraryCache {
         after: Option<&str>,
         limit: u32,
     ) -> Option<(Vec<TrackSummary>, u32, Option<String>)> {
-        let Ok(conn) = self.conn.lock() else { return None };
+        let Ok(conn) = self.conn.lock() else {
+            return None;
+        };
         let total: u32 = conn
             .query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
             .unwrap_or(0);
@@ -674,12 +676,6 @@ impl LibraryCache {
         }
     }
 
-    pub fn clear_liked_tracks_cache(&self) {
-        if let Ok(conn) = self.conn.lock() {
-            let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
-        }
-    }
-
     pub fn clear_all_library_cache(&self) {
         if let Ok(conn) = self.conn.lock() {
             let _ = conn.execute("DELETE FROM library_cache", []);
@@ -795,12 +791,10 @@ impl SpotifyClient {
 
     pub async fn new() -> Result<Self> {
         let cfg = config::AppConfig::load()?;
-        let client_id = cfg.get_client_id().unwrap_or_default();
-
-        if client_id.is_empty() || client_id == "your_client_id_here" {
-            warn!("Spotify client_id is empty or default. Starting in unauthenticated mode.");
+        let Some(client_id) = cfg.get_client_id() else {
+            warn!("Spotify Web API Client ID is not configured; starting in local-only mode");
             return Ok(Self::new_unauthenticated().await);
-        }
+        };
 
         let http = http_client();
         let token_manager = TokenManager::new(client_id.clone(), http.clone());
@@ -877,6 +871,7 @@ impl SpotifyClient {
         if !status.is_success() {
             let body = serde_json::to_string(&json).unwrap_or_default();
             if status.as_u16() == 403 {
+                config::clear_refresh_token();
                 anyhow::bail!("SPOTIFY_FORBIDDEN: token refresh returned 403. Details: {body}");
             }
             anyhow::bail!("token endpoint {status}: {body}");
@@ -926,15 +921,18 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
             return Err(if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
                 anyhow::anyhow!("SPOTIFY_UNAUTHORIZED")
             } else if status.as_u16() == 429 {
                 warn!("Rate limited on Spotify API");
                 anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
+            } else if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden on /me/tracks. Body: {body}");
+                anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}")
             } else {
-                anyhow::anyhow!("Spotify API error: status {}", status)
+                anyhow::anyhow!("Spotify API error: status {} body: {}", status, body)
             });
         }
 
@@ -1032,13 +1030,16 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
             return Err(if status.as_u16() == 401 {
                 anyhow::anyhow!("SPOTIFY_UNAUTHORIZED")
             } else if status.as_u16() == 429 {
                 anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
+            } else if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden on /me/tracks/contains. Body: {body}");
+                anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}")
             } else {
-                anyhow::anyhow!("Spotify API error: status {}", status)
+                anyhow::anyhow!("Spotify API error: status {} body: {}", status, body)
             });
         }
 
@@ -1194,33 +1195,6 @@ impl SpotifyClient {
         Ok(())
     }
 
-    pub async fn play_context_uri(&self, context_uri: &str) -> Result<()> {
-        if !self.authenticated {
-            return Ok(());
-        }
-        let token = self
-            .get_access_token()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
-
-        spotify_rate_limit().await;
-        let body = serde_json::json!({ "context_uri": context_uri });
-        let response = self
-            .http
-            .put("https://api.spotify.com/v1/me/player/play")
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Spotify {status}: {body_text}");
-        }
-        Ok(())
-    }
-
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
         if !self.authenticated {
             warn!("fetch_playlists: not authenticated");
@@ -1248,7 +1222,7 @@ impl SpotifyClient {
 
             let status = response.status();
             if !status.is_success() {
-                let _ = response.text().await.unwrap_or_default();
+                let body = response.text().await.unwrap_or_default();
                 warn!("fetch_playlists: API error status={}", status);
                 if status.as_u16() == 401 {
                     warn!("Got 401 Unauthorized - token may have expired");
@@ -1258,7 +1232,15 @@ impl SpotifyClient {
                     warn!("Rate limited on Spotify API");
                     return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
                 }
-                return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+                if status.as_u16() == 403 {
+                    warn!("Got 403 Forbidden. Body: {body}");
+                    return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+                }
+                return Err(anyhow::anyhow!(
+                    "Spotify API error: status {} body: {}",
+                    status,
+                    body
+                ));
             }
 
             let json: serde_json::Value = response.json().await?;
@@ -1342,7 +1324,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
             warn!("Playlist fetch failed for {playlist_id} status={status}");
 
             if status.as_u16() == 401 {
@@ -1425,7 +1407,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -1576,7 +1566,8 @@ impl SpotifyClient {
         }
 
         let is_playing = json["is_playing"].as_bool().unwrap_or(false);
-        self.is_playing.store(is_playing, std::sync::atomic::Ordering::Relaxed);
+        self.is_playing
+            .store(is_playing, std::sync::atomic::Ordering::Relaxed);
         let progress_ms = json["progress_ms"].as_u64().unwrap_or(0);
         let context_uri = json["context"]["uri"].as_str().map(|s| s.to_string());
 
@@ -1680,19 +1671,15 @@ impl SpotifyClient {
             "https://api.spotify.com/v1/me/player/play"
         };
 
-        let resp = self
-            .http
-            .put(url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.put(url).bearer_auth(&token).send().await?;
         let s = resp.status();
         if !s.is_success() {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("Failed to toggle playback: {s}: {body}");
         }
 
-        self.is_playing.store(!was_playing, std::sync::atomic::Ordering::Relaxed);
+        self.is_playing
+            .store(!was_playing, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1717,7 +1704,8 @@ impl SpotifyClient {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("Failed to skip to next track: {status}: {body}");
         }
-        self.is_playing.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.is_playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1742,7 +1730,8 @@ impl SpotifyClient {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("Failed to skip to previous track: {status}: {body}");
         }
-        self.is_playing.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.is_playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1823,7 +1812,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1835,7 +1824,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2084,7 +2081,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2096,7 +2093,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2162,7 +2167,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2174,7 +2179,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2238,7 +2251,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2250,7 +2263,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2326,7 +2347,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2338,7 +2359,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2399,7 +2428,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2411,7 +2440,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -2471,7 +2508,7 @@ impl SpotifyClient {
 
         let status = response.status();
         if !status.is_success() {
-            let _ = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -2484,7 +2521,15 @@ impl SpotifyClient {
             }
 
             tracing::error!("fetch_show_episodes API error: status {}", status);
-            return Err(anyhow::anyhow!("Spotify API error: status {}", status));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;

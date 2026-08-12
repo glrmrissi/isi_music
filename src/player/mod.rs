@@ -28,6 +28,8 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::config::OFFICIAL_CLIENT_ID;
+
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub enum RepeatMode {
     #[default]
@@ -133,9 +135,75 @@ pub struct NativePlayer {
     analyzer_enabled: Arc<AtomicBool>,
 }
 
+pub async fn ensure_streaming_auth() -> Result<()> {
+    if let Some(rt) = config::load_streaming_refresh_token() {
+        match refresh_streaming_token(&rt).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                warn!("Streaming token refresh failed ({e}); re-authenticating");
+                config::clear_streaming_refresh_token();
+            }
+        }
+    }
+
+    info!("Launching browser for streaming OAuth...");
+    let (_, refresh_token, _) =
+        crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(OFFICIAL_CLIENT_ID).await?;
+    config::save_streaming_refresh_token(&refresh_token);
+    Ok(())
+}
+
+async fn obtain_streaming_token() -> Result<String> {
+    let Some(rt) = config::load_streaming_refresh_token() else {
+        anyhow::bail!("Streaming authentication is not initialized; run setup-spotify first");
+    };
+
+    match refresh_streaming_token(&rt).await {
+        Ok(token) => {
+            debug!("Refreshed streaming token from stored streaming refresh token");
+            Ok(token)
+        }
+        Err(e) => {
+            config::clear_streaming_refresh_token();
+            Err(e.context("Streaming authentication expired; run setup-spotify again"))
+        }
+    }
+}
+
+async fn refresh_streaming_token(refresh_token: &str) -> Result<String> {
+    let resp = reqwest::Client::new()
+        .post("https://accounts.spotify.com/api/token")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", OFFICIAL_CLIENT_ID),
+        ])
+        .send()
+        .await?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp.json().await?;
+
+    if !status.is_success() {
+        let body = serde_json::to_string(&json).unwrap_or_default();
+        anyhow::bail!("streaming token refresh {status}: {body}");
+    }
+
+    let access_token = json["access_token"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no access_token in streaming refresh response"))?
+        .to_string();
+
+    if let Some(new_rt) = json["refresh_token"].as_str() {
+        config::save_streaming_refresh_token(new_rt);
+    }
+
+    Ok(access_token)
+}
+
 impl NativePlayer {
     pub async fn new(
-        access_token: String,
+        access_token: Option<String>,
         _low_resource: bool,
         bitrate: librespot_playback::config::Bitrate,
         gapless: bool,
@@ -166,7 +234,21 @@ impl NativePlayer {
             }
         });
 
-        let session = Session::new(SessionConfig::default(), cache);
+        let cfg = config::AppConfig::load()?;
+        let access_token = if cfg.get_client_id().is_some() {
+            obtain_streaming_token().await?
+        } else {
+            match access_token {
+                Some(token) => token,
+                None => obtain_streaming_token().await?,
+            }
+        };
+
+        let session_config = SessionConfig {
+            client_id: OFFICIAL_CLIENT_ID.to_string(),
+            ..SessionConfig::default()
+        };
+        let session = Session::new(session_config, cache);
         let credentials = Credentials::with_access_token(access_token);
         session
             .connect(credentials, false)

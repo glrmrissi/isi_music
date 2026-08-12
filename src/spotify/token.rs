@@ -87,6 +87,10 @@ impl TokenManager {
         if !status.is_success() {
             let body = serde_json::to_string(&json).unwrap_or_default();
             if status.as_u16() == 403 {
+                config::clear_refresh_token();
+                if let Ok(mut r) = self.refresh_token.write() {
+                    *r = None;
+                }
                 anyhow::bail!("SPOTIFY_FORBIDDEN: token refresh returned 403. Details: {body}");
             }
             anyhow::bail!("token endpoint {status}: {body}");

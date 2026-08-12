@@ -423,9 +423,8 @@ impl App {
                             6 => {
                                 let enabled = !self.theme.reactive_theme;
                                 if let Err(e) = self.toggle_reactive_theme(enabled) {
-                                    self.state.status_msg = Some(format!(
-                                        "Failed to toggle reactive theme: {e}"
-                                    ));
+                                    self.state.status_msg =
+                                        Some(format!("Failed to toggle reactive theme: {e}"));
                                 } else {
                                     self.state.reactive_theme_enabled = enabled;
                                     #[cfg(all(feature = "palette", feature = "album-art"))]
@@ -450,7 +449,8 @@ impl App {
                                         );
                                     }
                                     self.state.status_msg = Some(if enabled {
-                                        "Reactive theme enabled — colors will adapt to album art".to_string()
+                                        "Reactive theme enabled — colors will adapt to album art"
+                                            .to_string()
                                     } else {
                                         "Reactive theme disabled".to_string()
                                     });
@@ -505,8 +505,9 @@ impl App {
                             }
                         }
                     } else {
-                        self.state.status_msg =
-                            Some("Spotify not connected - run: isi-music setup-spotify".to_string());
+                        self.state.status_msg = Some(
+                            "Spotify not connected - run: isi-music setup-spotify".to_string(),
+                        );
                     }
                 }
                 SettingsAction::SetupSpotify => {
@@ -518,11 +519,13 @@ impl App {
                         Some("Exit isi-music and run: isi-music setup-lastfm".to_string());
                 }
                 SettingsAction::EditMusicDir => {
-                    self.state.status_msg = Some("Type the music dir path, Enter to save".to_string());
+                    self.state.status_msg =
+                        Some("Type the music dir path, Enter to save".to_string());
                 }
                 SettingsAction::SaveMusicDir => {
-                    self.state.status_msg =
-                        Some("Music dir saved. Select Local Files and press Enter to scan".to_string());
+                    self.state.status_msg = Some(
+                        "Music dir saved. Select Local Files and press Enter to scan".to_string(),
+                    );
                     self.needs_redraw = true;
                 }
                 SettingsAction::None => {}
@@ -619,8 +622,7 @@ impl App {
                             let bar_w = bar_end.saturating_sub(bar_start);
                             if bar_w > 0 {
                                 let click_x = cx.clamp(bar_start, bar_end);
-                                let ratio =
-                                    (click_x - bar_start) as f64 / bar_w as f64;
+                                let ratio = (click_x - bar_start) as f64 / bar_w as f64;
                                 let new_pos = (duration as f64 * ratio) as u64;
                                 self.state.playback.progress_ms = new_pos;
                                 self.progress_at_play_start = new_pos;
@@ -662,7 +664,10 @@ impl App {
                 match widget {
                     Some(UiWidget::Library) => {
                         if let Some(rect) = self.state.widget_rects.get(&UiWidget::Library) {
-                            if let Some(idx) = click_to_list_index(rect, cx, cy, LIBRARY_LEN) {
+                            let offset = self.state.library_list.offset();
+                            if let Some(idx) =
+                                click_to_list_index(rect, cx, cy, LIBRARY_LEN, offset)
+                            {
                                 self.state.library_list.select(Some(idx));
                             }
                         }
@@ -670,7 +675,8 @@ impl App {
                     Some(UiWidget::Playlists) => {
                         if let Some(rect) = self.state.widget_rects.get(&UiWidget::Playlists) {
                             let total = self.state.playlists.len();
-                            if let Some(idx) = click_to_list_index(rect, cx, cy, total) {
+                            let offset = self.state.playlist_list.offset();
+                            if let Some(idx) = click_to_list_index(rect, cx, cy, total, offset) {
                                 self.state.playlist_list.select(Some(idx));
                             }
                         }
@@ -678,7 +684,8 @@ impl App {
                     Some(UiWidget::Queue) => {
                         if let Some(rect) = self.state.widget_rects.get(&UiWidget::Queue) {
                             let total = self.state.queue_items.len();
-                            if let Some(idx) = click_to_list_index(rect, cx, cy, total) {
+                            let offset = self.state.queue_list.offset();
+                            if let Some(idx) = click_to_list_index(rect, cx, cy, total, offset) {
                                 self.state.queue_list.select(Some(idx));
                             }
                         }
@@ -690,25 +697,37 @@ impl App {
                             match self.state.active_content {
                                 crate::ui::ActiveContent::Tracks => {
                                     let total = self.state.sorted_track_indices.len();
-                                    if let Some(idx) = click_to_list_index(&rect, cx, cy, total) {
+                                    let offset = self.state.track_list.offset();
+                                    if let Some(idx) =
+                                        click_to_list_index(&rect, cx, cy, total, offset)
+                                    {
                                         self.state.track_list.select(Some(idx));
                                     }
                                 }
                                 crate::ui::ActiveContent::Albums => {
                                     let total = self.state.albums.len();
-                                    if let Some(idx) = click_to_list_index(&rect, cx, cy, total) {
+                                    let offset = self.state.album_list.offset();
+                                    if let Some(idx) =
+                                        click_to_list_index(&rect, cx, cy, total, offset)
+                                    {
                                         self.state.album_list.select(Some(idx));
                                     }
                                 }
                                 crate::ui::ActiveContent::Artists => {
                                     let total = self.state.artists.len();
-                                    if let Some(idx) = click_to_list_index(&rect, cx, cy, total) {
+                                    let offset = self.state.artist_list.offset();
+                                    if let Some(idx) =
+                                        click_to_list_index(&rect, cx, cy, total, offset)
+                                    {
                                         self.state.artist_list.select(Some(idx));
                                     }
                                 }
                                 crate::ui::ActiveContent::Shows => {
                                     let total = self.state.shows.len();
-                                    if let Some(idx) = click_to_list_index(&rect, cx, cy, total) {
+                                    let offset = self.state.show_list.offset();
+                                    if let Some(idx) =
+                                        click_to_list_index(&rect, cx, cy, total, offset)
+                                    {
                                         self.state.show_list.select(Some(idx));
                                     }
                                 }
@@ -1928,8 +1947,7 @@ impl App {
                                 .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                 .count();
                             if let Some(track) = self.state.tracks.get(actual_idx) {
-                                self.state.status_msg =
-                                    Some(format!("Loading {}…", track.name));
+                                self.state.status_msg = Some(format!("Loading {}…", track.name));
                             }
                             player.set_queue(uris, adjusted_idx);
                             self.playing_tracks = self.state.tracks.clone();
@@ -2553,13 +2571,14 @@ impl App {
 const LIBRARY_LEN: usize = 5;
 
 /// Map a mouse click (cx, cy) to a list item index, given the widget's outer
-/// rect (including borders). Returns None if the click is on the border or
-/// outside the list items.
+/// rect (including borders) and the list's scroll offset. Returns None if the
+/// click is on the border or outside the list items.
 fn click_to_list_index(
     rect: &ratatui::layout::Rect,
     cx: u16,
     cy: u16,
     total: usize,
+    scroll_offset: usize,
 ) -> Option<usize> {
     if total == 0 {
         return None;
@@ -2578,11 +2597,12 @@ fn click_to_list_index(
     let _ = inner_x;
     let _ = cx;
 
-    let row = (cy - inner_y) as usize;
-    if row >= total {
+    let visible_row = (cy - inner_y) as usize;
+    let global_index = scroll_offset + visible_row;
+    if global_index >= total {
         return None;
     }
-    Some(row)
+    Some(global_index)
 }
 
 /// Format milliseconds as MM:SS for the seek status message.

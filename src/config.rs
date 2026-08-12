@@ -2,6 +2,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const OFFICIAL_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
+pub const OFFICIAL_REDIRECT_URI: &str = "http://127.0.0.1:8898/login";
+pub const CUSTOM_REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
     pub spotify: SpotifyConfig,
@@ -149,7 +153,14 @@ impl AppConfig {
     pub fn get_client_id(&self) -> Option<String> {
         std::env::var("SPOTIFY_CLIENT_ID")
             .ok()
-            .or_else(|| self.spotify.client_id.clone())
+            .filter(|s| !s.is_empty() && s != "your_client_id_here")
+            .or_else(|| {
+                self.spotify
+                    .client_id
+                    .as_ref()
+                    .filter(|s| !s.is_empty() && s.as_str() != "your_client_id_here")
+                    .cloned()
+            })
     }
 
     pub fn get_musixmatch_api_key(&self) -> Option<String> {
@@ -258,6 +269,39 @@ pub fn load_refresh_token() -> Option<String> {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+pub fn clear_refresh_token() {
+    if let Ok(p) = refresh_token_path() {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+pub fn streaming_refresh_token_path() -> Result<PathBuf> {
+    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+    let dir = base.join("isi-music");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join("streaming_refresh_token"))
+}
+
+pub fn save_streaming_refresh_token(rt: &str) {
+    if let Ok(p) = streaming_refresh_token_path() {
+        let _ = std::fs::write(p, rt);
+    }
+}
+
+pub fn load_streaming_refresh_token() -> Option<String> {
+    streaming_refresh_token_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn clear_streaming_refresh_token() {
+    if let Ok(p) = streaming_refresh_token_path() {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 pub fn get_local_db_path() -> String {

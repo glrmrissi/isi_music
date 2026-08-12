@@ -207,6 +207,12 @@ impl App {
             }
         };
 
+        if spotify.authenticated || crate::config::load_streaming_refresh_token().is_some() {
+            crate::player::ensure_streaming_auth()
+                .await
+                .map_err(|e| anyhow::anyhow!("Streaming authentication failed: {e}"))?;
+        }
+
         let volume = crate::config::load_volume();
         let mut saved_volume = volume;
         let db_path = crate::config::get_local_db_path();
@@ -779,9 +785,7 @@ impl App {
             self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
             return true;
         }
-        let Some(token) = self.spotify.get_access_token().await else {
-            return false;
-        };
+        let token = self.spotify.get_access_token().await;
         match NativePlayer::new(
             token,
             false,
@@ -803,10 +807,16 @@ impl App {
                 if msg.contains("free") || msg.contains("premium") {
                     self.spotify_streaming_disabled = true;
                 }
-                self.debug_overlay.log(
-                    LogLevel::Warn,
-                    format!("Failed to create Spotify player: {e:#}"),
-                );
+                let status =
+                    if msg.contains("setup-spotify") || msg.contains("streaming authentication") {
+                        "Spotify streaming is not authenticated. Run `isi-music setup-spotify`."
+                            .to_string()
+                    } else {
+                        format!("Failed to create Spotify player: {e:#}")
+                    };
+                self.state.status_msg = Some(status.clone());
+                self.debug_overlay
+                    .log(LogLevel::Warn, format!("{status}: {e:#}"));
                 false
             }
         }
@@ -889,7 +899,10 @@ impl App {
     pub async fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        B::Error: Send + Sync + 'static,
+    {
         let tick_rate = Duration::from_millis(16);
         self.last_tick = Instant::now();
 
@@ -901,7 +914,7 @@ impl App {
                     #[cfg(all(feature = "palette", feature = "album-art"))]
                     {
                         let preserve =
-                            self.reactive_toggle_pending && self.reactive_start.is_some();
+                            self.reactive_toggle_pending || self.reactive_start.is_some();
                         self.reactive_toggle_pending = false;
                         preserve
                     }
@@ -910,14 +923,29 @@ impl App {
                         false
                     }
                 };
+                #[cfg(all(feature = "palette", feature = "album-art"))]
+                tracing::debug!(
+                    "reactive: theme_watcher fired, preserve={}, reactive_start={}",
+                    preserve_reactive_transition,
+                    self.reactive_start.is_some()
+                );
                 self.theme = new_theme.clone();
                 if !preserve_reactive_transition {
-                    self.ui = Ui::new(new_theme, self.debug_overlay.clone());
                     #[cfg(all(feature = "palette", feature = "album-art"))]
-                    {
-                        self.reactive_start = None;
-                        self.reactive_from = None;
-                        self.reactive_target = None;
+                    let skip_apply = self.theme.reactive_theme
+                        && self.reactive_start.is_none()
+                        && self.reactive_target.is_none();
+                    #[cfg(not(all(feature = "palette", feature = "album-art")))]
+                    let skip_apply = false;
+
+                    if !skip_apply {
+                        self.ui = Ui::new(new_theme, self.debug_overlay.clone());
+                        #[cfg(all(feature = "palette", feature = "album-art"))]
+                        {
+                            self.reactive_start = None;
+                            self.reactive_from = None;
+                            self.reactive_target = None;
+                        }
                     }
                 }
                 self.state.reactive_theme_enabled = self.theme.reactive_theme;
@@ -931,9 +959,11 @@ impl App {
             self.last_tick = now;
 
             #[cfg(all(feature = "palette", feature = "album-art"))]
-            if let (Some(start), Some(from), Some(target)) =
-                (self.reactive_start, self.reactive_from.as_ref(), self.reactive_target.as_ref())
-            {
+            if let (Some(start), Some(from), Some(target)) = (
+                self.reactive_start,
+                self.reactive_from.as_ref(),
+                self.reactive_target.as_ref(),
+            ) {
                 let elapsed = now.duration_since(start).as_millis() as f32;
                 let dur = self.theme.reactive_cross_fade_ms.max(1) as f32;
                 let t = (elapsed / dur).min(1.0);
@@ -1005,8 +1035,7 @@ impl App {
                             let local_progress = self
                                 .playing_started_at
                                 .map(|t| {
-                                    self.progress_at_play_start
-                                        + t.elapsed().as_millis() as u64
+                                    self.progress_at_play_start + t.elapsed().as_millis() as u64
                                 })
                                 .unwrap_or(u64::MAX);
                             if self.playing_started_at.is_none()
@@ -1209,11 +1238,9 @@ impl App {
                 self.sync_track_selection();
                 self.sync_queue_display();
                 if self.player.is_none() {
-                    if let Ok(Ok(current_pb)) = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        self.spotify.fetch_playback(),
-                    )
-                    .await
+                    if let Ok(Ok(current_pb)) =
+                        tokio::time::timeout(Duration::from_secs(5), self.spotify.fetch_playback())
+                            .await
                     {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
@@ -1264,11 +1291,9 @@ impl App {
                 {}
 
                 if self.player.is_none() {
-                    if let Ok(Ok(current_pb)) = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        self.spotify.fetch_playback(),
-                    )
-                    .await
+                    if let Ok(Ok(current_pb)) =
+                        tokio::time::timeout(Duration::from_secs(5), self.spotify.fetch_playback())
+                            .await
                     {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
@@ -1595,11 +1620,16 @@ impl App {
                         Ok(Ok(img)) => {
                             #[cfg(all(feature = "palette", feature = "album-art"))]
                             {
-                                let swatches =
-                                    crate::utils::palette::extract_palette(&img, 5);
+                                let swatches = crate::utils::palette::extract_palette(&img, 5);
+                                tracing::debug!(
+                                    "reactive: swatches={} theme.reactive_theme={}",
+                                    swatches.len(),
+                                    self.theme.reactive_theme
+                                );
                                 self.reactive_swatches = Some(swatches.clone());
                                 if self.theme.reactive_theme {
                                     self.start_reactive_theme(&swatches);
+                                    tracing::debug!("reactive: start_reactive_theme called");
                                 }
                             }
 
