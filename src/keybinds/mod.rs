@@ -66,7 +66,7 @@ impl Action {
         &[
             ("play_pause", &["space"], PlayPause),
             ("next_track", &["n"], NextTrack),
-            ("prev_track", &["P"], PrevTrack),
+            ("prev_track", &["p", "P"], PrevTrack),
             ("volume_up", &["="], VolumeUp),
             ("volume_down", &["-"], VolumeDown),
             ("seek_forward", &["right"], SeekForward),

@@ -13,7 +13,7 @@ fn defaults_contains_all_actions() {
 fn defaults_no_duplicate_key_combos() {
     let k = Keybinds::defaults();
     let lookup: &HashMap<KeyCombo, Action> = &k.action_for;
-    assert_eq!(lookup.len(), 51);
+    assert_eq!(lookup.len(), 52);
 }
 
 #[test]
