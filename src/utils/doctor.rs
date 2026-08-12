@@ -58,7 +58,10 @@ fn print_result(r: &CheckResult) {
         Status::Warn => ("[WARN]", YELLOW),
         Status::Fail => ("[FAIL]", RED),
     };
-    println!("  {color}{icon}{RESET}  {BOLD}{}{RESET}  {DIM}{}{RESET}", r.name, r.detail);
+    println!(
+        "  {color}{icon}{RESET}  {BOLD}{}{RESET}  {DIM}{}{RESET}",
+        r.name, r.detail
+    );
     if let Some(hint) = &r.hint {
         println!("        {CYAN}→ {hint}{RESET}");
     }
@@ -81,8 +84,6 @@ pub async fn run() -> anyhow::Result<()> {
     results.push(check_local_music_dir());
 
     results.push(check_lastfm());
-
-    results.push(check_nerd_font());
 
     #[cfg(target_os = "linux")]
     {
@@ -152,7 +153,7 @@ fn check_config() -> CheckResult {
             match config::AppConfig::load() {
                 Ok(cfg) => {
                     let sections: Vec<&str> = [
-                        cfg.spotify.client_id.is_some().then_some("spotify"),
+                        Some("spotify"),
                         cfg.local.music_dir.is_some().then_some("local"),
                         cfg.lastfm.session_key.is_some().then_some("lastfm"),
                         cfg.discord.enabled.unwrap_or(false).then_some("discord"),
@@ -182,19 +183,17 @@ fn check_config() -> CheckResult {
 
 fn check_spotify_client_id() -> CheckResult {
     match config::AppConfig::load() {
-        Ok(cfg) => {
-            let cid = cfg.get_client_id();
-            match cid {
-                Some(id) if !id.is_empty() && id != "your_client_id_here" => {
-                    CheckResult::ok("Spotify Client ID", &format!("set ({}…)", &id[..8.min(id.len())]))
-                }
-                _ => CheckResult::warn(
-                    "Spotify Client ID",
-                    "not configured",
-                    "Run: isi-music setup-spotify",
-                ),
-            }
-        }
+        Ok(cfg) => match cfg.get_client_id() {
+            Some(cid) => CheckResult::ok(
+                "Spotify Web API Client ID",
+                &format!("custom ({}…)", &cid[..8.min(cid.len())]),
+            ),
+            None => CheckResult::warn(
+                "Spotify Web API Client ID",
+                "not configured",
+                "Run: isi-music setup-spotify",
+            ),
+        },
         Err(_) => CheckResult::warn(
             "Spotify Client ID",
             "could not load config",
@@ -204,46 +203,47 @@ fn check_spotify_client_id() -> CheckResult {
 }
 
 fn check_spotify_refresh_token() -> CheckResult {
-    match config::load_refresh_token() {
-        Some(_) => CheckResult::ok("Spotify token", "refresh token present"),
-        None => CheckResult::warn(
+    if config::load_refresh_token().is_some() {
+        CheckResult::ok("Spotify Web API token", "refresh token present")
+    } else if config::load_streaming_refresh_token().is_some() {
+        CheckResult::ok("Spotify streaming token", "refresh token present")
+    } else {
+        CheckResult::warn(
             "Spotify token",
-            "no refresh token (not authenticated)",
+            "not authenticated",
             "Run: isi-music setup-spotify to authenticate",
-        ),
+        )
     }
 }
 
 fn check_local_music_dir() -> CheckResult {
     match config::AppConfig::load() {
-        Ok(cfg) => {
-            match &cfg.local.music_dir {
-                Some(dir) if !dir.is_empty() => {
-                    let expanded = if dir.starts_with("~/") {
-                        dirs::home_dir()
-                            .map(|h| h.join(&dir[2..]))
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| dir.clone())
-                    } else {
-                        dir.clone()
-                    };
-                    if Path::new(&expanded).exists() {
-                        CheckResult::ok("Local music dir", &expanded)
-                    } else {
-                        CheckResult::warn(
-                            "Local music dir",
-                            &format!("directory does not exist: {expanded}"),
-                            "Set [local] music_dir in config.toml to an existing folder",
-                        )
-                    }
+        Ok(cfg) => match &cfg.local.music_dir {
+            Some(dir) if !dir.is_empty() => {
+                let expanded = if dir.starts_with("~/") {
+                    dirs::home_dir()
+                        .map(|h| h.join(&dir[2..]))
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| dir.clone())
+                } else {
+                    dir.clone()
+                };
+                if Path::new(&expanded).exists() {
+                    CheckResult::ok("Local music dir", &expanded)
+                } else {
+                    CheckResult::warn(
+                        "Local music dir",
+                        &format!("directory does not exist: {expanded}"),
+                        "Set [local] music_dir in config.toml to an existing folder",
+                    )
                 }
-                _ => CheckResult::warn(
-                    "Local music dir",
-                    "not set",
-                    "Add [local] music_dir = \"~/Music\" to config.toml",
-                ),
             }
-        }
+            _ => CheckResult::warn(
+                "Local music dir",
+                "not set",
+                "Add [local] music_dir = \"~/Music\" to config.toml",
+            ),
+        },
         Err(_) => CheckResult::warn(
             "Local music dir",
             "could not load config",
@@ -266,46 +266,6 @@ fn check_lastfm() -> CheckResult {
             }
         }
         Err(_) => CheckResult::warn("Last.fm", "could not load config", "Run: isi-music setup"),
-    }
-}
-
-fn check_nerd_font() -> CheckResult {
-    // Heuristic: check if common Nerd Font env vars are set, or if the
-    // terminal reports a Nerd Font. This is unreliable — many terminals
-    // don't expose this info.
-    let env_hints = ["TERM_FONT", "TERMINAL_FONT", "WT_FONT"];
-    for var in env_hints {
-        if let Ok(val) = std::env::var(var) {
-            if val.to_lowercase().contains("nerd") || val.to_lowercase().contains("nf") {
-                return CheckResult::ok("Nerd Font", &format!("detected via {var}: {val}"));
-            }
-        }
-    }
-
-    // On Linux, check fc-list
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(output) = std::process::Command::new("fc-list").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.to_lowercase().contains("nerd") {
-                let count = stdout.lines().filter(|l| l.to_lowercase().contains("nerd")).count();
-                return CheckResult::ok("Nerd Font", &format!("{count} Nerd Font family(ies) found via fc-list"));
-            }
-        }
-        CheckResult::warn(
-            "Nerd Font",
-            "no Nerd Font detected (heuristic check)",
-            "Install a Nerd Font from https://www.nerdfonts.com/ and set it in your terminal",
-        )
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        CheckResult::warn(
-            "Nerd Font",
-            "cannot auto-detect on this platform",
-            "Ensure your terminal uses a Nerd Font (e.g. 'FiraCode Nerd Font')",
-        )
     }
 }
 
@@ -352,7 +312,10 @@ fn check_terminal_color_linux() -> CheckResult {
     let colorterm = std::env::var("COLORTERM").unwrap_or_default();
 
     if colorterm == "truecolor" || colorterm == "24bit" {
-        CheckResult::ok("Terminal color", &format!("24-bit color (TERM={term}, COLORTERM={colorterm})"))
+        CheckResult::ok(
+            "Terminal color",
+            &format!("24-bit color (TERM={term}, COLORTERM={colorterm})"),
+        )
     } else if term.contains("256") {
         CheckResult::warn(
             "Terminal color",
@@ -377,7 +340,7 @@ fn check_windows_terminal() -> CheckResult {
         CheckResult::warn(
             "Terminal",
             "not Windows Terminal (WT_SESSION not set)",
-            "For best experience, use Windows Terminal with a Nerd Font",
+            "For best experience, use Windows Terminal",
         )
     }
 }

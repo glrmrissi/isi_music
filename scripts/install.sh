@@ -3,8 +3,7 @@
 # isi-music — Linux install script
 #
 # Downloads the latest binary from GitHub Releases, installs audio
-# dependencies, installs a Nerd Font (if missing), and launches the
-# setup wizard.
+# dependencies, and launches the setup wizard.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.sh | bash
@@ -14,10 +13,6 @@ set -euo pipefail
 REPO="glrmrissi/isi_music"
 BINARY_NAME="isi-music"
 INSTALL_DIR="/usr/local/bin"
-FONT_DIR="${HOME}/.local/share/fonts"
-NERD_FONT_VERSION="3.3.0"
-NERD_FONT_NAME="FiraCode"
-NERD_FONT_ZIP="FiraCode.zip"
 
 # Colors
 RED='\033[1;31m'
@@ -40,7 +35,7 @@ detect_distro() {
         echo "debian"
     elif [[ -f /etc/arch-release ]]; then
         echo "arch"
-    elif [[ -f /etc/fedora-release ]] || [[ -f /etc/redhat-release ]]; then
+    elif [[ -f /etc/fedora_release ]] || [[ -f /etc/redhat-release ]]; then
         echo "fedora"
     else
         echo "unknown"
@@ -54,7 +49,7 @@ echo -e "  $(printf '-%.0s' {1..50})"
 echo ""
 
 # Step 1: Audio dependencies
-echo -e "  ${BOLD}Step 1/4: Audio dependencies${RESET}"
+echo -e "  ${BOLD}Step 1/3: Audio dependencies${RESET}"
 echo ""
 
 DISTRO=$(detect_distro)
@@ -86,7 +81,7 @@ esac
 echo ""
 
 # Step 2: Download binary
-echo -e "  ${BOLD}Step 2/4: Download isi-music${RESET}"
+echo -e "  ${BOLD}Step 2/3: Download isi-music${RESET}"
 echo ""
 
 if command_exists "$BINARY_NAME" && [[ "$1" != "--force" ]]; then
@@ -143,55 +138,8 @@ if [[ -z "${SKIP_DOWNLOAD:-}" ]]; then
 fi
 echo ""
 
-# Step 3: Nerd Font
-echo -e "  ${BOLD}Step 3/4: Nerd Font${RESET}"
-echo ""
-
-# Check if a Nerd Font is already installed
-has_nerd_font() {
-    if command_exists fc-list; then
-        fc-list 2>/dev/null | grep -qi "nerd" && return 0
-    fi
-    # Check common font directories
-    [[ -d "${FONT_DIR}/nerd-fonts" ]] && return 0
-    # Check if user has any Nerd Font in common locations
-    find "${HOME}/.local/share/fonts" "${HOME}/.fonts" "/usr/share/fonts" \
-         -iname "*nerd*" -type f 2>/dev/null | head -1 | grep -q . && return 0
-    return 1
-}
-
-if has_nerd_font; then
-    ok "Nerd Font already installed"
-    SKIP_FONT=1
-fi
-
-if [[ -z "${SKIP_FONT:-}" ]]; then
-    if ! command_exists fc-cache; then
-        warn "fontconfig not found — skipping Nerd Font installation"
-        warn "Please install a Nerd Font manually from https://www.nerdfonts.com/"
-    else
-        info "Downloading ${NERD_FONT_NAME} Nerd Font v${NERD_FONT_VERSION}…"
-        mkdir -p "$FONT_DIR"
-        FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/download/v${NERD_FONT_VERSION}/${NERD_FONT_ZIP}"
-        TMP_ZIP="/tmp/${NERD_FONT_ZIP}"
-
-        if curl -fSL "$FONT_URL" -o "$TMP_ZIP"; then
-            info "Extracting to ${FONT_DIR}…"
-            unzip -qo "$TMP_ZIP" -d "$FONT_DIR"
-            rm -f "$TMP_ZIP"
-            fc-cache -fv >/dev/null 2>&1
-            ok "${NERD_FONT_NAME} Nerd Font installed"
-            warn "Configure your terminal to use '${NERD_FONT_NAME} Nerd Font'"
-        else
-            fail "Could not download Nerd Font. Install manually from:"
-            fail "  https://www.nerdfonts.com/font-downloads"
-        fi
-    fi
-fi
-echo ""
-
-# Step 4: Setup wizard
-echo -e "  ${BOLD}Step 4/4: Setup wizard${RESET}"
+# Step 3: Setup wizard
+echo -e "  ${BOLD}Step 3/3: Setup wizard${RESET}"
 echo ""
 
 if command_exists "$BINARY_NAME"; then
@@ -209,7 +157,6 @@ echo -e "  $(printf '-%.0s' {1..50})"
 echo -e "  ${BOLD}${GREEN}Installation complete!${RESET}"
 echo ""
 echo -e "  Next steps:"
-echo -e "    1. Configure your terminal to use a Nerd Font (if not done)"
-echo -e "    2. Run ${BOLD}isi-music${RESET} to start playing"
-echo -e "    3. Run ${BOLD}isi-music doctor${RESET} if something isn't working"
+echo -e "    1. Run ${BOLD}isi-music${RESET} to start playing"
+echo -e "    2. Run ${BOLD}isi-music doctor${RESET} if something isn't working"
 echo ""
