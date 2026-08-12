@@ -22,7 +22,7 @@ isi-music is a terminal audio player for Spotify and local music, built in Rust 
     <td align="center"><img src="assets/showcases/gifs/showcase-2.gif" alt="Showcase 2"></td>
   </tr>
   <tr>
-    <td align="center" colspan="2"><video src="assets/showcases/0811.mp4" controls width="800"></video></td>
+    <td align="center" colspan="2"><video src="https://github.com/user-attachments/assets/7efd70f0-72cb-4ff7-8c68-a0a38f7ceecf" controls width="800"></video></td>
   </tr>
   <tr>
     <td align="center"><img src="assets/showcases/gifs/showcase-3.gif" alt="Showcase 3"></td>
