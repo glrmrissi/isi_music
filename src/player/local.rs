@@ -295,18 +295,19 @@ impl LocalPlayer {
             let seek_gen = self.seek_generation.fetch_add(1, Ordering::SeqCst);
 
             is_seeking.store(true, Ordering::SeqCst);
-            sink.stop();
+            self.load_guard = Some(Instant::now());
+            self.is_playing = false;
+            sink.clear();
+            sink.pause();
 
             std::thread::spawn(move || {
                 if seek_gen != generation.load(Ordering::Acquire) {
-                    is_seeking.store(false, Ordering::SeqCst);
                     return;
                 }
                 let decoder = LocalDecoder::open(&path);
 
                 if let Some(d) = decoder {
                     if seek_gen != generation.load(Ordering::Acquire) {
-                        is_seeking.store(false, Ordering::SeqCst);
                         return;
                     }
                     let skipped =
@@ -324,6 +325,13 @@ impl LocalPlayer {
                     }
                     sink.play();
 
+                    for _ in 0..200 {
+                        if !sink.empty() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+
                     is_seeking.store(false, Ordering::SeqCst);
                     let _ = event_tx.send(PlayerNotification::Playing);
                 } else {
@@ -334,6 +342,10 @@ impl LocalPlayer {
     }
 
     fn poll_sink(&mut self) {
+        if self.is_seeking.load(Ordering::SeqCst) {
+            return;
+        }
+
         if let Some(t) = self.load_guard {
             if t.elapsed().as_millis() < 500 {
                 return;
@@ -341,7 +353,7 @@ impl LocalPlayer {
             self.load_guard = None;
         }
 
-        if self.is_playing && self.sink.empty() && !self.is_seeking.load(Ordering::SeqCst) {
+        if self.is_playing && self.sink.empty() {
             self.is_playing = false;
             let _ = self.event_tx.send(PlayerNotification::TrackEnded);
         }
