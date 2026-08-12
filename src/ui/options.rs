@@ -247,12 +247,8 @@ impl SettingsPanel {
                     1 => SettingsAction::SetupLastfm,
                     2 => {
                         self.music_dir_editing = true;
-                        self.music_dir_input = self
-                            .config
-                            .local
-                            .music_dir
-                            .clone()
-                            .unwrap_or_default();
+                        self.music_dir_input =
+                            self.config.local.music_dir.clone().unwrap_or_default();
                         SettingsAction::EditMusicDir
                     }
                     3 => SettingsAction::ToggleItem,
@@ -541,7 +537,13 @@ impl SettingsPanel {
         self.render_item_list(frame, area, "General", &items, theme);
     }
 
-    fn render_account_section(&self, frame: &mut Frame, state: &UiState, area: Rect, theme: &Theme) {
+    fn render_account_section(
+        &self,
+        frame: &mut Frame,
+        state: &UiState,
+        area: Rect,
+        theme: &Theme,
+    ) {
         let accent_color = theme.accent_color;
         let text_color = theme.text_primary;
         let muted_color = theme.text_secondary;
@@ -586,7 +588,15 @@ impl SettingsPanel {
         let rows: Vec<(&str, &str, Color)> = vec![
             ("Spotify", spotify_status.0, spotify_status.1),
             ("Last.fm", lastfm_status.0, lastfm_status.1),
-            ("Music dir", &music_dir_status, if self.music_dir_editing { accent_color } else { text_color }),
+            (
+                "Music dir",
+                &music_dir_status,
+                if self.music_dir_editing {
+                    accent_color
+                } else {
+                    text_color
+                },
+            ),
             ("Discord", discord_status.0, discord_status.1),
         ];
 

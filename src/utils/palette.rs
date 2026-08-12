@@ -110,7 +110,6 @@ fn tint(base_hue: f32, s: f32, l: f32) -> Rgb {
     hsl_to_rgb(Hsl::new(base_hue, s, l))
 }
 
-
 /// A box of pixels in RGB space, used by the median-cut algorithm.
 #[derive(Clone)]
 struct Box {
@@ -177,17 +176,10 @@ impl Box {
             return Rgb::new(0, 0, 0);
         }
         let n = self.pixels.len() as u32;
-        let (sr, sg, sb) = self
-            .pixels
-            .iter()
-            .fold((0u32, 0u32, 0u32), |(r, g, b), p| {
-                (r + u32::from(p.r), g + u32::from(p.g), b + u32::from(p.b))
-            });
-        Rgb::new(
-            (sr / n) as u8,
-            (sg / n) as u8,
-            (sb / n) as u8,
-        )
+        let (sr, sg, sb) = self.pixels.iter().fold((0u32, 0u32, 0u32), |(r, g, b), p| {
+            (r + u32::from(p.r), g + u32::from(p.g), b + u32::from(p.b))
+        });
+        Rgb::new((sr / n) as u8, (sg / n) as u8, (sb / n) as u8)
     }
 }
 
@@ -212,11 +204,7 @@ pub fn extract_palette(img: &image::DynamicImage, count: usize) -> Vec<Rgb> {
 
     // Deduplicate identical pixels to reduce work — a solid-color cover
     // would otherwise carry 1024 copies of the same value.
-    pixels.sort_by(|a, b| {
-        a.r.cmp(&b.r)
-            .then(a.g.cmp(&b.g))
-            .then(a.b.cmp(&b.b))
-    });
+    pixels.sort_by(|a, b| a.r.cmp(&b.r).then(a.g.cmp(&b.g)).then(a.b.cmp(&b.b)));
     pixels.dedup();
 
     if pixels.is_empty() {
@@ -438,14 +426,8 @@ mod tests {
     #[test]
     fn derive_theme_preserves_layout() {
         let base = Theme::default();
-        let original_dir = base
-            .layout_tree
-            .direction;
-        let original_children = base
-            .layout_tree
-            .children
-            .as_ref()
-            .map(|c| c.len());
+        let original_dir = base.layout_tree.direction;
+        let original_children = base.layout_tree.children.as_ref().map(|c| c.len());
         let swatches = vec![Rgb::new(100, 150, 255)];
         let t = derive_theme(&swatches, &base);
         // Layout fields should be untouched — only colors change.

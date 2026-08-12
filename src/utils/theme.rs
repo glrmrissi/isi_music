@@ -1,4 +1,5 @@
 // TODO: modularize this file (~590 lines) into smaller modules
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::layout::{Constraint, Direction};
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,6 @@ use std::sync::{
     mpsc::{Receiver, channel},
 };
 use std::time::Duration;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::warn;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
@@ -34,6 +34,7 @@ impl From<SerializableDirection> for Direction {
 #[serde(rename_all = "snake_case")]
 pub enum UiWidget {
     Header,
+    Search,
     Library,
     Playlists,
     AlbumArt,
@@ -48,6 +49,7 @@ pub enum UiWidget {
     Lyrics,
     NowPlaying,
     FullscreenLyrics,
+    AlbumArtWithInfo,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq)]
@@ -117,6 +119,7 @@ impl From<WidgetStyle> for Style {
 #[serde(rename_all = "snake_case")]
 pub enum VisualizerStyle {
     BrailleBars,
+    BlockBars,
     Plasma,
     AnimeArt,
 }
@@ -687,9 +690,10 @@ impl Theme {
             if !relevant {
                 return;
             }
-            let dominated = event.paths.iter().any(|p| {
-                p.to_string_lossy().contains("theme.toml")
-            });
+            let dominated = event
+                .paths
+                .iter()
+                .any(|p| p.to_string_lossy().contains("theme.toml"));
             if !dominated {
                 return;
             }

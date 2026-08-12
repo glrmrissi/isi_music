@@ -640,7 +640,7 @@ impl App {
                 }
 
                 // Click on header → toggle play/pause (no double-click)
-                if matches!(widget, Some(UiWidget::Header)) {
+                if matches!(widget, Some(UiWidget::Header | UiWidget::Search)) {
                     self.dispatch(crate::keybinds::Action::PlayPause).await;
                     self.last_click_time = None;
                     return Ok(());

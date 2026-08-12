@@ -34,9 +34,10 @@ impl KeybindsWatcher {
             if !relevant {
                 return;
             }
-            let dominated = event.paths.iter().any(|p| {
-                p.to_string_lossy().contains("keybinds.toml")
-            });
+            let dominated = event
+                .paths
+                .iter()
+                .any(|p| p.to_string_lossy().contains("keybinds.toml"));
             if !dominated {
                 return;
             }

@@ -261,9 +261,7 @@ impl App {
                 .as_ref()
                 .map(|sr| sr.loading)
                 .unwrap_or(false),
-            Focus::Tracks => {
-                self.state.tracks_loading || self.pending_pagination.is_some()
-            }
+            Focus::Tracks => self.state.tracks_loading || self.pending_pagination.is_some(),
             Focus::Library | Focus::Playlists | Focus::Queue => false,
         }
     }

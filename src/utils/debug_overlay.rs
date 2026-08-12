@@ -80,8 +80,7 @@ struct OverlayInner {
 fn process_thread_count(pid: u32) -> u32 {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32,
-        TH32CS_SNAPTHREAD,
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
 
     unsafe {
