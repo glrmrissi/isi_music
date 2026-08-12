@@ -12,6 +12,7 @@ use ratatui::{
 use ratatui_image::Resize;
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthStr;
 
 use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
@@ -33,9 +34,9 @@ fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
     (lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2))
 }
 
-fn clamp_text(text: &str, max_width: usize) -> String {
+fn clamp_text(text: &str, max_width: usize) -> Cow<'_, str> {
     if text.width() <= max_width {
-        text.to_string()
+        Cow::Borrowed(text)
     } else {
         let mut result = String::new();
         let mut w = 0;
@@ -47,7 +48,8 @@ fn clamp_text(text: &str, max_width: usize) -> String {
             result.push(ch);
             w += cw;
         }
-        format!("{}...", result)
+        result.push_str("...");
+        Cow::Owned(result)
     }
 }
 
@@ -67,20 +69,20 @@ fn calculate_number_width(total: usize) -> usize {
     total.to_string().len()
 }
 
-struct ListWindow {
-    items: Vec<ListItem<'static>>,
+struct ListWindow<'a> {
+    items: Vec<ListItem<'a>>,
     start: usize,
     selected: Option<usize>,
 }
 
-fn build_list_window<F>(
+fn build_list_window<'a, F>(
     total: usize,
     height: usize,
     list_state: &ListState,
     mut item_fn: F,
-) -> ListWindow
+) -> ListWindow<'a>
 where
-    F: FnMut(usize) -> ListItem<'static>,
+    F: FnMut(usize) -> ListItem<'a>,
 {
     let visible = height.max(1);
     let selected = list_state
@@ -144,7 +146,7 @@ impl Ui {
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
-                                name.clone(),
+                                name.as_str(),
                                 Style::default()
                                     .fg(self.theme.text_primary)
                                     .add_modifier(Modifier::BOLD),
@@ -263,7 +265,7 @@ impl Ui {
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
-                                name.clone(),
+                                name.as_str(),
                                 Style::default()
                                     .fg(self.theme.text_primary)
                                     .add_modifier(Modifier::BOLD),
@@ -740,7 +742,7 @@ impl Ui {
             ])
         } else if let Some(msg) = &state.status_msg {
             Line::from(Span::styled(
-                msg.clone(),
+                msg.as_str(),
                 Style::default().fg(self.theme.info),
             ))
         } else if let Some(results) = &state.search_results {
@@ -1191,8 +1193,8 @@ impl Ui {
 
         let active = lyrics.active_idx(pb.progress_ms).unwrap_or(0);
 
-        let current = lyrics.lines.get(active).map(|l| l.text.clone());
-        let next = lyrics.lines.get(active + 1).map(|l| l.text.clone());
+        let current = lyrics.lines.get(active).map(|l| l.text.as_str());
+        let next = lyrics.lines.get(active + 1).map(|l| l.text.as_str());
 
         let lines: Vec<Line> = std::iter::once(Line::from(""))
             .chain(
@@ -1689,7 +1691,7 @@ impl Ui {
                                     Style::default().fg(self.theme.text_secondary),
                                 ),
                                 Span::styled(
-                                    t.name.clone(),
+                                    t.name.as_str(),
                                     Style::default().fg(self.theme.text_primary),
                                 ),
                                 Span::styled(
@@ -1705,7 +1707,7 @@ impl Ui {
                             ListItem::new(Line::from(vec![
                                 Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::styled(
-                                    a.name.clone(),
+                                    a.name.as_str(),
                                     Style::default().fg(self.theme.text_primary),
                                 ),
                             ]))
@@ -1717,7 +1719,7 @@ impl Ui {
                             ListItem::new(Line::from(vec![
                                 Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::styled(
-                                    a.name.clone(),
+                                    a.name.as_str(),
                                     Style::default().fg(self.theme.text_primary),
                                 ),
                                 Span::styled(
@@ -1736,7 +1738,7 @@ impl Ui {
                             ListItem::new(Line::from(vec![
                                 Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::styled(
-                                    p.name.clone(),
+                                    p.name.as_str(),
                                     Style::default().fg(self.theme.text_primary),
                                 ),
                             ]))
@@ -1841,7 +1843,10 @@ impl Ui {
                             format!("{:>3}. ", idx + 1),
                             Style::default().fg(self.theme.text_secondary),
                         ),
-                        Span::styled(t.name.clone(), Style::default().fg(self.theme.text_primary)),
+                        Span::styled(
+                            t.name.as_str(),
+                            Style::default().fg(self.theme.text_primary),
+                        ),
                         Span::styled(
                             format!(" - {}", t.artist),
                             Style::default().fg(self.theme.text_secondary),
@@ -1886,7 +1891,10 @@ impl Ui {
                     let a = &sr.artists[idx];
                     ListItem::new(Line::from(vec![
                         Span::styled(" ", Style::default().fg(self.theme.primary)),
-                        Span::styled(a.name.clone(), Style::default().fg(self.theme.text_primary)),
+                        Span::styled(
+                            a.name.as_str(),
+                            Style::default().fg(self.theme.text_primary),
+                        ),
                         Span::styled(
                             if a.genres.is_empty() {
                                 String::new()
@@ -1935,7 +1943,10 @@ impl Ui {
                     let a = &sr.albums[idx];
                     ListItem::new(Line::from(vec![
                         Span::styled(" ", Style::default().fg(self.theme.primary)),
-                        Span::styled(a.name.clone(), Style::default().fg(self.theme.text_primary)),
+                        Span::styled(
+                            a.name.as_str(),
+                            Style::default().fg(self.theme.text_primary),
+                        ),
                         Span::styled(
                             format!(" - {}", a.artist),
                             Style::default().fg(self.theme.text_secondary),
@@ -1980,7 +1991,10 @@ impl Ui {
                     let p = &sr.playlists[idx];
                     ListItem::new(Line::from(vec![
                         Span::styled(" ", Style::default().fg(self.theme.primary)),
-                        Span::styled(p.name.clone(), Style::default().fg(self.theme.text_primary)),
+                        Span::styled(
+                            p.name.as_str(),
+                            Style::default().fg(self.theme.text_primary),
+                        ),
                         Span::styled(
                             format!("  ({})", p.total_tracks),
                             Style::default().fg(self.theme.text_secondary),
@@ -2247,12 +2261,10 @@ impl Ui {
         }
 
         let pb = &state.playback;
-        let title = pb.title.clone();
-        let artist = pb.artist.clone();
 
-        let title_line = if !title.is_empty() {
+        let title_line = if !pb.title.is_empty() {
             Line::from(Span::styled(
-                clamp_text(&title, area.width as usize),
+                clamp_text(&pb.title, area.width as usize),
                 Style::default()
                     .fg(self.theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -2261,9 +2273,9 @@ impl Ui {
             Line::from("")
         };
 
-        let artist_line = if !artist.is_empty() {
+        let artist_line = if !pb.artist.is_empty() {
             Line::from(Span::styled(
-                clamp_text(&artist, area.width as usize),
+                clamp_text(&pb.artist, area.width as usize),
                 Style::default().fg(self.theme.text_secondary),
             ))
         } else {
@@ -2309,7 +2321,7 @@ impl Ui {
                     format!("{:>2}. ", idx + 1),
                     Style::default().fg(self.theme.text_secondary),
                 ),
-                Span::styled(name.clone(), Style::default().fg(self.theme.text_primary)),
+                Span::styled(name.as_str(), Style::default().fg(self.theme.text_primary)),
                 Span::styled(
                     format!(" - {}", artist),
                     Style::default().fg(self.theme.text_secondary),
@@ -2367,8 +2379,6 @@ impl Ui {
             return;
         }
 
-        let pb = state.playback.clone();
-
         #[cfg(feature = "album-art")]
         let info_area = if state.show_album_art {
             let art_size = area.height.min(18).min(area.width / 4).max(12);
@@ -2417,9 +2427,11 @@ impl Ui {
         let progress_area = info_grid[4];
         state.store_widget_rect(UiWidget::Progress, progress_area);
 
+        let pb = &state.playback;
+
         frame.render_widget(
             Paragraph::new(vec![Line::from(Span::styled(
-                pb.title.clone(),
+                pb.title.as_str(),
                 Style::default()
                     .fg(self.theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -2436,7 +2448,7 @@ impl Ui {
                         .add_modifier(Modifier::DIM),
                 ),
                 Span::styled(
-                    pb.artist.clone(),
+                    pb.artist.as_str(),
                     Style::default().fg(self.theme.text_primary),
                 ),
             ])]),
@@ -2457,7 +2469,7 @@ impl Ui {
                         .add_modifier(Modifier::DIM),
                 ),
                 Span::styled(
-                    pb.album.clone(),
+                    pb.album.as_str(),
                     Style::default().fg(self.theme.text_primary),
                 ),
             ])]),

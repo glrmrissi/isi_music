@@ -857,8 +857,7 @@ impl SettingsPanel {
             inner,
         );
 
-        let visible_lines: Vec<&Line> = lines.iter().skip(offset).take(visible).collect();
-        let text: Vec<Line> = visible_lines.into_iter().cloned().collect();
+        let text: Vec<Line> = lines.iter().skip(offset).take(visible).cloned().collect();
 
         let paragraph = Paragraph::new(Text::from(text))
             .style(Style::default().bg(theme.background))

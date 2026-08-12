@@ -254,7 +254,7 @@ impl App {
         }
         match self
             .spotify
-            .add_tracks_to_playlist(&playlist.id, &[uri.clone()], None)
+            .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(&uri), None)
             .await
         {
             Ok(_) => {
@@ -290,7 +290,7 @@ impl App {
         if let Some(playlist) = self.state.playlists.get(idx) {
             match self
                 .spotify
-                .add_tracks_to_playlist(&playlist.id, &[uri.clone()], None)
+                .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(&uri), None)
                 .await
             {
                 Ok(_) => {
@@ -555,8 +555,11 @@ impl App {
                 };
 
                 let new_pos = match code {
-                    KeyCode::Right => (self.state.playback.progress_ms + step_ms)
-                        .min(self.state.playback.duration_ms),
+                    KeyCode::Right => {
+                        let d = self.state.playback.duration_ms;
+                        let target = self.state.playback.progress_ms + step_ms;
+                        if d > 0 { target.min(d) } else { target }
+                    }
                     _ => self.state.playback.progress_ms.saturating_sub(step_ms),
                 };
 
@@ -880,8 +883,8 @@ impl App {
                     };
                     let track_id = self
                         .current_track_uri
-                        .split(':')
-                        .last()
+                        .rsplit(':')
+                        .next()
                         .unwrap_or("")
                         .to_string();
                     if track_id.is_empty() {
@@ -1354,8 +1357,8 @@ impl App {
                         // Not a playlist — check if track is liked
                         let track_id = self
                             .current_track_uri
-                            .split(':')
-                            .last()
+                            .rsplit(':')
+                            .next()
                             .unwrap_or("")
                             .to_string();
                         if track_id.is_empty() {
@@ -1583,10 +1586,11 @@ impl App {
         self.state.search_results = None;
 
         if let Ok((tracks, total, _)) = self.spotify.fetch_playlist_tracks(playlist_id, 0).await {
-            self.state.tracks = tracks.clone();
+            let tracks_len = tracks.len();
+            self.state.tracks = tracks;
             self.state.tracks_total = total;
-            self.state.tracks_offset = tracks.len() as u32;
-            self.state.tracks_api_offset = tracks.len() as u32;
+            self.state.tracks_offset = tracks_len as u32;
+            self.state.tracks_api_offset = tracks_len as u32;
             self.state.rebuild_sort_indices();
             self.state.track_list.select(Some(0));
             self.state.status_msg = Some(format!("Loaded: {playlist_name}"));
@@ -1615,10 +1619,11 @@ impl App {
         self.state.search_results = None;
 
         if let Ok((tracks, total)) = self.spotify.fetch_album_tracks(album_id, 0).await {
-            self.state.tracks = tracks.clone();
+            let tracks_len = tracks.len();
+            self.state.tracks = tracks;
             self.state.tracks_total = total;
-            self.state.tracks_offset = tracks.len() as u32;
-            self.state.tracks_api_offset = tracks.len() as u32;
+            self.state.tracks_offset = tracks_len as u32;
+            self.state.tracks_api_offset = tracks_len as u32;
             self.state.rebuild_sort_indices();
             self.state.track_list.select(Some(0));
             self.needs_redraw = true;
@@ -1647,10 +1652,11 @@ impl App {
         self.state.search_results = None;
 
         if let Ok((tracks, total)) = self.spotify.sync_liked_tracks().await {
-            self.state.tracks = tracks.clone();
+            let tracks_len = tracks.len();
+            self.state.tracks = tracks;
             self.state.tracks_total = total;
-            self.state.tracks_offset = tracks.len() as u32;
-            self.state.tracks_api_offset = tracks.len() as u32;
+            self.state.tracks_offset = tracks_len as u32;
+            self.state.tracks_api_offset = tracks_len as u32;
             self.state.rebuild_sort_indices();
             self.state.track_list.select(Some(0));
             self.needs_redraw = true;
@@ -1890,8 +1896,9 @@ impl App {
                                 .position(|t| t.uri == track.uri)
                                 .unwrap_or(0);
                             if let Some(player) = &mut self.player {
-                                player.set_queue_tracks(all_tracks.clone(), start_idx);
+                                player.set_queue_tracks(&all_tracks, start_idx);
                                 self.playing_tracks = all_tracks;
+                                self.state.status_msg = Some(format!("Playing {}…", track.name));
                                 self.state.playback.title = track.name.clone();
                                 self.state.playback.artist = track.artist.clone();
                                 self.state.playback.album = track.album.clone();
@@ -1947,7 +1954,7 @@ impl App {
                                 .filter(|t| !t.uri.starts_with("spotify:episode:"))
                                 .count();
                             if let Some(track) = self.state.tracks.get(actual_idx) {
-                                self.state.status_msg = Some(format!("Loading {}…", track.name));
+                                self.state.status_msg = Some(format!("Playing {}…", track.name));
                             }
                             player.set_queue(uris, adjusted_idx);
                             self.playing_tracks = self.state.tracks.clone();
@@ -2387,11 +2394,7 @@ impl App {
         }
 
         if let Some(player) = &mut self.player {
-            self.state.tracks = tracks.clone();
-            self.state.rebuild_sort_indices();
-            self.current_track_uri = uris[0].clone();
-            player.set_queue(uris, 0);
-
+            let tracks_len = tracks.len();
             if let Some(first) = tracks.first() {
                 self.state.playback.title = first.name.clone();
                 self.state.playback.artist = first.artist.clone();
@@ -2399,12 +2402,16 @@ impl App {
                 self.state.playback.duration_ms = first.duration_ms;
                 self.state.playback.art_url = first.cover_path.clone();
             }
+            self.state.tracks = tracks;
+            self.state.rebuild_sort_indices();
+            self.current_track_uri = uris[0].clone();
+            player.set_queue(uris, 0);
 
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
             self.playing_started_at = Some(Instant::now());
-            self.state.status_msg = Some(format!("Playing playlist ({} tracks)", tracks.len()));
+            self.state.status_msg = Some(format!("Playing playlist ({tracks_len} tracks)"));
             self.on_track_started();
         } else {
             warn!("No player available");
@@ -2464,11 +2471,7 @@ impl App {
         }
 
         if let Some(player) = &mut self.player {
-            self.state.tracks = tracks.clone();
-            self.state.rebuild_sort_indices();
-            self.current_track_uri = uris[0].clone();
-            player.set_queue(uris, 0);
-
+            let tracks_len = tracks.len();
             if let Some(first) = tracks.first() {
                 self.state.playback.title = first.name.clone();
                 self.state.playback.artist = first.artist.clone();
@@ -2476,12 +2479,16 @@ impl App {
                 self.state.playback.duration_ms = first.duration_ms;
                 self.state.playback.art_url = first.cover_path.clone();
             }
+            self.state.tracks = tracks;
+            self.state.rebuild_sort_indices();
+            self.current_track_uri = uris[0].clone();
+            player.set_queue(uris, 0);
 
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
             self.playing_started_at = Some(Instant::now());
-            self.state.status_msg = Some(format!("Playing album ({} tracks)", tracks.len()));
+            self.state.status_msg = Some(format!("Playing album ({tracks_len} tracks)"));
             self.on_track_started();
         } else {
             warn!("No player available");
@@ -2541,11 +2548,7 @@ impl App {
         }
 
         if let Some(player) = &mut self.player {
-            self.state.tracks = tracks.clone();
-            self.state.rebuild_sort_indices();
-            self.current_track_uri = uris[0].clone();
-            player.set_queue(uris, 0);
-
+            let tracks_len = tracks.len();
             if let Some(first) = tracks.first() {
                 self.state.playback.title = first.name.clone();
                 self.state.playback.artist = first.artist.clone();
@@ -2553,12 +2556,16 @@ impl App {
                 self.state.playback.duration_ms = first.duration_ms;
                 self.state.playback.art_url = first.cover_path.clone();
             }
+            self.state.tracks = tracks;
+            self.state.rebuild_sort_indices();
+            self.current_track_uri = uris[0].clone();
+            player.set_queue(uris, 0);
 
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
             self.playing_started_at = Some(Instant::now());
-            self.state.status_msg = Some(format!("Playing artist ({} tracks)", tracks.len()));
+            self.state.status_msg = Some(format!("Playing artist ({tracks_len} tracks)"));
             self.on_track_started();
         } else {
             warn!("No player available");

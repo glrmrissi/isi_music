@@ -96,9 +96,7 @@ impl Ui {
                     self.render_marquee(frame, &state.playback, state.marquee_offset, area)
                 }
                 UiWidget::Visualizer => {
-                    let viz_bands = state.viz_bands.clone();
-                    let pb = state.playback.clone();
-                    self.render_visualizer(frame, &pb, &viz_bands, area, state);
+                    self.render_visualizer(frame, &state.playback, &state.viz_bands, area, state);
                 }
                 UiWidget::Help => {}
                 UiWidget::AsciiArt => self.render_ascii_art(frame, area),

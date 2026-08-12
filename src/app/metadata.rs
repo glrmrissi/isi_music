@@ -30,11 +30,9 @@ fn read_opus_metadata(path: &Path) -> Option<(String, String, String, u64, Optio
         .unwrap_or_default();
 
     // Get first picture (usually cover front)
-    let cover_art = tag.iter_pictures().and_then(|mut iter| {
-        iter.next()
-            .and_then(|res| res.ok())
-            .map(|pic| pic.data.clone())
-    });
+    let cover_art = tag
+        .iter_pictures()
+        .and_then(|mut iter| iter.next().and_then(|res| res.ok()).map(|pic| pic.data));
 
     // Duration from the last Ogg page's granule position
     let duration_ms = read_opus_duration(path).unwrap_or(0);
@@ -66,15 +64,26 @@ fn read_opus_duration(path: &Path) -> Option<u64> {
 
 /// Strip control characters from a string, keeping only printable chars, tab, and newline.
 /// Removes C0 controls (0x00-0x08, 0x0B-0x1F), DEL (0x7F), and C1 controls (0x80-0x9F).
-pub fn sanitize_control_chars(s: &str) -> String {
-    s.chars()
-        .filter(|c| {
-            let code = *c as u32;
-            code == 0x09        // TAB
-                || code == 0x0A // LF (newline)
-                || (code >= 0x20 && code != 0x7F && !(0x80..0xA0).contains(&code))
-        })
-        .collect()
+pub fn sanitize_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
+    let needs_sanitize = s.chars().any(|c| {
+        let code = c as u32;
+        code != 0x09
+            && code != 0x0A
+            && (code < 0x20 || code == 0x7F || (0x80..0xA0).contains(&code))
+    });
+    if !needs_sanitize {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(
+        s.chars()
+            .filter(|c| {
+                let code = *c as u32;
+                code == 0x09        // TAB
+                    || code == 0x0A // LF (newline)
+                    || (code >= 0x20 && code != 0x7F && !(0x80..0xA0).contains(&code))
+            })
+            .collect(),
+    )
 }
 
 pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<Vec<u8>>) {
@@ -93,9 +102,9 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
     {
         if let Some((title, artist, album, duration_ms, cover_art)) = read_opus_metadata(path) {
             return (
-                sanitize_control_chars(&title),
-                sanitize_control_chars(&artist),
-                sanitize_control_chars(&album),
+                sanitize_control_chars(&title).into_owned(),
+                sanitize_control_chars(&artist).into_owned(),
+                sanitize_control_chars(&album).into_owned(),
                 duration_ms,
                 cover_art,
             );
@@ -240,9 +249,9 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
     }
 
     (
-        sanitize_control_chars(&title),
-        sanitize_control_chars(&artist),
-        sanitize_control_chars(&album),
+        sanitize_control_chars(&title).into_owned(),
+        sanitize_control_chars(&artist).into_owned(),
+        sanitize_control_chars(&album).into_owned(),
         duration_ms,
         cover_art,
     )

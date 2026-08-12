@@ -18,7 +18,12 @@ impl App {
         match idx {
             0 => {
                 self.state.push_nav();
-                self.state.status_msg = Some("Loading Liked Songs…".to_string());
+                let first_load = !self.spotify.library_cache.has_liked_tracks_cache();
+                self.state.status_msg = Some(if first_load {
+                    "Loading Liked Songs (first load may take a while)…".to_string()
+                } else {
+                    "Loading Liked Songs…".to_string()
+                });
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = oneshot::channel();
@@ -80,7 +85,7 @@ impl App {
         self.state.active_playlist_uri = Some(playlist.uri.clone());
         self.state.active_playlist_id = Some(playlist.id.clone());
         let spotify = Arc::clone(&self.spotify);
-        let playlist_id = playlist.id.clone();
+        let playlist_id = playlist.id;
         let (tx, rx) = oneshot::channel();
         self.pending_fetch = Some(rx);
         tokio::spawn(async move {
@@ -237,13 +242,16 @@ impl App {
                                     Ok(crate::spotify::TrackSummary {
                                         name: crate::app::metadata::sanitize_control_chars(
                                             &row.get::<_, String>(0)?,
-                                        ),
+                                        )
+                                        .into_owned(),
                                         artist: crate::app::metadata::sanitize_control_chars(
                                             &row.get::<_, String>(1)?,
-                                        ),
+                                        )
+                                        .into_owned(),
                                         album: crate::app::metadata::sanitize_control_chars(
                                             &row.get::<_, String>(2)?,
-                                        ),
+                                        )
+                                        .into_owned(),
                                         duration_ms: row.get(3)?,
                                         uri: uri.clone(),
                                         cover_path: row.get(4).ok(),
