@@ -107,20 +107,6 @@ jobs:
             asset_name: isi-music-linux-x86_64
             use_cross: false
 
-          - os: macos-latest
-            label: macOS Intel
-            target: x86_64-apple-darwin
-            artifact_name: isi-music
-            asset_name: isi-music-macos-intel
-            use_cross: false
-
-          - os: macos-latest
-            label: macOS ARM64
-            target: aarch64-apple-darwin
-            artifact_name: isi-music
-            asset_name: isi-music-macos-arm64
-            use_cross: false
-
           - os: windows-latest
             label: Windows x86_64
             target: x86_64-pc-windows-msvc

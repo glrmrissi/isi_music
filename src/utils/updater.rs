@@ -20,14 +20,6 @@ fn asset_name_for_platform() -> &'static str {
     {
         "isi-music-linux-x86_64"
     }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        "isi-music-macos-arm64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        "isi-music-macos-intel"
-    }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
         "isi-music-windows-x86_64.exe"
