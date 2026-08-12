@@ -16,6 +16,20 @@ isi-music is a terminal audio player for Spotify and local music, built in Rust 
 
 > Spotify Premium is required for streaming. Local playback does not require a Spotify account.
 
+<table>
+  <tr>
+    <td align="center"><img src="assets/showcases/gifs/showcase-1.gif" alt="Showcase 1"></td>
+    <td align="center"><img src="assets/showcases/gifs/showcase-2.gif" alt="Showcase 2"></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><video src="assets/showcases/0811.mp4" controls width="800"></video></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/showcases/gifs/showcase-3.gif" alt="Showcase 3"></td>
+    <td align="center"><img src="assets/showcases/gifs/showcase-4.gif" alt="Showcase 4"></td>
+  </tr>
+</table>
+
 ## Installation
 
 ### Quick install
