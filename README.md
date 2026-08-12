@@ -60,14 +60,6 @@ chmod +x isi-music
 sudo mv isi-music /usr/local/bin/
 ```
 
-**macOS**
-
-```bash
-curl -L https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-macos-arm64 -o isi-music
-chmod +x isi-music
-sudo mv isi-music /usr/local/bin/
-```
-
 **Windows**
 
 ```powershell
@@ -100,6 +92,7 @@ For a specific setup step:
 isi-music setup-spotify
 isi-music setup-lastfm
 isi-music doctor
+isi-music update
 ```
 
 The Spotify setup uses your custom Client ID for the Web API and the built-in librespot Client ID for streaming. Configure both OAuth accounts at startup. Leave the Web API Client ID blank for streaming-only mode.
@@ -136,23 +129,38 @@ Both authentications happen during setup/startup. No `client_secret` is required
 | --- | --- |
 | `Tab` / `Shift+Tab` | Move between panels |
 | `↑` / `↓` or `j` / `k` | Navigate |
+| `Ctrl+↑` / `Ctrl+↓` | Jump to first or last item |
+| `M` | Jump to middle of list |
+| `PageUp` / `PageDown` | Scroll up or down |
 | `1` / `2` / `3` / `4` | Focus Library, Playlists, Tracks, or Queue |
 | `Enter` | Play, open an album, or open an artist |
+| `Esc` | Go back |
 | `Space` | Play or pause |
 | `n` / `p` | Next or previous track |
 | `s` | Toggle shuffle |
 | `r` | Cycle repeat mode |
 | `+` / `-` | Change volume |
 | `←` / `→` | Seek five seconds |
+| `5` | Seek to middle of track |
 | `/` | Search |
+| `Ctrl+F` | Quick search |
 | `c` | Jump to the playing track |
 | `a` | Add the selected track to the queue |
+| `Delete` | Remove from queue |
 | `l` | Like the current track |
+| `o` | Sort tracks |
+| `A` | Add to playlist |
+| `D` | Remove from playlist |
+| `Alt+D` | Delete playlist |
 | `z` | Toggle fullscreen |
 | `m` | Toggle compact mode |
 | `v` | Toggle visualizer |
 | `y` | Toggle lyrics |
 | `t` | Open options |
+| `:` | Command prompt |
+| `Ctrl+Y` | Copy track link |
+| `Shift+B` | Toggle breadcrumb |
+| `d` | Toggle debug overlay |
 | `?` | Open help |
 | `q` or `Ctrl+C` | Quit |
 
@@ -163,12 +171,21 @@ All keybindings can be overridden in `keybinds.toml`.
 ```bash
 isi-music --status
 isi-music --devices
+isi-music --device <name>
 isi-music --next
 isi-music --prev
 isi-music --toggle
 isi-music --vol+
 isi-music --vol-
+isi-music --playlists
+isi-music --play <ID|name>
+isi-music --liked [--limit N]
+isi-music --search <query>
+isi-music --search-global <query>
+isi-music --ls [--limit N]
+isi-music --play-id <N>
 isi-music --clear-logs
+isi-music update
 ```
 
 ### Daemon mode
@@ -185,7 +202,7 @@ isi-music --status
 isi-music --quit-daemon
 ```
 
-Daemon logs are stored at `~/.cache/isi-music/isi-music.log` on Linux and in the platform cache directory on Windows and macOS. Local file playback is available in TUI mode.
+Daemon logs are stored at `~/.local/share/isi-music/isi-music.log` on Linux and in the platform data directory on Windows. Local file playback is available in TUI mode.
 
 ## Local files
 
@@ -213,7 +230,6 @@ Configuration files live in:
 | Platform | Location |
 | --- | --- |
 | Linux | `~/.config/isi-music/` |
-| macOS | `~/Library/Application Support/isi-music/` |
 | Windows | `%APPDATA%\isi-music\` |
 
 A minimal configuration looks like this:
@@ -253,7 +269,22 @@ style = "braille_bars"
 height = 8
 ```
 
-Available visualizer styles are `braille_bars`, `plasma`, and `anime_art`. Colors accept hex, named colors, or `rgb(r,g,b)` values.
+Available visualizer styles are `braille_bars`, `block_bars`, `plasma`, and `anime_art`. Colors accept hex, named colors, or `rgb(r,g,b)` values.
+
+When `reactive_theme` is enabled, the interface colors shift to match the album art of the currently playing track, with a smooth cross-fade controlled by `reactive_cross_fade_ms`.
+
+The wizard offers 9 color palettes: Neutral Dark, Catppuccin Mocha, Gruvbox Dark, Nord, Rose Pine, Tokyo Night, Dracula, Monochrome, and Clean.
+
+It also offers 6 layouts:
+
+| Layout | Description |
+| --- | --- |
+| Default | Standard three-column layout |
+| Clean | Minimal borders, focused on content |
+| Focus | Centered track list with sidebar navigation |
+| Sidebar Right | Navigation on the right side |
+| Full Player | Album art, lyrics, and visualizer with library and playlists |
+| Showcase | Central album art with track info, lyrics, and visualizer |
 
 ### Custom keybindings
 
@@ -301,6 +332,10 @@ enabled = true
 
 The repository includes the application logo, Windows icon, and Linux `.desktop` launcher under `assets/`. Installers configure the platform integration automatically where supported.
 
+### IPC
+
+The daemon communicates with CLI commands via a Unix socket on Linux (`$XDG_RUNTIME_DIR/isi-music.sock`) and a named pipe on Windows (`\\.\pipe\isi-music`). This allows `isi-music --status`, `--next`, `--play`, and other commands to control a running daemon.
+
 ## Development
 
 ### Build from source
@@ -326,12 +361,15 @@ Windows requires MSVC Build Tools and CMake. The bundled Opus build uses CMake o
 
 ### Feature flags
 
-The default build enables Spotify, Discord, Last.fm, the setup wizard, visualizer, lyrics, and album art. MPRIS is optional on Linux.
+The default build enables Spotify, Discord, album art, and palette (reactive theming). MPRIS is optional on Linux.
 
 ```bash
 cargo build --release --no-default-features -F spotify,discord
 cargo build --release --no-default-features -F spotify,discord,mpris
+cargo build --release --no-default-features -F spotify,album-art
 ```
+
+Available features: `spotify`, `discord`, `album-art`, `palette`, `mpris`.
 
 ### Verification
 
