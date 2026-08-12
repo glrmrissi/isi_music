@@ -185,11 +185,7 @@ impl SpClient {
         // then presented with a hash cash challenge. On Linux, we have to pass the old keymaster ID.
         // We delegate most of this logic to `SessionConfig`.
         let os = OS;
-        let client_id = match os {
-            "macos" | "windows" => self.session().client_id(),
-            os => SessionConfig::default_for_os(os).client_id,
-        };
-        client_data.client_id = client_id;
+        client_data.client_id = SessionConfig::default_for_os(os).client_id;
 
         let connectivity_data = client_data.mut_connectivity_sdk_data();
         connectivity_data.device_id = self.session().device_id().to_string();
@@ -491,7 +487,26 @@ impl SpClient {
                 .body(Bytes::copy_from_slice(body))?;
 
             // Reconnection logic: keep getting (cached) tokens because they might have expired.
-            let token = self.session().login5().auth_token().await?;
+            let keymaster_client_id = SessionConfig::default_for_os(OS).client_id;
+            let token = if self.session().client_id() == keymaster_client_id {
+                match self.session().login5().auth_token().await {
+                    Ok(token) => token,
+                    Err(login5_error) => {
+                        warn!(
+                            "login5 token retrieval failed ({login5_error}); falling back to keymaster"
+                        );
+                        self.session()
+                            .token_provider()
+                            .get_token_with_client_id("playlist-read", &keymaster_client_id)
+                            .await?
+                    }
+                }
+            } else {
+                self.session()
+                    .token_provider()
+                    .get_token_with_client_id("playlist-read", &keymaster_client_id)
+                    .await?
+            };
 
             let headers_mut = request.headers_mut();
             if let Some(ref headers) = headers {
