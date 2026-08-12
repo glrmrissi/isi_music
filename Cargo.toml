@@ -2,7 +2,7 @@
 name = "isi-music"
 version = "1.4.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Guilherme Rissi <guilhermerissi04112006@gmail.com>"]
 license = "MIT"
 description = "Terminal audio player for Spotify streaming and local file playback"
@@ -24,7 +24,7 @@ librespot-core = { path = "patches/librespot-core" }
 tokio = { version = "1", features = ["full"] }
 
 # TUI
-ratatui = "0.29"
+ratatui = { version = "0.30.2", features = ["crossterm_0_28", "unstable-backend-writer"] }
 crossterm = "0.28"
 
 # Spotify API
@@ -87,7 +87,7 @@ libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 
 # Image rendering in terminal (kitty/sixel/halfblocks auto-detection)
-ratatui-image = { version = "9", default-features = false, features = ["crossterm"], optional = true }
+ratatui-image = { version = "11.0.6", default-features = false, features = ["crossterm"], optional = true }
 
 # Error handling
 anyhow = "1"
@@ -178,7 +178,7 @@ debug = true
 [features]
 mpris = ["mpris-server"]
 discord = ["discord-rich-presence"]
-album-art = ["image", "ratatui-image"]
+album-art = ["image", "dep:ratatui-image"]
 palette = ["album-art"]
 default = ["discord", "spotify", "album-art", "palette"]
 spotify = []
