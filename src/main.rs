@@ -5,7 +5,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::Terminal;
 #[cfg(feature = "album-art")]
 use ratatui_image::picker::Picker;
 #[cfg(unix)]
@@ -16,6 +16,7 @@ use std::os::fd::AsRawFd;
 
 mod app;
 mod audio;
+mod backend;
 mod config;
 mod daemon;
 mod keybinds;
@@ -127,83 +128,46 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
     println!(
         "{}",
-        bl!("  Opening Spotify Developer Dashboard in your browser...")
-    );
-    println!("{}", bl!(""));
-
-    // Auto-open the Spotify Developer Dashboard
-    let _ = open::that("https://developer.spotify.com/dashboard");
-
-    // Auto-copy the Redirect URI to clipboard
-    let redirect_uri = "http://127.0.0.1:8888/callback";
-    let clipboard_msg = match arboard::Clipboard::new() {
-        Ok(mut cb) => {
-            if cb.set_text(redirect_uri).is_ok() {
-                "copied to clipboard"
-            } else {
-                "copy from below"
-            }
-        }
-        Err(_) => "copy from below",
-    };
-
-    println!(
-        "{}",
-        bl!(format!(
-            "  {BOLD}1.{RESET} Click {BOLD}\"Create app\"{RESET} (dashboard is open)"
-        ))
+        bl!("  A custom Client ID is used for Spotify Web API requests.")
     );
     println!(
         "{}",
-        bl!(format!("  {BOLD}2.{RESET} Give it any name & description"))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "  {BOLD}3.{RESET} Add Redirect URI ({YELLOW}{clipboard_msg}{RESET}):"
-        ))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "       {YELLOW}http://127.0.0.1:8888/callback{RESET}"
-        ))
-    );
-    println!(
-        "{}",
-        bl!(format!("  {BOLD}4.{RESET} Click {BOLD}\"Save\"{RESET}"))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "  {BOLD}5.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below"
-        ))
+        bl!("  The built-in client is reserved for librespot streaming.")
     );
     println!("{}", bl!(""));
     println!(
         "{}",
         bl!(format!(
-            "  {YELLOW}Uses PKCE - no client_secret needed!{RESET}"
+            "  {YELLOW}If you hit the 5-user limit on the shared client ID,{RESET}"
+        ))
+    );
+    println!(
+        "{}",
+        bl!(format!(
+            "  {YELLOW}leave it blank for streaming-only mode.{RESET}"
         ))
     );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
-    let client_id = loop {
-        let v = prompt("Client ID: ");
-        if !v.is_empty() {
-            if v.len() < 10 {
-                println!(
-                    "  {YELLOW}That doesn't look like a valid Client ID, but I'll save it anyway.{RESET}"
-                );
-            }
-            break v;
-        }
-        println!("  {YELLOW}Client ID cannot be empty.{RESET}");
-    };
+    let client_id = prompt("Web API Client ID (press Enter for streaming-only): ");
+    let trimmed = client_id.trim().to_string();
 
-    cfg.spotify.client_id = Some(client_id);
-    cfg.save()?;
-    println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    if !trimmed.is_empty() {
+        if trimmed.len() < 10 {
+            println!(
+                "  {YELLOW}That doesn't look like a valid Client ID, but I'll save it anyway.{RESET}"
+            );
+        }
+        cfg.spotify.client_id = Some(trimmed);
+        cfg.save()?;
+        println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    } else {
+        cfg.spotify.client_id = None;
+        cfg.save()?;
+        config::clear_refresh_token();
+        config::clear_streaming_refresh_token();
+        println!("  {GREEN}[OK]{RESET}  Streaming-only mode selected.\n");
+    }
 
     let authenticate = loop {
         let v = prompt("Authenticate with Spotify now? (Y/n): ");
@@ -217,17 +181,35 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     };
 
     if authenticate {
-        let client_id = cfg.get_client_id().unwrap_or_default();
-        if !client_id.is_empty() {
-            match crate::spotify::auth::SpotifyAuth::authenticate().await {
-                Ok((_access_token, refresh_token, _expires_in)) => {
+        let has_web_api_client = cfg.get_client_id().is_some();
+        let result = if has_web_api_client {
+            crate::spotify::auth::SpotifyAuth::authenticate().await
+        } else {
+            crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
+                config::OFFICIAL_CLIENT_ID,
+            )
+            .await
+        };
+
+        match result {
+            Ok((_access_token, refresh_token, _expires_in)) => {
+                if has_web_api_client {
                     crate::config::save_refresh_token(&refresh_token);
-                    println!("  {GREEN}[OK]{RESET}  Authenticated successfully!\n");
+                    println!("  {GREEN}[OK]{RESET}  Web API authenticated.\n");
+                    println!("  Authenticating streaming with librespot...");
+                    crate::player::ensure_streaming_auth().await?;
+                    println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
+                } else {
+                    crate::config::save_streaming_refresh_token(&refresh_token);
+                    println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
                 }
-                Err(e) => {
-                    println!("  {YELLOW}Authentication failed: {e}{RESET}");
-                    println!("  You can authenticate later by launching isi-music normally.\n");
+            }
+            Err(e) => {
+                if e.to_string().contains("Authentication cancelled") {
+                    return Err(e);
                 }
+                println!("  {YELLOW}Authentication failed: {e}{RESET}");
+                println!("  You can authenticate later by launching isi-music normally.\n");
             }
         }
     } else {
@@ -296,13 +278,11 @@ SETUP
 
 SPOTIFY STREAMING
   Run `isi-music setup-spotify` to configure Spotify.
-  The setup will:
-    1. Guide you to create a Spotify app at developer.spotify.com
-    2. Ask for your Client ID (no secret needed — uses PKCE)
-    3. Authenticate with Spotify in your browser
-    4. Save credentials to ~/.config/isi-music/config.toml
-  Each user needs their own Client ID (5-user limit in Dev Mode).
-  Set redirect URI to: http://127.0.0.1:8888/callback
+  Your Client ID is used for the Web API.
+  The built-in librespot Client ID is used only for streaming.
+  Custom apps use: http://127.0.0.1:8888/callback
+  Streaming uses: http://127.0.0.1:8898/login
+  Both OAuth flows run during setup/startup.
 
 LAST.FM SCROBBLING
   Run `isi-music setup-lastfm` to enable scrobbling.
@@ -330,7 +310,7 @@ FILES
 
 fn main() -> Result<()> {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
 
     if let Ok(env_path) = config::env_path() {
         dotenvy::from_path(&env_path).ok();
@@ -557,15 +537,17 @@ fn main() -> Result<()> {
     if first_run {
         // Safety: set_var is unsafe in edition 2024 because it's not thread-safe.
         // We call this before any threads are spawned.
-        unsafe { std::env::set_var("ISI_MUSIC_FIRST_RUN", "1"); }
+        unsafe {
+            std::env::set_var("ISI_MUSIC_FIRST_RUN", "1");
+        }
     }
 
-    if cfg.spotify.client_id.is_none() && std::env::var("SPOTIFY_CLIENT_ID").is_err() {
+    if config::load_refresh_token().is_none() && config::load_streaming_refresh_token().is_none() {
         println!();
-        println!("  {YELLOW}Spotify not configured.{RESET} You can still use local files.");
-        println!("  Run {BOLD}isi-music setup-spotify{RESET} to enable Spotify streaming.\n");
+        println!("  {YELLOW}First time with Spotify?{RESET} Authenticate now to enable streaming.");
+        println!("  (Streaming uses the built-in client; Web API needs your Client ID.)\n");
         let setup_now = loop {
-            let v = prompt("Configure Spotify now? (Y/n): ");
+            let v = prompt("Authenticate with Spotify now? (Y/n): ");
             let v = v.trim().to_lowercase();
             if v.is_empty() || v == "y" || v == "yes" {
                 break true;
@@ -612,11 +594,11 @@ fn main() -> Result<()> {
             enable_raw_mode()?;
             let mut stdout = io::stdout();
             execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-            let backend = CrosstermBackend::new(stdout);
+            let backend = crate::backend::StableCrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
             terminal.clear()?;
 
-            let mut app = App::new(
+            let mut app = match App::new(
                 #[cfg(feature = "album-art")]
                 picker,
                 theme,
@@ -624,7 +606,20 @@ fn main() -> Result<()> {
                 keybinds,
                 keybinds_rx,
             )
-            .await?;
+            .await
+            {
+                Ok(app) => app,
+                Err(err) => {
+                    let _ = disable_raw_mode();
+                    let _ = execute!(
+                        terminal.backend_mut(),
+                        DisableMouseCapture,
+                        LeaveAlternateScreen
+                    );
+                    let _ = terminal.show_cursor();
+                    return Err(err);
+                }
+            };
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

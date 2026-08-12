@@ -90,9 +90,8 @@ where
         .min(total.saturating_sub(visible));
     let end = (start + visible).min(total);
     let items = (start..end).map(|index| item_fn(index)).collect();
-    let local_selected = selected.and_then(|index| {
-        (index >= start && index < end).then_some(index - start)
-    });
+    let local_selected =
+        selected.and_then(|index| (index >= start && index < end).then_some(index - start));
 
     ListWindow {
         items,
@@ -201,7 +200,7 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
             render_list_window(
                 frame,
                 list,
@@ -324,7 +323,7 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
         render_list_window(
             frame,
@@ -355,7 +354,11 @@ impl Ui {
             return;
         }
 
-        let viz_color = self.theme.visualizer.color.unwrap_or(self.theme.accent_color);
+        let viz_color = self
+            .theme
+            .visualizer
+            .color
+            .unwrap_or(self.theme.accent_color);
 
         let effective_h = self
             .theme
@@ -370,13 +373,37 @@ impl Ui {
 
         match self.theme.visualizer.style {
             crate::utils::theme::VisualizerStyle::BrailleBars => {
-                self.render_braille_bars(frame, pb, viz_bands, inner, viz_top, effective_h, viz_color);
+                self.render_braille_bars(
+                    frame,
+                    pb,
+                    viz_bands,
+                    inner,
+                    viz_top,
+                    effective_h,
+                    viz_color,
+                );
             }
             crate::utils::theme::VisualizerStyle::Plasma => {
-                self.render_plasma_wave(frame, pb, viz_bands, inner, viz_top, effective_h, viz_color);
+                self.render_plasma_wave(
+                    frame,
+                    pb,
+                    viz_bands,
+                    inner,
+                    viz_top,
+                    effective_h,
+                    viz_color,
+                );
             }
             crate::utils::theme::VisualizerStyle::AnimeArt => {
-                self.render_anime_art_viz(frame, pb, viz_bands, inner, viz_top, effective_h, viz_color);
+                self.render_anime_art_viz(
+                    frame,
+                    pb,
+                    viz_bands,
+                    inner,
+                    viz_top,
+                    effective_h,
+                    viz_color,
+                );
             }
         }
     }
@@ -470,8 +497,13 @@ impl Ui {
 
         for x in 0..n_bars {
             let phase = x as f64 * 0.3;
-            let band_idx = (x * viz_bands.len() / n_bars.max(1)).min(viz_bands.len().saturating_sub(1));
-            let band = if viz_bands.is_empty() { 0.0 } else { viz_bands[band_idx] as f64 };
+            let band_idx =
+                (x * viz_bands.len() / n_bars.max(1)).min(viz_bands.len().saturating_sub(1));
+            let band = if viz_bands.is_empty() {
+                0.0
+            } else {
+                viz_bands[band_idx] as f64
+            };
             let amp = (band * 0.6 + energy * 0.4).clamp(0.0, 1.0);
             let wave = (phase + (band * 6.0)).sin() * amp * mid * 0.8;
             let y = (mid + wave).round() as i64;
@@ -591,10 +623,7 @@ impl Ui {
                 Line::from(spans)
             } else if state.quick_search_active {
                 let mut spans = vec![
-                    Span::styled(
-                        " Quick Search: ",
-                        Style::default().fg(self.theme.primary),
-                    ),
+                    Span::styled(" Quick Search: ", Style::default().fg(self.theme.primary)),
                     Span::styled(
                         &state.quick_search_query,
                         Style::default().fg(self.theme.text_primary),
@@ -774,7 +803,7 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
         frame.render_stateful_widget(list, area, &mut state.library_list);
     }
@@ -814,21 +843,16 @@ impl Ui {
             items,
             start,
             selected,
-        } = build_list_window(
-            total,
-            inner.height as usize,
-            &state.playlist_list,
-            |idx| {
-                let p = &state.playlists[idx];
-                ListItem::new(Line::from(vec![
-                    Span::raw(format!(" {} ", p.name)),
-                    Span::styled(
-                        format!("({})", p.total_tracks),
-                        Style::default().fg(self.theme.text_secondary),
-                    ),
-                ]))
-            },
-        );
+        } = build_list_window(total, inner.height as usize, &state.playlist_list, |idx| {
+            let p = &state.playlists[idx];
+            ListItem::new(Line::from(vec![
+                Span::raw(format!(" {} ", p.name)),
+                Span::styled(
+                    format!("({})", p.total_tracks),
+                    Style::default().fg(self.theme.text_secondary),
+                ),
+            ]))
+        });
 
         let list = List::new(items)
             .block(block)
@@ -838,16 +862,9 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
-        render_list_window(
-            frame,
-            list,
-            area,
-            &mut state.playlist_list,
-            start,
-            selected,
-        );
+        render_list_window(frame, list, area, &mut state.playlist_list, start, selected);
     }
 
     pub fn render_welcome(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -890,7 +907,7 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
             frame.render_stateful_widget(list, area, &mut state.library_list);
             return;
         }
@@ -1275,15 +1292,8 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
-            render_list_window(
-                frame,
-                list,
-                area,
-                &mut state.track_list,
-                start,
-                selected,
-            );
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
+            render_list_window(frame, list, area, &mut state.track_list, start, selected);
             return;
         }
 
@@ -1383,16 +1393,9 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
-        render_list_window(
-            frame,
-            list,
-            area,
-            &mut state.track_list,
-            start,
-            selected,
-        );
+        render_list_window(frame, list, area, &mut state.track_list, start, selected);
     }
 
     pub fn render_albums(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -1403,19 +1406,19 @@ impl Ui {
                 start,
                 selected,
             } = build_list_window(total, area.height as usize, &state.album_list, |idx| {
-                    let a = &state.albums[idx];
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.text_secondary),
-                        ),
-                        Span::raw(clamp_text(&a.name, 30)),
-                        Span::styled(
-                            format!("  {}", clamp_text(&a.artist, 20)),
-                            Style::default().fg(self.theme.text_secondary),
-                        ),
-                    ]))
-                });
+                let a = &state.albums[idx];
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:>3}. ", idx + 1),
+                        Style::default().fg(self.theme.text_secondary),
+                    ),
+                    Span::raw(clamp_text(&a.name, 30)),
+                    Span::styled(
+                        format!("  {}", clamp_text(&a.artist, 20)),
+                        Style::default().fg(self.theme.text_secondary),
+                    ),
+                ]))
+            });
             let list = List::new(items)
                 .highlight_style(
                     Style::default()
@@ -1423,15 +1426,8 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
-            render_list_window(
-                frame,
-                list,
-                area,
-                &mut state.album_list,
-                start,
-                selected,
-            );
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
+            render_list_window(frame, list, area, &mut state.album_list, start, selected);
             return;
         }
 
@@ -1485,16 +1481,9 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
-        render_list_window(
-            frame,
-            list,
-            area,
-            &mut state.album_list,
-            start,
-            selected,
-        );
+        render_list_window(frame, list, area, &mut state.album_list, start, selected);
     }
 
     pub fn render_artists(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -1505,15 +1494,15 @@ impl Ui {
                 start,
                 selected,
             } = build_list_window(total, area.height as usize, &state.artist_list, |idx| {
-                    let a = &state.artists[idx];
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.text_secondary),
-                        ),
-                        Span::raw(clamp_text(&a.name, 30)),
-                    ]))
-                });
+                let a = &state.artists[idx];
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:>3}. ", idx + 1),
+                        Style::default().fg(self.theme.text_secondary),
+                    ),
+                    Span::raw(clamp_text(&a.name, 30)),
+                ]))
+            });
             let list = List::new(items)
                 .highlight_style(
                     Style::default()
@@ -1521,15 +1510,8 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
-            render_list_window(
-                frame,
-                list,
-                area,
-                &mut state.artist_list,
-                start,
-                selected,
-            );
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
+            render_list_window(frame, list, area, &mut state.artist_list, start, selected);
             return;
         }
 
@@ -1548,29 +1530,24 @@ impl Ui {
             items,
             start,
             selected,
-        } = build_list_window(
-            total,
-            inner.height as usize,
-            &state.artist_list,
-            |idx| {
-                let a = &state.artists[idx];
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("{:>3}. ", idx + 1),
-                        Style::default().fg(self.theme.text_secondary),
-                    ),
-                    Span::raw(clamp_text(&a.name, 35)),
-                    Span::styled(
-                        if a.genres.is_empty() {
-                            String::new()
-                        } else {
-                            format!("  {}", clamp_text(&a.genres, 25))
-                        },
-                        Style::default().fg(self.theme.text_secondary),
-                    ),
-                ]))
-            },
-        );
+        } = build_list_window(total, inner.height as usize, &state.artist_list, |idx| {
+            let a = &state.artists[idx];
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{:>3}. ", idx + 1),
+                    Style::default().fg(self.theme.text_secondary),
+                ),
+                Span::raw(clamp_text(&a.name, 35)),
+                Span::styled(
+                    if a.genres.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {}", clamp_text(&a.genres, 25))
+                    },
+                    Style::default().fg(self.theme.text_secondary),
+                ),
+            ]))
+        });
 
         let list = List::new(items)
             .block(block)
@@ -1580,16 +1557,9 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
-        render_list_window(
-            frame,
-            list,
-            area,
-            &mut state.artist_list,
-            start,
-            selected,
-        );
+        render_list_window(frame, list, area, &mut state.artist_list, start, selected);
     }
 
     pub fn render_shows(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -1600,15 +1570,15 @@ impl Ui {
                 start,
                 selected,
             } = build_list_window(total, area.height as usize, &state.show_list, |idx| {
-                    let s = &state.shows[idx];
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            format!("{:>3}. ", idx + 1),
-                            Style::default().fg(self.theme.text_secondary),
-                        ),
-                        Span::raw(clamp_text(&s.name, 30)),
-                    ]))
-                });
+                let s = &state.shows[idx];
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:>3}. ", idx + 1),
+                        Style::default().fg(self.theme.text_secondary),
+                    ),
+                    Span::raw(clamp_text(&s.name, 30)),
+                ]))
+            });
             let list = List::new(items)
                 .highlight_style(
                     Style::default()
@@ -1616,15 +1586,8 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
-            render_list_window(
-                frame,
-                list,
-                area,
-                &mut state.show_list,
-                start,
-                selected,
-            );
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
+            render_list_window(frame, list, area, &mut state.show_list, start, selected);
             return;
         }
 
@@ -1678,16 +1641,9 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
-        render_list_window(
-            frame,
-            list,
-            area,
-            &mut state.show_list,
-            start,
-            selected,
-        );
+        render_list_window(frame, list, area, &mut state.show_list, start, selected);
     }
 
     pub fn render_search_panels(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -1759,18 +1715,15 @@ impl Ui {
                             ]))
                         })
                     }
-                    SearchPanel::Artists => build_list_window(
-                        sr.artists.len(),
-                        list_height,
-                        &sr.artist_list,
-                        |idx| {
+                    SearchPanel::Artists => {
+                        build_list_window(sr.artists.len(), list_height, &sr.artist_list, |idx| {
                             let a = &sr.artists[idx];
                             ListItem::new(Line::from(vec![
                                 Span::styled("", Style::default().fg(self.theme.primary)),
                                 Span::raw(a.name.clone()),
                             ]))
-                        },
-                    ),
+                        })
+                    }
                     SearchPanel::Albums => {
                         build_list_window(sr.albums.len(), list_height, &sr.album_list, |idx| {
                             let a = &sr.albums[idx];
@@ -1809,7 +1762,7 @@ impl Ui {
                             .fg(self.theme.primary)
                             .add_modifier(Modifier::BOLD),
                     )
-                    .highlight_symbol(&self.theme.highlight_symbol);
+                    .highlight_symbol(self.theme.highlight_symbol.as_str());
                 match focus_panel {
                     SearchPanel::Tracks => render_list_window(
                         frame,
@@ -1910,7 +1863,7 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
             render_list_window(
                 frame,
                 track_list,
@@ -1958,7 +1911,7 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
             render_list_window(
                 frame,
                 artist_list,
@@ -2002,7 +1955,7 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
             render_list_window(
                 frame,
                 album_list,
@@ -2046,7 +1999,7 @@ impl Ui {
                         .fg(self.theme.primary)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(&self.theme.highlight_symbol);
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
             render_list_window(
                 frame,
                 pl_list,
@@ -2287,16 +2240,9 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
-        render_list_window(
-            frame,
-            list,
-            area,
-            &mut state.queue_list,
-            start,
-            selected,
-        );
+        render_list_window(frame, list, area, &mut state.queue_list, start, selected);
     }
 }
 
@@ -2312,9 +2258,7 @@ mod tests {
     #[test]
     fn list_window_centers_global_selection() {
         let state = ListState::default().with_selected(Some(100));
-        let window = build_list_window(2_240, 10, &state, |index| {
-            ListItem::new(index.to_string())
-        });
+        let window = build_list_window(2_240, 10, &state, |index| ListItem::new(index.to_string()));
 
         assert_eq!(window.start, 95);
         assert_eq!(window.items.len(), 10);
@@ -2324,9 +2268,7 @@ mod tests {
     #[test]
     fn list_window_clamps_to_list_edges() {
         let state = ListState::default().with_selected(Some(2_239));
-        let window = build_list_window(2_240, 10, &state, |index| {
-            ListItem::new(index.to_string())
-        });
+        let window = build_list_window(2_240, 10, &state, |index| ListItem::new(index.to_string()));
 
         assert_eq!(window.start, 2_230);
         assert_eq!(window.items.len(), 10);
@@ -2485,7 +2427,7 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
         frame.render_stateful_widget(list, area, &mut state.add_to_playlist_list);
     }
@@ -2527,7 +2469,7 @@ impl Ui {
                     .fg(self.theme.primary)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol(&self.theme.highlight_symbol);
+            .highlight_symbol(self.theme.highlight_symbol.as_str());
 
         let mut list_state = ListState::default();
         list_state.select(Some(0));

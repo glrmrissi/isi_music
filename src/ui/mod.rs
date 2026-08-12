@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
@@ -56,12 +56,7 @@ impl Ui {
     pub fn build_panel_block(&self, widget: UiWidget, focused: bool, title: &str) -> Block<'_> {
         use crate::utils::theme::BorderStyle as B;
 
-        let cfg: BorderConfig = self
-            .theme
-            .borders
-            .get(&widget)
-            .cloned()
-            .unwrap_or_default();
+        let cfg: BorderConfig = self.theme.borders.get(&widget).cloned().unwrap_or_default();
 
         let color = if focused {
             cfg.color_focused.unwrap_or(self.theme.border_active)
@@ -144,6 +139,7 @@ impl Ui {
         state.clear_widget_rects();
         let area = frame.area();
 
+        frame.render_widget(Clear, area);
         frame.render_widget(
             Block::default().style(Style::default().bg(self.theme.background)),
             area,
