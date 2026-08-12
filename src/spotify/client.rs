@@ -37,14 +37,20 @@ pub struct Device {
 }
 
 async fn spotify_rate_limit() {
-    let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
-    let elapsed = last_request.elapsed();
     let min_interval = Duration::from_millis(250);
-
-    if elapsed < min_interval {
-        let sleep_time = min_interval - elapsed;
+    let sleep_time = {
+        let last_request = SPOTIFY_RATE_LIMITER.lock().await;
+        let elapsed = last_request.elapsed();
+        if elapsed < min_interval {
+            min_interval - elapsed
+        } else {
+            Duration::ZERO
+        }
+    };
+    if sleep_time > Duration::ZERO {
         sleep(sleep_time).await;
     }
+    let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
     *last_request = Instant::now();
 }
 
@@ -532,6 +538,15 @@ impl LibraryCache {
             "DELETE FROM liked_tracks_cache WHERE uri = ?1",
             params![track_uri],
         );
+    }
+
+    pub fn has_liked_tracks_cache(&self) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        conn.query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
+            .unwrap_or(0)
+            > 0
     }
 
     pub fn get_liked_tracks_page(
