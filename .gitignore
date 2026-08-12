@@ -5,3 +5,7 @@
 .spotify_token_cache.json
 AGENTS.md
 .agent
+.devin
+.mimocode
+.opencode
+.tests-build-in-time
