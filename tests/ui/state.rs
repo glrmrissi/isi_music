@@ -105,6 +105,22 @@ fn nav_last_selects_last() {
 }
 
 #[test]
+fn nav_middle_selects_middle_item() {
+    let mut s = UiState::new();
+    s.focus = Focus::Library;
+    s.nav_middle();
+    assert_eq!(s.library_list.selected(), Some(LIBRARY_ITEMS.len() / 2));
+}
+
+#[test]
+fn nav_middle_empty_list_is_noop() {
+    let mut s = UiState::new();
+    s.focus = Focus::Playlists;
+    s.nav_middle();
+    assert_eq!(s.playlist_list.selected(), None);
+}
+
+#[test]
 fn switch_focus_cycles() {
     let mut s = UiState::new();
     s.focus = Focus::Library;

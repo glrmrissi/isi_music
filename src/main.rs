@@ -1,22 +1,27 @@
 // TODO: modularize this file (~570 lines) into smaller modules
 use anyhow::Result;
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::Terminal;
 #[cfg(feature = "album-art")]
 use ratatui_image::picker::Picker;
+#[cfg(unix)]
 use std::fs::OpenOptions;
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 
 mod app;
 mod audio;
+mod backend;
 mod config;
 mod daemon;
 mod keybinds;
 mod player;
+mod settings;
 mod spotify;
 mod ui;
 mod utils;
@@ -36,7 +41,6 @@ const YELLOW: &str = "\x1b[1;33m";
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const GREEN: &str = "\x1b[32m";
-const GRAY: &str = "\x1b[90m";
 
 const BOX_W: usize = 63;
 
@@ -79,97 +83,31 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!(
         "{}",
         bl!(format!(
-            "  1. Go to: {BOLD}https://www.last.fm/api/account/create{RESET}"
+            "  isi-music will open Last.fm authorization in your browser"
         ))
     );
-    println!("{}", bl!("  2. Create an API application"));
     println!(
         "{}",
         bl!(format!(
-            "  3. Copy your {BOLD}API Key{RESET} and {BOLD}Shared Secret{RESET}"
+            "  Just log in to your Last.fm account and authorize the app"
         ))
     );
     println!("{}", bl!(""));
     println!(
         "{}",
         bl!(format!(
-            "  4. Create/Edit: {GREEN}~/.config/isi-music/config.toml{RESET}"
-        ))
-    );
-    println!("{}", bl!("  5. Add the following content:"));
-    println!("{}", bl!(""));
-    println!("{}", bl!(format!("     {GRAY}[lastfm]{RESET}")));
-    println!(
-        "{}",
-        bl!(format!("     api_key = {GREEN}\"YOUR_API_KEY\"{RESET}"))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "     api_secret = {GREEN}\"YOUR_API_SECRET\"{RESET}"
-        ))
-    );
-    println!("{}", bl!("     session_key = \"\""));
-    println!("{}", bl!(""));
-    println!(
-        "{}",
-        bl!(format!(
-            "  {YELLOW}{BOLD}SECURITY NOTE:{RESET} {YELLOW}Don't share your credentials!{RESET}"
-        ))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "  {YELLOW}Never commit your API Secret to Git.{RESET}"
+            "  {YELLOW}{BOLD}No API credentials needed!{RESET} {YELLOW}isi-music handles everything.{RESET}"
         ))
     );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
-    let api_key = loop {
-        let v = prompt("API Key: ");
-        if !v.is_empty() {
-            break v;
-        }
-        println!("Cannot be empty.");
-    };
-    let api_secret = loop {
-        let v = prompt("API Secret: ");
-        if !v.is_empty() {
-            break v;
-        }
-        println!("Cannot be empty.");
-    };
+    println!("Opening Last.fm authorization in your browser...");
 
-    println!("Requesting authorization token...");
-    let token = utils::lastfm::LastfmClient::get_auth_token(&api_key).await?;
-
-    let auth_url = format!(
-        "https://www.last.fm/api/auth/?api_key={}&token={}",
-        api_key, token
-    );
-
-    println!("\nOpening Last.fm authorization in your browser...");
-    if open::that(&auth_url).is_err() {
-        println!("Could not open browser automatically. Please visit:");
-        println!("URL: {}", auth_url);
-    } else {
-        println!("URL: {}", auth_url);
-    }
-    println!("\nAfter authorizing, return here and press ENTER.");
-
-    let mut _unused = String::new();
-    std::io::stdin().read_line(&mut _unused)?;
-
-    print!("Finalizing Last.fm authentication...");
-    std::io::stdout().flush().ok();
-
-    match utils::lastfm::LastfmClient::get_session(&api_key, &api_secret, &token).await {
+    match utils::lastfm::LastfmClient::authenticate_with_default().await {
         Ok(session_key) => {
-            cfg.lastfm.api_key = Some(api_key);
-            cfg.lastfm.api_secret = Some(api_secret);
             cfg.lastfm.session_key = Some(session_key);
             cfg.save()?;
-            println!(" OK");
+            println!("Last.fm authentication successful!");
             println!("Last.fm scrobbling enabled!");
             println!();
         }
@@ -190,70 +128,46 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
     println!(
         "{}",
-        bl!("  To stream from Spotify you need your own Client ID:")
+        bl!("  A custom Client ID is used for Spotify Web API requests.")
+    );
+    println!(
+        "{}",
+        bl!("  The built-in client is reserved for librespot streaming.")
     );
     println!("{}", bl!(""));
     println!(
         "{}",
         bl!(format!(
-            "  {BOLD}1.{RESET} Go to: {GREEN}https://developer.spotify.com/dashboard{RESET}"
+            "  {YELLOW}If you hit the 5-user limit on the shared client ID,{RESET}"
         ))
     );
     println!(
         "{}",
         bl!(format!(
-            "  {BOLD}2.{RESET} Click {BOLD}\"Create app\"{RESET}"
-        ))
-    );
-    println!(
-        "{}",
-        bl!(format!("  {BOLD}3.{RESET} Give it any name & description"))
-    );
-    println!(
-        "{}",
-        bl!(format!("  {BOLD}4.{RESET} Add this Redirect URI:"))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "       {YELLOW}http://127.0.0.1:8888/callback{RESET}"
-        ))
-    );
-    println!(
-        "{}",
-        bl!(format!("  {BOLD}5.{RESET} Click {BOLD}\"Save\"{RESET}"))
-    );
-    println!(
-        "{}",
-        bl!(format!(
-            "  {BOLD}6.{RESET} Copy the {BOLD}Client ID{RESET} and paste it below"
-        ))
-    );
-    println!("{}", bl!(""));
-    println!(
-        "{}",
-        bl!(format!(
-            "  {YELLOW}Uses PKCE - no client_secret needed!{RESET}"
+            "  {YELLOW}leave it blank for streaming-only mode.{RESET}"
         ))
     );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
-    let client_id = loop {
-        let v = prompt("Client ID: ");
-        if !v.is_empty() {
-            if v.len() < 10 {
-                println!(
-                    "  {YELLOW}That doesn't look like a valid Client ID, but I'll save it anyway.{RESET}"
-                );
-            }
-            break v;
-        }
-        println!("  {YELLOW}Client ID cannot be empty.{RESET}");
-    };
+    let client_id = prompt("Web API Client ID (press Enter for streaming-only): ");
+    let trimmed = client_id.trim().to_string();
 
-    cfg.spotify.client_id = Some(client_id);
-    cfg.save()?;
-    println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    if !trimmed.is_empty() {
+        if trimmed.len() < 10 {
+            println!(
+                "  {YELLOW}That doesn't look like a valid Client ID, but I'll save it anyway.{RESET}"
+            );
+        }
+        cfg.spotify.client_id = Some(trimmed);
+        cfg.save()?;
+        println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    } else {
+        cfg.spotify.client_id = None;
+        cfg.save()?;
+        config::clear_refresh_token();
+        config::clear_streaming_refresh_token();
+        println!("  {GREEN}[OK]{RESET}  Streaming-only mode selected.\n");
+    }
 
     let authenticate = loop {
         let v = prompt("Authenticate with Spotify now? (Y/n): ");
@@ -267,17 +181,35 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     };
 
     if authenticate {
-        let client_id = cfg.get_client_id().unwrap_or_default();
-        if !client_id.is_empty() {
-            match crate::spotify::auth::SpotifyAuth::authenticate().await {
-                Ok((_access_token, refresh_token, _expires_in)) => {
+        let has_web_api_client = cfg.get_client_id().is_some();
+        let result = if has_web_api_client {
+            crate::spotify::auth::SpotifyAuth::authenticate().await
+        } else {
+            crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
+                config::OFFICIAL_CLIENT_ID,
+            )
+            .await
+        };
+
+        match result {
+            Ok((_access_token, refresh_token, _expires_in)) => {
+                if has_web_api_client {
                     crate::config::save_refresh_token(&refresh_token);
-                    println!("  {GREEN}[OK]{RESET}  Authenticated successfully!\n");
+                    println!("  {GREEN}[OK]{RESET}  Web API authenticated.\n");
+                    println!("  Authenticating streaming with librespot...");
+                    crate::player::ensure_streaming_auth().await?;
+                    println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
+                } else {
+                    crate::config::save_streaming_refresh_token(&refresh_token);
+                    println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
                 }
-                Err(e) => {
-                    println!("  {YELLOW}Authentication failed: {e}{RESET}");
-                    println!("  You can authenticate later by launching isi-music normally.\n");
+            }
+            Err(e) => {
+                if e.to_string().contains("Authentication cancelled") {
+                    return Err(e);
                 }
+                println!("  {YELLOW}Authentication failed: {e}{RESET}");
+                println!("  You can authenticate later by launching isi-music normally.\n");
             }
         }
     } else {
@@ -322,26 +254,35 @@ PLAYBACK CONTROL
   isi-music --status                 Show current track and progress
 
 QUEUE MANAGEMENT
-  isi-music --liked                  Load all liked songs and play
-  isi-music --play <spotify:playlist:ID>   Load a playlist and play
-  isi-music --ls                     List loaded tracks with their ID
+  isi-music --playlists               List your playlists (ID + name)
+  isi-music --play <ID|name>         Load playlist by ID or name (fuzzy match)
+  isi-music --liked [--limit N]      Load liked songs (limit to N, default 100)
+  isi-music --search <query>         Search within loaded queue
+  isi-music --search-global <query>  Search globally on Spotify
+  isi-music --ls [--limit N]         List loaded tracks (paginate with --limit)
   isi-music --play-id <N>            Play track by ID (from --ls)
+
+DEVICE CONTROL
+  isi-music --devices                List available Spotify Connect devices
+  isi-music --device <name>          Transfer playback to device (fuzzy match)
+
+NOTE: Audio quality and crossfade changes require daemon restart (not yet supported via CLI).
 
 SETUP
   isi-music setup                    First config (wizard)
   isi-music setup-spotify            Configure Spotify streaming
   isi-music setup-lastfm             Configure Last.fm scrobbling
+  isi-music doctor                   Diagnose common issues
+  isi-music update                   Update to the latest release
   isi-music --clear-logs             Clear the log file
 
 SPOTIFY STREAMING
   Run `isi-music setup-spotify` to configure Spotify.
-  The setup will:
-    1. Guide you to create a Spotify app at developer.spotify.com
-    2. Ask for your Client ID (no secret needed — uses PKCE)
-    3. Authenticate with Spotify in your browser
-    4. Save credentials to ~/.config/isi-music/config.toml
-  Each user needs their own Client ID (5-user limit in Dev Mode).
-  Set redirect URI to: http://127.0.0.1:8888/callback
+  Your Client ID is used for the Web API.
+  The built-in librespot Client ID is used only for streaming.
+  Custom apps use: http://127.0.0.1:8888/callback
+  Streaming uses: http://127.0.0.1:8898/login
+  Both OAuth flows run during setup/startup.
 
 LAST.FM SCROBBLING
   Run `isi-music setup-lastfm` to enable scrobbling.
@@ -358,14 +299,18 @@ LAST.FM SCROBBLING
 FILES
   Config   ~/.config/isi-music/config.toml
   Log      ~/.local/share/isi-music/isi-music.log
-  Socket   $XDG_RUNTIME_DIR/isi-music.sock
 "
     );
+
+    #[cfg(unix)]
+    println!("  Socket   $XDG_RUNTIME_DIR/isi-music.sock");
+    #[cfg(windows)]
+    println!("  Pipe     \\\\.\\pipe\\isi-music");
 }
 
 fn main() -> Result<()> {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
 
     if let Ok(env_path) = config::env_path() {
         dotenvy::from_path(&env_path).ok();
@@ -385,26 +330,68 @@ fn main() -> Result<()> {
     let arg1 = args.get(1).map(|s| s.as_str());
 
     if arg1 == Some("--daemon") {
-        let child_pid = unsafe { libc::fork() };
-        if child_pid < 0 {
-            anyhow::bail!("fork() failed");
-        }
-        if child_pid > 0 {
-            println!("isi-music daemon started (PID {child_pid})");
-            return Ok(());
-        }
-        unsafe {
-            libc::setsid();
+        // Unix: classic double-step daemonize (fork + setsid + stdio to /dev/null)
+        #[cfg(unix)]
+        {
+            let child_pid = unsafe { libc::fork() };
+            if child_pid < 0 {
+                anyhow::bail!("fork() failed");
+            }
+            if child_pid > 0 {
+                println!("isi-music daemon started (PID {child_pid})");
+                return Ok(());
+            }
+            unsafe {
+                libc::setsid();
+            }
+
+            if let Ok(file) = OpenOptions::new().read(true).write(true).open("/dev/null") {
+                let fd = file.as_raw_fd();
+                unsafe {
+                    libc::dup2(fd, libc::STDIN_FILENO);
+                    libc::dup2(fd, libc::STDOUT_FILENO);
+                    libc::dup2(fd, libc::STDERR_FILENO);
+                }
+            }
+
+            return tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(daemon::run(cfg));
         }
 
-        if let Ok(file) = OpenOptions::new().read(true).write(true).open("/dev/null") {
-            let fd = file.as_raw_fd();
-            unsafe {
-                libc::dup2(fd, libc::STDIN_FILENO);
-                libc::dup2(fd, libc::STDOUT_FILENO);
-                libc::dup2(fd, libc::STDERR_FILENO);
-            }
+        // Windows has no fork(): re-launch ourselves as a detached background process
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+            let exe = std::env::current_exe()?;
+            let child = std::process::Command::new(exe)
+                .arg("--daemon-child")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+                .spawn()?;
+            println!("isi-music daemon started (PID {})", child.id());
+            return Ok(());
         }
+
+        // Other platforms: run the daemon in the foreground
+        #[cfg(not(any(unix, windows)))]
+        {
+            return tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(daemon::run(cfg));
+        }
+    }
+
+    // Internal: spawned detached by `--daemon` on Windows
+    if arg1 == Some("--daemon-child") {
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
@@ -423,6 +410,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if arg1 == Some("doctor") {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(utils::doctor::run());
+    }
+
+    if arg1 == Some("update") {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(utils::updater::run());
+    }
+
     let ipc_cmd: Option<String> = match arg1 {
         Some("setup") => {
             return tokio::runtime::Builder::new_current_thread()
@@ -432,8 +433,8 @@ fn main() -> Result<()> {
         }
 
         Some(
-            cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-" | "--status" | "--ls"
-            | "--liked" | "--quit-daemon"),
+            cmd @ ("--toggle" | "--next" | "--prev" | "--vol+" | "--vol-" | "--status"
+            | "--quit-daemon" | "--playlists" | "--devices"),
         ) => {
             let c = cmd.trim_start_matches('-');
             Some(if c == "quit-daemon" {
@@ -442,11 +443,49 @@ fn main() -> Result<()> {
                 c.into()
             })
         }
+        Some("--device") => {
+            let name = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --device <name>"))?;
+            Some(format!("device {name}"))
+        }
+        Some("--ls") => {
+            if args.get(2).is_some() && args.get(2) == Some(&"--limit".to_string()) {
+                let limit = args
+                    .get(3)
+                    .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --ls --limit <N>"))?;
+                Some(format!("ls --limit {limit}"))
+            } else {
+                Some("ls".into())
+            }
+        }
         Some("--play") => {
             let uri = args
                 .get(2)
-                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --play <spotify:playlist:ID>"))?;
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --play <ID|name>"))?;
             Some(format!("play {uri}"))
+        }
+        Some("--liked") => {
+            if args.get(2).is_some() && args.get(2) == Some(&"--limit".to_string()) {
+                let limit = args
+                    .get(3)
+                    .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --liked --limit <N>"))?;
+                Some(format!("liked --limit {limit}"))
+            } else {
+                Some("liked".into())
+            }
+        }
+        Some("--search") => {
+            let query = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --search <query>"))?;
+            Some(format!("search {query}"))
+        }
+        Some("--search-global") => {
+            let query = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("Usage: isi-music --search-global <query>"))?;
+            Some(format!("search-global {query}"))
         }
         Some("--play-id") => {
             let id = args.get(2).ok_or_else(|| {
@@ -484,7 +523,9 @@ fn main() -> Result<()> {
         .map(|p| !p.exists())
         .unwrap_or(true);
 
+    let mut first_run = false;
     if config_missing {
+        first_run = true;
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
@@ -493,12 +534,20 @@ fn main() -> Result<()> {
         cfg = config::AppConfig::load()?;
     }
 
-    if cfg.spotify.client_id.is_none() && std::env::var("SPOTIFY_CLIENT_ID").is_err() {
+    if first_run {
+        // Safety: set_var is unsafe in edition 2024 because it's not thread-safe.
+        // We call this before any threads are spawned.
+        unsafe {
+            std::env::set_var("ISI_MUSIC_FIRST_RUN", "1");
+        }
+    }
+
+    if config::load_refresh_token().is_none() && config::load_streaming_refresh_token().is_none() {
         println!();
-        println!("  {YELLOW}Spotify not configured.{RESET} You can still use local files.");
-        println!("  Run {BOLD}isi-music setup-spotify{RESET} to enable Spotify streaming.\n");
+        println!("  {YELLOW}First time with Spotify?{RESET} Authenticate now to enable streaming.");
+        println!("  (Streaming uses the built-in client; Web API needs your Client ID.)\n");
         let setup_now = loop {
-            let v = prompt("Configure Spotify now? (Y/n): ");
+            let v = prompt("Authenticate with Spotify now? (Y/n): ");
             let v = v.trim().to_lowercase();
             if v.is_empty() || v == "y" || v == "yes" {
                 break true;
@@ -531,7 +580,7 @@ fn main() -> Result<()> {
                 .with_ansi(false)
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("isi_music=warn".parse()?),
+                        .add_directive("isi_music=info".parse()?),
                 )
                 .init();
 
@@ -544,12 +593,12 @@ fn main() -> Result<()> {
 
             enable_raw_mode()?;
             let mut stdout = io::stdout();
-            execute!(stdout, EnterAlternateScreen)?;
-            let backend = CrosstermBackend::new(stdout);
+            execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+            let backend = crate::backend::StableCrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
             terminal.clear()?;
 
-            let mut app = App::new(
+            let mut app = match App::new(
                 #[cfg(feature = "album-art")]
                 picker,
                 theme,
@@ -557,11 +606,28 @@ fn main() -> Result<()> {
                 keybinds,
                 keybinds_rx,
             )
-            .await?;
+            .await
+            {
+                Ok(app) => app,
+                Err(err) => {
+                    let _ = disable_raw_mode();
+                    let _ = execute!(
+                        terminal.backend_mut(),
+                        DisableMouseCapture,
+                        LeaveAlternateScreen
+                    );
+                    let _ = terminal.show_cursor();
+                    return Err(err);
+                }
+            };
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            execute!(
+                terminal.backend_mut(),
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            )?;
             terminal.show_cursor()?;
 
             if let Err(err) = res {

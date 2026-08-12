@@ -8,6 +8,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
+
+/// Build a reqwest client with a sane timeout so network drops don't hang the TUI.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 use tracing::{info, warn};
 
 use super::auth::SpotifyAuth;
@@ -18,15 +26,31 @@ use crate::ui::PlaybackState;
 static SPOTIFY_RATE_LIMITER: LazyLock<Mutex<Instant>> =
     LazyLock::new(|| Mutex::new(Instant::now()));
 
-async fn spotify_rate_limit() {
-    let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
-    let elapsed = last_request.elapsed();
-    let min_interval = Duration::from_millis(250);
+const MAX_SEARCH_CACHE_ENTRIES: usize = 32;
 
-    if elapsed < min_interval {
-        let sleep_time = min_interval - elapsed;
+#[derive(Clone, Debug)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub device_type: String,
+    pub is_active: bool,
+}
+
+async fn spotify_rate_limit() {
+    let min_interval = Duration::from_millis(250);
+    let sleep_time = {
+        let last_request = SPOTIFY_RATE_LIMITER.lock().await;
+        let elapsed = last_request.elapsed();
+        if elapsed < min_interval {
+            min_interval - elapsed
+        } else {
+            Duration::ZERO
+        }
+    };
+    if sleep_time > Duration::ZERO {
         sleep(sleep_time).await;
     }
+    let mut last_request = SPOTIFY_RATE_LIMITER.lock().await;
     *last_request = Instant::now();
 }
 
@@ -34,7 +58,7 @@ async fn spotify_rate_limit() {
 struct SearchCache {
     store: Arc<RwLock<HashMap<String, (Instant, FullSearchResults)>>>,
     ttl: Duration,
-    db_path: String,
+    conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
 }
 
 impl SearchCache {
@@ -42,7 +66,18 @@ impl SearchCache {
         let db_path = crate::config::get_local_db_path();
         let ttl = Duration::from_secs(ttl_seconds);
 
-        let preloaded = Self::load_from_db_sync(&db_path, ttl).unwrap_or_else(|e| {
+        let conn = rusqlite::Connection::open(&db_path).expect("failed to open search cache db");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE IF NOT EXISTS search_cache (
+                 key      TEXT PRIMARY KEY,
+                 data     TEXT NOT NULL,
+                 saved_at INTEGER NOT NULL
+             );",
+        )
+        .expect("failed to init search cache schema");
+
+        let preloaded = Self::load_from_db_sync(&conn, ttl).unwrap_or_else(|e| {
             warn!("Search cache: could not load from disk: {e}");
             HashMap::new()
         });
@@ -50,7 +85,7 @@ impl SearchCache {
         Self {
             store: Arc::new(RwLock::new(preloaded)),
             ttl,
-            db_path,
+            conn: Arc::new(std::sync::Mutex::new(conn)),
         }
     }
 
@@ -61,24 +96,10 @@ impl SearchCache {
             .as_secs() as i64
     }
 
-    fn open_conn(db_path: &str) -> rusqlite::Result<rusqlite::Connection> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             CREATE TABLE IF NOT EXISTS search_cache (
-                 key      TEXT PRIMARY KEY,
-                 data     TEXT NOT NULL,
-                 saved_at INTEGER NOT NULL
-             );",
-        )?;
-        Ok(conn)
-    }
-
     fn load_from_db_sync(
-        db_path: &str,
+        conn: &rusqlite::Connection,
         ttl: Duration,
     ) -> anyhow::Result<HashMap<String, (Instant, FullSearchResults)>> {
-        let conn = Self::open_conn(db_path)?;
         let ttl_secs = ttl.as_secs() as i64;
         let now = Self::unix_now();
 
@@ -87,8 +108,12 @@ impl SearchCache {
             params![now, ttl_secs],
         )?;
 
-        let mut stmt = conn.prepare("SELECT key, data FROM search_cache")?;
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM search_cache
+             ORDER BY saved_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![MAX_SEARCH_CACHE_ENTRIES as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
 
@@ -104,34 +129,53 @@ impl SearchCache {
     }
 
     async fn get(&self, key: &str) -> Option<FullSearchResults> {
-        let guard = self.store.read().await;
-        if let Some((ts, results)) = guard.get(key) {
-            if ts.elapsed() < self.ttl {
-                return Some(results.clone());
-            }
+        let mut guard = self.store.write().await;
+        let expired = guard
+            .get(key)
+            .map(|(ts, _)| ts.elapsed() >= self.ttl)
+            .unwrap_or(false);
+        if expired {
+            guard.remove(key);
+            return None;
         }
-        None
+        guard.get(key).map(|(_, results)| results.clone())
     }
 
     async fn insert(&self, key: String, results: FullSearchResults) {
-        self.store
-            .write()
-            .await
-            .insert(key.clone(), (Instant::now(), results.clone()));
+        let mut guard = self.store.write().await;
+        guard.retain(|_, (ts, _)| ts.elapsed() < self.ttl);
+        if guard.len() >= MAX_SEARCH_CACHE_ENTRIES && !guard.contains_key(&key) {
+            let oldest_key = guard
+                .iter()
+                .min_by_key(|(_, (ts, _))| *ts)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest_key) = oldest_key {
+                guard.remove(&oldest_key);
+            }
+        }
+        guard.insert(key.clone(), (Instant::now(), results.clone()));
+        drop(guard);
 
-        let db_path = self.db_path.clone();
+        let conn = self.conn.clone();
         let now = Self::unix_now();
         let cached: CachedSearch = results.into();
         tokio::task::spawn_blocking(move || {
             let Ok(data) = serde_json::to_string(&cached) else {
                 return;
             };
-            let Ok(conn) = SearchCache::open_conn(&db_path) else {
+            let Ok(conn) = conn.lock() else {
                 return;
             };
             let _ = conn.execute(
                 "INSERT OR REPLACE INTO search_cache (key, data, saved_at) VALUES (?1, ?2, ?3)",
                 params![key, data, now],
+            );
+            let _ = conn.execute(
+                "DELETE FROM search_cache
+                 WHERE key NOT IN (
+                     SELECT key FROM search_cache ORDER BY saved_at DESC LIMIT ?1
+                 )",
+                params![MAX_SEARCH_CACHE_ENTRIES as i64],
             );
         });
     }
@@ -295,20 +339,18 @@ impl From<CachedSearch> for FullSearchResults {
 
 #[derive(Clone)]
 pub struct LibraryCache {
-    db_path: String,
+    conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
 }
 
 impl LibraryCache {
     pub async fn new() -> Self {
         let db_path = crate::config::get_local_db_path();
-        let cache = Self {
-            db_path: db_path.clone(),
-        };
-
-        let _ = tokio::task::spawn_blocking(move || {
+        let conn = tokio::task::spawn_blocking(move || {
             let conn = rusqlite::Connection::open(&db_path)?;
             conn.execute_batch(
                 "PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                PRAGMA busy_timeout=5000;
                 CREATE TABLE IF NOT EXISTS library_cache (
                     key      TEXT PRIMARY KEY,
                     data     TEXT NOT NULL,
@@ -325,17 +367,17 @@ impl LibraryCache {
                     cover_path  TEXT,
                     PRIMARY KEY (added_at, uri)
                 );",
-            )
+            )?;
+            Ok::<_, rusqlite::Error>(conn)
         })
-        .await;
+        .await
+        .expect("failed to spawn blocking task");
 
-        cache
-    }
-
-    fn open(&self) -> rusqlite::Result<rusqlite::Connection> {
-        let conn = rusqlite::Connection::open(&self.db_path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-        Ok(conn)
+        Self {
+            conn: Arc::new(std::sync::Mutex::new(
+                conn.expect("failed to open library cache db"),
+            )),
+        }
     }
 
     fn unix_now() -> i64 {
@@ -346,7 +388,7 @@ impl LibraryCache {
     }
 
     pub fn get_tracks(&self, key: &str) -> Option<(Vec<TrackSummary>, u32)> {
-        let conn = self.open().ok()?;
+        let conn = self.conn.lock().ok()?;
         let (data, total): (String, u32) = conn
             .query_row(
                 "SELECT data, total FROM library_cache WHERE key = ?1",
@@ -363,14 +405,17 @@ impl LibraryCache {
                 album: t.album,
                 duration_ms: t.duration_ms,
                 uri: t.uri,
-                    cover_path: t.cover_path,
-                    added_at: None,
-                })
+                cover_path: t.cover_path,
+                added_at: None,
+            })
             .collect();
         Some((tracks, total))
     }
 
     pub fn save_tracks(&self, key: &str, tracks: &[TrackSummary], total: u32) {
+        if tracks.is_empty() && total > 0 {
+            return;
+        }
         let rows: Vec<CachedTrack> = tracks
             .iter()
             .map(|t| CachedTrack {
@@ -385,7 +430,9 @@ impl LibraryCache {
         let Ok(data) = serde_json::to_string(&rows) else {
             return;
         };
-        let Ok(conn) = self.open() else { return };
+        let Ok(conn) = self.conn.lock() else {
+            return;
+        };
         let _ = conn.execute(
             "INSERT OR REPLACE INTO library_cache (key, data, total, saved_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -394,7 +441,7 @@ impl LibraryCache {
     }
 
     pub fn get_albums(&self) -> Option<(Vec<AlbumSummary>, u32)> {
-        let conn = self.open().ok()?;
+        let conn = self.conn.lock().ok()?;
         let (data, total): (String, u32) = conn
             .query_row(
                 "SELECT data, total FROM library_cache WHERE key = 'albums'",
@@ -430,7 +477,7 @@ impl LibraryCache {
         let Ok(data) = serde_json::to_string(&rows) else {
             return;
         };
-        let Ok(conn) = self.open() else { return };
+        let Ok(conn) = self.conn.lock() else { return };
         let _ = conn.execute(
             "INSERT OR REPLACE INTO library_cache (key, data, total, saved_at)
              VALUES ('albums', ?1, ?2, ?3)",
@@ -439,7 +486,7 @@ impl LibraryCache {
     }
 
     pub fn get_artists(&self) -> Option<Vec<ArtistSummary>> {
-        let conn = self.open().ok()?;
+        let conn = self.conn.lock().ok()?;
         let (data,): (String,) = conn
             .query_row(
                 "SELECT data FROM library_cache WHERE key = 'artists'",
@@ -461,7 +508,7 @@ impl LibraryCache {
     }
 
     pub fn delete_key_pattern(&self, pattern: &str) {
-        let Ok(conn) = self.open() else { return };
+        let Ok(conn) = self.conn.lock() else { return };
         let _ = conn.execute(
             "DELETE FROM library_cache WHERE key LIKE ?1",
             params![pattern],
@@ -469,7 +516,7 @@ impl LibraryCache {
     }
 
     pub fn insert_liked_track(&self, added_at: &str, track: &TrackSummary) {
-        let Ok(conn) = self.open() else { return };
+        let Ok(conn) = self.conn.lock() else { return };
         let _ = conn.execute(
             "INSERT OR REPLACE INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -486,11 +533,20 @@ impl LibraryCache {
     }
 
     pub fn delete_liked_track(&self, track_uri: &str) {
-        let Ok(conn) = self.open() else { return };
+        let Ok(conn) = self.conn.lock() else { return };
         let _ = conn.execute(
             "DELETE FROM liked_tracks_cache WHERE uri = ?1",
             params![track_uri],
         );
+    }
+
+    pub fn has_liked_tracks_cache(&self) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        conn.query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
+            .unwrap_or(0)
+            > 0
     }
 
     pub fn get_liked_tracks_page(
@@ -498,7 +554,9 @@ impl LibraryCache {
         after: Option<&str>,
         limit: u32,
     ) -> Option<(Vec<TrackSummary>, u32, Option<String>)> {
-        let Ok(conn) = self.open() else { return None };
+        let Ok(conn) = self.conn.lock() else {
+            return None;
+        };
         let total: u32 = conn
             .query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
             .unwrap_or(0);
@@ -544,8 +602,7 @@ impl LibraryCache {
                 let last = tracks.last().unwrap();
                 Some(format!("{}\t{}", last.0, last.1))
             };
-            let summaries: Vec<TrackSummary> =
-                tracks.into_iter().map(|(_, _, t)| t).collect();
+            let summaries: Vec<TrackSummary> = tracks.into_iter().map(|(_, _, t)| t).collect();
             Some((summaries, total, next_cursor))
         } else {
             let mut s = conn
@@ -584,18 +641,13 @@ impl LibraryCache {
                 let last = tracks.last().unwrap();
                 Some(format!("{}\t{}", last.0, last.1))
             };
-            let summaries: Vec<TrackSummary> =
-                tracks.into_iter().map(|(_, _, t)| t).collect();
+            let summaries: Vec<TrackSummary> = tracks.into_iter().map(|(_, _, t)| t).collect();
             Some((summaries, total, next_cursor))
         }
     }
 
-    pub fn reset_liked_tracks_cache(
-        &self,
-        tracks: &[TrackSummary],
-        added_ats: &[String],
-    ) {
-        let Ok(conn) = self.open() else { return };
+    pub fn reset_liked_tracks_cache(&self, tracks: &[TrackSummary], added_ats: &[String]) {
+        let Ok(conn) = self.conn.lock() else { return };
         let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
         let mut stmt = match conn.prepare(
             "INSERT INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
@@ -617,12 +669,8 @@ impl LibraryCache {
         }
     }
 
-    pub fn append_liked_tracks_batch(
-        &self,
-        tracks: &[TrackSummary],
-        added_ats: &[String],
-    ) {
-        let Ok(conn) = self.open() else { return };
+    pub fn append_liked_tracks_batch(&self, tracks: &[TrackSummary], added_ats: &[String]) {
+        let Ok(conn) = self.conn.lock() else { return };
         let mut stmt = match conn.prepare(
             "INSERT OR IGNORE INTO liked_tracks_cache (added_at, uri, name, artist, album, duration_ms, cover_path)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -643,8 +691,9 @@ impl LibraryCache {
         }
     }
 
-    pub fn clear_liked_tracks_cache(&self) {
-        if let Ok(conn) = self.open() {
+    pub fn clear_all_library_cache(&self) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute("DELETE FROM library_cache", []);
             let _ = conn.execute("DELETE FROM liked_tracks_cache", []);
         }
     }
@@ -662,7 +711,7 @@ impl LibraryCache {
         let Ok(data) = serde_json::to_string(&rows) else {
             return;
         };
-        let Ok(conn) = self.open() else { return };
+        let Ok(conn) = self.conn.lock() else { return };
         let _ = conn.execute(
             "INSERT OR REPLACE INTO library_cache (key, data, total, saved_at)
              VALUES ('artists', ?1, 0, ?2)",
@@ -732,6 +781,7 @@ pub struct SpotifyClient {
     token_manager: TokenManager,
     pub http: reqwest::Client,
     shuffle_state: std::sync::atomic::AtomicBool,
+    is_playing: std::sync::atomic::AtomicBool,
     repeat_state: std::sync::RwLock<super::RepeatState>,
     pub authenticated: bool,
     search_cache: SearchCache,
@@ -740,11 +790,13 @@ pub struct SpotifyClient {
 
 impl SpotifyClient {
     pub async fn new_unauthenticated() -> Self {
-        let dummy_token = TokenManager::new(String::new());
+        let http = http_client();
+        let dummy_token = TokenManager::new(String::new(), http.clone());
         Self {
             token_manager: dummy_token,
-            http: reqwest::Client::new(),
+            http,
             shuffle_state: std::sync::atomic::AtomicBool::new(false),
+            is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
             authenticated: false,
             search_cache: SearchCache::new(600),
@@ -754,19 +806,18 @@ impl SpotifyClient {
 
     pub async fn new() -> Result<Self> {
         let cfg = config::AppConfig::load()?;
-        let client_id = cfg.get_client_id().unwrap_or_default();
-
-        if client_id.is_empty() || client_id == "your_client_id_here" {
-            warn!("Spotify client_id is empty or default. Starting in unauthenticated mode.");
+        let Some(client_id) = cfg.get_client_id() else {
+            warn!("Spotify Web API Client ID is not configured; starting in local-only mode");
             return Ok(Self::new_unauthenticated().await);
-        }
+        };
 
-        let token_manager = TokenManager::new(client_id.clone());
+        let http = http_client();
+        let token_manager = TokenManager::new(client_id.clone(), http.clone());
 
         let saved_rt = config::load_refresh_token();
 
         if let Some(ref rt) = saved_rt {
-            match Self::exchange_refresh_token(&client_id, rt).await {
+            match Self::exchange_refresh_token(&client_id, rt, &http).await {
                 Ok((access_token, expires_in_secs, new_rt)) => {
                     let effective_rt = new_rt.as_deref().unwrap_or(rt.as_str());
                     config::save_refresh_token(effective_rt);
@@ -774,9 +825,10 @@ impl SpotifyClient {
                     info!("Authenticated with Spotify via refresh token");
                     return Ok(Self {
                         token_manager,
-                        http: reqwest::Client::new(),
-            shuffle_state: std::sync::atomic::AtomicBool::new(false),
-            repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
+                        http: http.clone(),
+                        shuffle_state: std::sync::atomic::AtomicBool::new(false),
+                        is_playing: std::sync::atomic::AtomicBool::new(false),
+                        repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
                         authenticated: true,
                         search_cache: SearchCache::new(600),
                         library_cache: LibraryCache::new().await,
@@ -796,8 +848,9 @@ impl SpotifyClient {
         info!("Authenticated with Spotify");
         Ok(Self {
             token_manager,
-            http: reqwest::Client::new(),
+            http,
             shuffle_state: std::sync::atomic::AtomicBool::new(false),
+            is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
             authenticated: true,
             search_cache: SearchCache::new(600),
@@ -815,8 +868,8 @@ impl SpotifyClient {
     async fn exchange_refresh_token(
         client_id: &str,
         refresh_token: &str,
+        http: &reqwest::Client,
     ) -> Result<(String, u64, Option<String>)> {
-        let http = reqwest::Client::new();
         let resp = http
             .post("https://accounts.spotify.com/api/token")
             .form(&[
@@ -833,6 +886,7 @@ impl SpotifyClient {
         if !status.is_success() {
             let body = serde_json::to_string(&json).unwrap_or_default();
             if status.as_u16() == 403 {
+                config::clear_refresh_token();
                 anyhow::bail!("SPOTIFY_FORBIDDEN: token refresh returned 403. Details: {body}");
             }
             anyhow::bail!("token endpoint {status}: {body}");
@@ -889,15 +943,19 @@ impl SpotifyClient {
             } else if status.as_u16() == 429 {
                 warn!("Rate limited on Spotify API");
                 anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
+            } else if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden on /me/tracks. Body: {body}");
+                anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}")
             } else {
-                anyhow::anyhow!("Spotify {status}: {body}")
+                anyhow::anyhow!("Spotify API error: status {} body: {}", status, body)
             });
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut tracks = Vec::new();
-        let mut added_ats = Vec::new();
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut tracks = Vec::with_capacity(items_len);
+        let mut added_ats = Vec::with_capacity(items_len);
 
         if let Some(items) = json["items"].as_array() {
             for saved in items {
@@ -936,7 +994,8 @@ impl SpotifyClient {
 
         self.library_cache.save_tracks(&key, &tracks, total);
         if !tracks.is_empty() && added_ats.len() == tracks.len() {
-            self.library_cache.append_liked_tracks_batch(&tracks, &added_ats);
+            self.library_cache
+                .append_liked_tracks_batch(&tracks, &added_ats);
         }
         Ok((tracks, total))
     }
@@ -991,15 +1050,32 @@ impl SpotifyClient {
                 anyhow::anyhow!("SPOTIFY_UNAUTHORIZED")
             } else if status.as_u16() == 429 {
                 anyhow::anyhow!("SPOTIFY_RATE_LIMITED")
+            } else if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden on /me/tracks/contains. Body: {body}");
+                anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}")
             } else {
-                anyhow::anyhow!("Spotify {status}: {body}")
+                anyhow::anyhow!("Spotify API error: status {} body: {}", status, body)
             });
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut api_tracks = Vec::new();
-        let mut added_ats = Vec::new();
+
+        if let Some((tracks, cached_total, _)) =
+            self.library_cache.get_liked_tracks_page(None, u32::MAX)
+        {
+            if !tracks.is_empty() && cached_total == total {
+                info!("sync_liked_tracks: cache hit ({} tracks)", tracks.len());
+                return Ok((tracks, total));
+            }
+            info!(
+                "sync_liked_tracks: cache has {} but API total is {} — refetching",
+                cached_total, total
+            );
+        }
+
+        let mut all_tracks: Vec<TrackSummary> = Vec::with_capacity(total as usize);
+        let mut all_added_ats: Vec<String> = Vec::with_capacity(total as usize);
 
         if let Some(items) = json["items"].as_array() {
             for saved in items {
@@ -1018,44 +1094,93 @@ impl SpotifyClient {
                 let album = track["album"]["name"].as_str().unwrap_or("").to_string();
                 let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
                 let uri = track["uri"].as_str().unwrap_or("").to_string();
-                let cover_path = None;
 
                 if !uri.is_empty() {
-                    added_ats.push(added_at.clone());
-                    api_tracks.push(TrackSummary {
+                    all_added_ats.push(added_at.clone());
+                    all_tracks.push(TrackSummary {
                         name,
                         artist,
                         album,
                         duration_ms,
                         uri,
-                        cover_path,
+                        cover_path: None,
                         added_at: Some(added_at),
                     });
                 }
             }
         }
 
-        let cached = self.library_cache.get_liked_tracks_page(None, 50);
+        // Fetch remaining pages sequentially
+        let total_pages = ((total + 49) / 50) as u32;
+        if total_pages > 1 {
+            info!(
+                "sync_liked_tracks: fetching {} remaining pages ({} total tracks)",
+                total_pages - 1,
+                total
+            );
 
-        if let Some((cached_tracks, _cached_total, _)) = &cached {
-            if cached_tracks.len() == api_tracks.len() {
-                let api_uris: Vec<&str> = api_tracks.iter().map(|t| t.uri.as_str()).collect();
-                let cached_uris: Vec<&str> =
-                    cached_tracks.iter().map(|t| t.uri.as_str()).collect();
-                if api_uris == cached_uris {
-                    info!("sync_liked_tracks: no changes detected, using cache");
-                    return Ok((cached_tracks.clone(), total));
+            for page in 1..total_pages {
+                let offset = page * 50;
+                spotify_rate_limit().await;
+                let resp = self
+                    .http
+                    .get("https://api.spotify.com/v1/me/tracks")
+                    .bearer_auth(&token)
+                    .query(&[("limit", "50"), ("offset", &offset.to_string())])
+                    .send()
+                    .await?;
+
+                if !resp.status().is_success() {
+                    warn!("Failed to fetch liked tracks page {page}");
+                    continue;
+                }
+
+                let json: serde_json::Value = resp.json().await?;
+                if let Some(items) = json["items"].as_array() {
+                    for saved in items {
+                        let added_at = saved["added_at"].as_str().unwrap_or("").to_string();
+                        let track = &saved["track"];
+                        let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                        let artist = track["artists"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|x| x["name"].as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                        let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                        let uri = track["uri"].as_str().unwrap_or("").to_string();
+
+                        if !uri.is_empty() {
+                            all_added_ats.push(added_at.clone());
+                            all_tracks.push(TrackSummary {
+                                name,
+                                artist,
+                                album,
+                                duration_ms,
+                                uri,
+                                cover_path: None,
+                                added_at: Some(added_at),
+                            });
+                        }
+                    }
                 }
             }
         }
 
         info!(
-            "sync_liked_tracks: changes detected, resetting cache with {} tracks",
-            api_tracks.len()
+            "sync_liked_tracks: loaded {} tracks total",
+            all_tracks.len()
         );
+
+        // Save to cache
         self.library_cache
-            .reset_liked_tracks_cache(&api_tracks, &added_ats);
-        Ok((api_tracks, total))
+            .reset_liked_tracks_cache(&all_tracks, &all_added_ats);
+
+        Ok((all_tracks, total))
     }
 
     pub async fn play_track_uri(&self, track_uri: &str) -> Result<()> {
@@ -1087,6 +1212,7 @@ impl SpotifyClient {
 
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
         if !self.authenticated {
+            warn!("fetch_playlists: not authenticated");
             return Ok(Vec::new());
         }
         let token = self
@@ -1094,11 +1220,13 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        let mut all = Vec::new();
+        info!("fetch_playlists: starting to fetch playlists");
+        let mut all = Vec::with_capacity(50);
         let mut offset = 0u32;
         loop {
             let offset_str = offset.to_string();
             spotify_rate_limit().await;
+            info!("fetch_playlists: requesting offset={}", offset);
             let response = self
                 .http
                 .get("https://api.spotify.com/v1/me/playlists")
@@ -1110,6 +1238,7 @@ impl SpotifyClient {
             let status = response.status();
             if !status.is_success() {
                 let body = response.text().await.unwrap_or_default();
+                warn!("fetch_playlists: API error status={}", status);
                 if status.as_u16() == 401 {
                     warn!("Got 401 Unauthorized - token may have expired");
                     return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
@@ -1118,7 +1247,15 @@ impl SpotifyClient {
                     warn!("Rate limited on Spotify API");
                     return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
                 }
-                return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+                if status.as_u16() == 403 {
+                    warn!("Got 403 Forbidden. Body: {body}");
+                    return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+                }
+                return Err(anyhow::anyhow!(
+                    "Spotify API error: status {} body: {}",
+                    status,
+                    body
+                ));
             }
 
             let json: serde_json::Value = response.json().await?;
@@ -1126,6 +1263,11 @@ impl SpotifyClient {
                 .as_array()
                 .map(|a| a.len() as u32)
                 .unwrap_or(0);
+
+            info!(
+                "fetch_playlists: fetched {} playlists at offset={}",
+                fetched, offset
+            );
 
             if let Some(items) = json["items"].as_array() {
                 for p in items {
@@ -1152,21 +1294,28 @@ impl SpotifyClient {
             }
             offset += fetched;
         }
+        info!("fetch_playlists: completed, total playlists={}", all.len());
         Ok(all)
     }
 
+    /// Returns (tracks, total, page_items_count).
+    /// `page_items_count` is the number of items the API returned (before episode filtering),
+    /// which callers must use to increment the offset — NOT `tracks.len()`.
     pub async fn fetch_playlist_tracks(
         &self,
         playlist_id: &str,
         offset: u32,
-    ) -> Result<(Vec<TrackSummary>, u32)> {
+    ) -> Result<(Vec<TrackSummary>, u32, u32)> {
         if !self.authenticated {
-            return Ok((Vec::new(), 0));
+            return Ok((Vec::new(), 0, 0));
         }
         let key = format!("playlist:{playlist_id}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: playlist {playlist_id} offset={offset}");
-            return Ok(cached);
+            if !cached.0.is_empty() {
+                info!("Library cache hit: playlist {playlist_id} offset={offset}");
+                let page_items = cached.1.saturating_sub(offset).min(50);
+                return Ok((cached.0, cached.1, page_items));
+            }
         }
         let token = self
             .get_access_token()
@@ -1175,23 +1324,23 @@ impl SpotifyClient {
 
         let offset_str = offset.to_string();
         let limit_str = "50";
+
+        // Feb 2026: /tracks endpoint was deprecated and removed, use /items
         let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
+        info!("Fetching playlist items for {playlist_id} (offset={offset})");
         spotify_rate_limit().await;
         let response = self
             .http
             .get(&url)
             .bearer_auth(&token)
-            .query(&[
-                ("limit", limit_str),
-                ("offset", &offset_str),
-                ("market", "from_token"),
-            ])
+            .query(&[("limit", limit_str), ("offset", &offset_str)])
             .send()
             .await?;
 
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            warn!("Playlist fetch failed for {playlist_id} status={status}");
 
             if status.as_u16() == 401 {
                 warn!("Got 401 Unauthorized - token may have expired");
@@ -1204,23 +1353,99 @@ impl SpotifyClient {
             }
 
             if status.as_u16() == 403 {
-                warn!("Playlist not accessible (403) — may not be owned or collaborated");
-                return Err(anyhow::anyhow!("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE: {body}"));
+                // Fallback: try the main playlist endpoint which returns items inline
+                info!("Got 403 on /items, trying main playlist endpoint for {playlist_id}");
+                spotify_rate_limit().await;
+                let main_url = format!("https://api.spotify.com/v1/playlists/{playlist_id}");
+                let main_resp = self.http.get(&main_url).bearer_auth(&token).send().await?;
+                let main_status = main_resp.status();
+                info!("Main playlist endpoint returned status={main_status} for {playlist_id}");
+                if main_status.is_success() {
+                    let main_json: serde_json::Value = main_resp.json().await?;
+                    // New API: "items" field (was "tracks"), items[].item (was items[].track)
+                    let tracks_obj = if !main_json["items"].is_null() {
+                        &main_json["items"]
+                    } else {
+                        &main_json["tracks"]
+                    };
+                    let total = tracks_obj["total"].as_u64().unwrap_or(0) as u32;
+                    let items_count = tracks_obj["items"].as_array().map(|a| a.len()).unwrap_or(0);
+                    info!("Main endpoint: total={total}, items={items_count} for {playlist_id}");
+                    let mut tracks = Vec::new();
+                    if let Some(items) = tracks_obj["items"].as_array() {
+                        for item_wrapper in items {
+                            // New API: "item" (was "track")
+                            let track = if !item_wrapper["item"].is_null() {
+                                &item_wrapper["item"]
+                            } else {
+                                &item_wrapper["track"]
+                            };
+                            if track.is_null() || track["type"].as_str() == Some("episode") {
+                                continue;
+                            }
+                            let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                            let artist = track["artists"]
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|x| x["name"].as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                })
+                                .unwrap_or_default();
+                            let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                            let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                            let uri = track["uri"].as_str().unwrap_or("").to_string();
+                            let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
+                            if !uri.is_empty() {
+                                tracks.push(TrackSummary {
+                                    name,
+                                    artist,
+                                    album,
+                                    duration_ms,
+                                    uri,
+                                    cover_path: None,
+                                    added_at,
+                                });
+                            }
+                        }
+                    }
+                    info!(
+                        "Main endpoint: parsed {} tracks for {playlist_id}",
+                        tracks.len()
+                    );
+                    self.library_cache.save_tracks(&key, &tracks, total);
+                    return Ok((tracks, total, items_count as u32));
+                }
+                let _ = main_resp.text().await.unwrap_or_default();
+                warn!("Main playlist endpoint also failed: {main_status}");
+                return Err(anyhow::anyhow!("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut tracks = Vec::new();
+        let page_items = json["items"].as_array().map(|a| a.len()).unwrap_or(0) as u32;
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut tracks = Vec::with_capacity(items_len);
 
         if let Some(items) = json["items"].as_array() {
             for item_wrapper in items {
-                let track = if !item_wrapper["track"].is_null() {
-                    &item_wrapper["track"]
-                } else if !item_wrapper["item"].is_null() {
+                // New API: "item" (was "track")
+                let track = if !item_wrapper["item"].is_null() {
                     &item_wrapper["item"]
+                } else if !item_wrapper["track"].is_null() {
+                    &item_wrapper["track"]
                 } else {
                     continue;
                 };
@@ -1229,9 +1454,7 @@ impl SpotifyClient {
                     continue;
                 }
 
-                let added_at = item_wrapper["added_at"]
-                    .as_str()
-                    .map(|s| s.to_string());
+                let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
 
                 let name = track["name"].as_str().unwrap_or("Unknown").to_string();
                 let artist = track["artists"]
@@ -1262,8 +1485,13 @@ impl SpotifyClient {
             }
         }
 
+        info!(
+            "Parsed {} tracks from playlist {playlist_id} (total={total}, page_items={page_items})",
+            tracks.len()
+        );
+
         self.library_cache.save_tracks(&key, &tracks, total);
-        Ok((tracks, total))
+        Ok((tracks, total, page_items))
     }
 
     pub async fn play_in_context(&self, playlist_uri: &str, track_uri: &str) -> Result<()> {
@@ -1339,7 +1567,10 @@ impl SpotifyClient {
             return Ok(PlaybackState::default());
         }
 
-        self.shuffle_state.store(json["shuffle_state"].as_bool().unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
+        self.shuffle_state.store(
+            json["shuffle_state"].as_bool().unwrap_or(false),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let repeat = json["repeat_state"].as_str().unwrap_or("off");
         if let Ok(mut rp) = self.repeat_state.write() {
             *rp = match repeat {
@@ -1350,13 +1581,17 @@ impl SpotifyClient {
         }
 
         let is_playing = json["is_playing"].as_bool().unwrap_or(false);
+        self.is_playing
+            .store(is_playing, std::sync::atomic::Ordering::Relaxed);
         let progress_ms = json["progress_ms"].as_u64().unwrap_or(0);
+        let context_uri = json["context"]["uri"].as_str().map(|s| s.to_string());
 
         let item = &json["item"];
         if item.is_null() {
             return Ok(PlaybackState {
                 is_playing,
                 progress_ms,
+                context_uri,
                 ..Default::default()
             });
         }
@@ -1409,8 +1644,14 @@ impl SpotifyClient {
             artist,
             album,
             is_playing,
-            shuffle: self.shuffle_state.load(std::sync::atomic::Ordering::Relaxed),
-            repeat: self.repeat_state.read().map(|r| *r).unwrap_or(super::RepeatState::Off),
+            shuffle: self
+                .shuffle_state
+                .load(std::sync::atomic::Ordering::Relaxed),
+            repeat: self
+                .repeat_state
+                .read()
+                .map(|r| *r)
+                .unwrap_or(super::RepeatState::Off),
             progress_ms,
             duration_ms,
             volume: 100,
@@ -1421,6 +1662,8 @@ impl SpotifyClient {
             lyrics: None,
             lyrics_scroll: 0,
             lyrics_loading: false,
+            waveform: None,
+            context_uri,
         })
     }
 
@@ -1433,49 +1676,25 @@ impl SpotifyClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
+        let was_playing = self.is_playing.load(std::sync::atomic::Ordering::Relaxed);
+
         spotify_rate_limit().await;
 
-        let state_response = self
-            .http
-            .get("https://api.spotify.com/v1/me/player")
-            .bearer_auth(&token)
-            .send()
-            .await?;
-
-        let is_playing = if state_response.status() == 204 {
-            false
-        } else if let Ok(json) = state_response.json::<serde_json::Value>().await {
-            json["is_playing"].as_bool().unwrap_or(false)
+        let url = if was_playing {
+            "https://api.spotify.com/v1/me/player/pause"
         } else {
-            false
+            "https://api.spotify.com/v1/me/player/play"
         };
 
-        spotify_rate_limit().await;
-        if is_playing {
-            let resp = self
-                .http
-                .put("https://api.spotify.com/v1/me/player/pause")
-                .bearer_auth(&token)
-                .send()
-                .await?;
-            let s = resp.status();
-            if !s.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to pause playback: {s}: {body}");
-            }
-        } else {
-            let resp = self
-                .http
-                .put("https://api.spotify.com/v1/me/player/play")
-                .bearer_auth(&token)
-                .send()
-                .await?;
-            let s = resp.status();
-            if !s.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                anyhow::bail!("Failed to resume playback: {s}: {body}");
-            }
+        let resp = self.http.put(url).bearer_auth(&token).send().await?;
+        let s = resp.status();
+        if !s.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to toggle playback: {s}: {body}");
         }
+
+        self.is_playing
+            .store(!was_playing, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1500,6 +1719,8 @@ impl SpotifyClient {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("Failed to skip to next track: {status}: {body}");
         }
+        self.is_playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1524,6 +1745,8 @@ impl SpotifyClient {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("Failed to skip to previous track: {status}: {body}");
         }
+        self.is_playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -1616,7 +1839,15 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
@@ -1626,6 +1857,7 @@ impl SpotifyClient {
         if let Some(obj) = json["tracks"].as_object() {
             tracks_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                tracks.reserve(items.len());
                 for item in items {
                     let name = item["name"].as_str().unwrap_or("Unknown").to_string();
                     let artist = item["artists"]
@@ -1659,6 +1891,7 @@ impl SpotifyClient {
         if let Some(obj) = json["artists"].as_object() {
             artists_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                artists.reserve(items.len());
                 for item in items {
                     let id = item["id"].as_str().unwrap_or("").to_string();
                     let name = item["name"].as_str().unwrap_or("Unknown").to_string();
@@ -1688,6 +1921,7 @@ impl SpotifyClient {
         if let Some(obj) = json["albums"].as_object() {
             albums_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                albums.reserve(items.len());
                 for item in items {
                     let id = item["id"].as_str().unwrap_or("").to_string();
                     let name = item["name"].as_str().unwrap_or("Unknown").to_string();
@@ -1718,6 +1952,7 @@ impl SpotifyClient {
         if let Some(obj) = json["playlists"].as_object() {
             playlists_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                playlists.reserve(items.len());
                 for item in items {
                     let id = item["id"].as_str().unwrap_or("").to_string();
                     let name = item["name"].as_str().unwrap_or("Unknown").to_string();
@@ -1756,6 +1991,73 @@ impl SpotifyClient {
         Ok(results)
     }
 
+    pub async fn fetch_devices(&self) -> Result<Vec<Device>> {
+        if !self.authenticated {
+            return Ok(Vec::new());
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No token"))?;
+
+        spotify_rate_limit().await;
+        let resp = self
+            .http
+            .get("https://api.spotify.com/v1/me/player/devices")
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("fetch_devices failed ({}): {}", status.as_u16(), text);
+        }
+
+        let v: serde_json::Value = serde_json::from_str(&text)?;
+        let devices = v["devices"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("no devices array"))?
+            .iter()
+            .filter_map(|d| {
+                Some(Device {
+                    id: d["id"].as_str()?.to_string(),
+                    name: d["name"].as_str()?.to_string(),
+                    device_type: d["type"].as_str().unwrap_or("unknown").to_string(),
+                    is_active: d["is_active"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect();
+        Ok(devices)
+    }
+
+    pub async fn transfer_playback(&self, device_id: &str) -> Result<()> {
+        if !self.authenticated {
+            anyhow::bail!("not authenticated");
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No token"))?;
+
+        spotify_rate_limit().await;
+        let body = serde_json::json!({ "device_ids": [device_id], "play": false });
+        let resp = self
+            .http
+            .put("https://api.spotify.com/v1/me/player")
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await?;
+            anyhow::bail!("transfer_playback failed ({}): {}", status.as_u16(), text);
+        }
+        Ok(())
+    }
+
     pub async fn fetch_album_tracks(
         &self,
         album_id: &str,
@@ -1766,8 +2068,10 @@ impl SpotifyClient {
         }
         let key = format!("album:{album_id}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: album {album_id} offset={offset}");
-            return Ok(cached);
+            if !cached.0.is_empty() {
+                info!("Library cache hit: album {album_id} offset={offset}");
+                return Ok(cached);
+            }
         }
         let token = self
             .get_access_token()
@@ -1804,12 +2108,21 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut tracks = Vec::new();
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut tracks = Vec::with_capacity(items_len);
 
         if let Some(items) = json["items"].as_array() {
             for item in items {
@@ -1881,12 +2194,21 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut albums = Vec::new();
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut albums = Vec::with_capacity(items_len);
 
         if let Some(items) = json["items"].as_array() {
             for saved in items {
@@ -1956,11 +2278,19 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
-        let mut artists = Vec::new();
+        let mut artists = Vec::with_capacity(50);
 
         if let Some(artists_obj) = json["artists"].as_object() {
             if let Some(items) = artists_obj.get("items").and_then(|v| v.as_array()) {
@@ -2002,8 +2332,10 @@ impl SpotifyClient {
         }
         let key = format!("artist:{artist_name}:{offset}");
         if let Some(cached) = self.library_cache.get_tracks(&key) {
-            info!("Library cache hit: artist {artist_name} offset={offset}");
-            return Ok(cached);
+            if !cached.0.is_empty() {
+                info!("Library cache hit: artist {artist_name} offset={offset}");
+                return Ok(cached);
+            }
         }
         let token = self
             .get_access_token()
@@ -2042,12 +2374,21 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["tracks"]["total"].as_u64().unwrap_or(0) as u32;
-        let mut tracks = Vec::new();
+        let items_len = json["tracks"]["items"].as_array().map_or(0, |a| a.len());
+        let mut tracks = Vec::with_capacity(items_len);
 
         if let Some(items) = json["tracks"]["items"].as_array() {
             for item in items {
@@ -2114,12 +2455,21 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut shows = Vec::new();
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut shows = Vec::with_capacity(items_len);
 
         if let Some(items) = json["items"].as_array() {
             for item in items {
@@ -2185,13 +2535,22 @@ impl SpotifyClient {
                 return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
             }
 
-            tracing::error!("fetch_show_episodes {status}: {body}");
-            return Err(anyhow::anyhow!("Spotify {status}: {body}"));
+            tracing::error!("fetch_show_episodes API error: status {}", status);
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
         }
 
         let json: serde_json::Value = response.json().await?;
         let total = json["total"].as_u64().unwrap_or(0) as u32;
-        let mut tracks = Vec::new();
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut tracks = Vec::with_capacity(items_len);
 
         if let Some(items) = json["items"].as_array() {
             for item in items {
@@ -2227,7 +2586,147 @@ impl SpotifyClient {
         self.http.clone()
     }
 
+    /// Fetch recommended tracks based on seed URIs.
+    /// Tries Spotify's official `/v1/recommendations` endpoint first,
+    /// falls back to the custom heuristic if it fails or returns too few results.
     pub async fn fetch_recommendations(
+        &self,
+        seed_uris: &[String],
+        limit: u8,
+    ) -> Result<Vec<TrackSummary>> {
+        if !self.authenticated {
+            return Ok(Vec::new());
+        }
+
+        // Try the official Spotify recommendations endpoint first
+        match self.fetch_spotify_recommendations(seed_uris, limit).await {
+            Ok(tracks) if tracks.len() >= (limit as usize / 2).max(3) => {
+                info!(
+                    "Spotify /v1/recommendations returned {} tracks",
+                    tracks.len()
+                );
+                return Ok(tracks);
+            }
+            Ok(few) => {
+                info!(
+                    "Spotify /v1/recommendations returned only {} tracks, falling back to custom",
+                    few.len()
+                );
+            }
+            Err(e) => {
+                warn!("Spotify /v1/recommendations failed ({e:#}), falling back to custom logic");
+            }
+        }
+
+        // Fallback: custom heuristic
+        self.fetch_recommendations_fallback(seed_uris, limit).await
+    }
+
+    /// Official Spotify `/v1/recommendations` endpoint.
+    /// Accepts up to 5 seed URIs (tracks and/or artists).
+    async fn fetch_spotify_recommendations(
+        &self,
+        seed_uris: &[String],
+        limit: u8,
+    ) -> Result<Vec<TrackSummary>> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        // Split seeds into track IDs and artist IDs (max 5 total)
+        let mut seed_track_ids: Vec<&str> = Vec::new();
+        let mut seed_artist_ids: Vec<&str> = Vec::new();
+
+        for uri in seed_uris.iter().take(5) {
+            if let Some(id) = uri.strip_prefix("spotify:track:") {
+                seed_track_ids.push(id);
+            } else if let Some(id) = uri.strip_prefix("spotify:artist:") {
+                seed_artist_ids.push(id);
+            }
+        }
+
+        if seed_track_ids.is_empty() && seed_artist_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let limit_str = limit.to_string();
+        let mut query: Vec<(&str, &str)> =
+            vec![("limit", limit_str.as_str()), ("market", "from_token")];
+
+        let seed_tracks_joined = seed_track_ids.join(",");
+        let seed_artists_joined = seed_artist_ids.join(",");
+
+        if !seed_track_ids.is_empty() {
+            query.push(("seed_tracks", seed_tracks_joined.as_str()));
+        }
+        if !seed_artist_ids.is_empty() {
+            query.push(("seed_artists", seed_artists_joined.as_str()));
+        }
+
+        spotify_rate_limit().await;
+        let resp = self
+            .http
+            .get("https://api.spotify.com/v1/recommendations")
+            .bearer_auth(&token)
+            .query(&query)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(
+                "Spotify /v1/recommendations returned {status}: {}",
+                &body[..body.len().min(500)]
+            );
+            anyhow::bail!("Spotify /v1/recommendations returned {status}");
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        let empty: Vec<serde_json::Value> = vec![];
+        let tracks: Vec<TrackSummary> = json["tracks"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .filter_map(|t| {
+                let uri = t["uri"].as_str()?.to_string();
+                if uri.is_empty() {
+                    return None;
+                }
+                Some(TrackSummary {
+                    name: t["name"].as_str().unwrap_or("Unknown").to_string(),
+                    artist: t["artists"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x["name"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default(),
+                    album: t["album"]["name"].as_str().unwrap_or_default().to_string(),
+                    duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
+                    uri,
+                    cover_path: None,
+                    added_at: None,
+                })
+            })
+            .collect();
+
+        info!(
+            "Spotify /v1/recommendations: seed_tracks={}, seed_artists={}, got {} tracks",
+            seed_track_ids.len(),
+            seed_artist_ids.len(),
+            tracks.len()
+        );
+
+        Ok(tracks)
+    }
+
+    /// Custom heuristic recommendation logic (fallback).
+    /// Discovers featured artists from seed artists' albums, then searches their tracks.
+    async fn fetch_recommendations_fallback(
         &self,
         seed_uris: &[String],
         limit: u8,
@@ -2459,6 +2958,58 @@ impl SpotifyClient {
             .map(|s| s.to_string())
     }
 
+    pub async fn fetch_track_summary(&self, track_id: &str) -> Result<TrackSummary> {
+        if !self.authenticated {
+            anyhow::bail!("Not authenticated");
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+        spotify_rate_limit().await;
+        let resp = self
+            .http
+            .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
+            .bearer_auth(&token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("Spotify track fetch failed: {}", resp.status());
+        }
+        let json: serde_json::Value = resp.json().await?;
+        let name = json["name"].as_str().unwrap_or("Unknown").to_string();
+        let artist = json["artists"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a["name"].as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let album = json["album"]["name"]
+            .as_str()
+            .unwrap_or("Unknown")
+            .to_string();
+        let duration_ms = json["duration_ms"].as_u64().unwrap_or(0);
+        let uri = json["uri"]
+            .as_str()
+            .unwrap_or(&format!("spotify:track:{track_id}"))
+            .to_string();
+        let cover_path = json["album"]["images"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|img| img["url"].as_str())
+            .map(|s| s.to_string());
+
+        Ok(TrackSummary {
+            name,
+            artist,
+            album,
+            duration_ms,
+            uri,
+            cover_path,
+            added_at: None,
+        })
+    }
+
     pub async fn add_tracks_to_playlist(
         &self,
         playlist_id: &str,
@@ -2466,18 +3017,34 @@ impl SpotifyClient {
         position: Option<u32>,
     ) -> Result<String> {
         spotify_rate_limit().await;
-        let token = self.get_access_token().await
+        let token = self
+            .get_access_token()
+            .await
             .ok_or_else(|| anyhow::anyhow!("No access token"))?;
         let mut body = serde_json::json!({ "uris": uris });
         if let Some(pos) = position {
             body["position"] = serde_json::json!(pos);
         }
-        let resp = self.http
-            .post(format!("https://api.spotify.com/v1/playlists/{playlist_id}/items"))
+        let mut resp = self
+            .http
+            .post(format!(
+                "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+            ))
             .bearer_auth(&token)
             .json(&body)
             .send()
             .await?;
+        if resp.status().as_u16() == 404 {
+            resp = self
+                .http
+                .post(format!(
+                    "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+                ))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await?;
+        }
         let status = resp.status();
         let text = resp.text().await?;
         if status.is_success() {
@@ -2501,7 +3068,7 @@ impl SpotifyClient {
         let body = serde_json::json!({
             "items": uris.iter().map(|uri| serde_json::json!({"uri": uri})).collect::<Vec<_>>()
         });
-        let resp = self
+        let mut resp = self
             .http
             .delete(format!(
                 "https://api.spotify.com/v1/playlists/{playlist_id}/items"
@@ -2510,6 +3077,17 @@ impl SpotifyClient {
             .json(&body)
             .send()
             .await?;
+        if resp.status().as_u16() == 404 {
+            resp = self
+                .http
+                .delete(format!(
+                    "https://api.spotify.com/v1/playlists/{playlist_id}/items"
+                ))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await?;
+        }
         let status = resp.status();
         let text = resp.text().await?;
         if status.is_success() {
@@ -2543,11 +3121,7 @@ impl SpotifyClient {
             Ok(())
         } else {
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Unfollow playlist failed ({}): {}",
-                status.as_u16(),
-                text
-            );
+            anyhow::bail!("Unfollow playlist failed ({}): {}", status.as_u16(), text);
         }
     }
 
@@ -2570,11 +3144,7 @@ impl SpotifyClient {
             let arr: Vec<bool> = serde_json::from_str(&text)?;
             Ok(arr.first().copied().unwrap_or(false))
         } else {
-            anyhow::bail!(
-                "Check track saved failed ({}): {}",
-                status.as_u16(),
-                text
-            );
+            anyhow::bail!("Check track saved failed ({}): {}", status.as_u16(), text);
         }
     }
 
@@ -2585,7 +3155,9 @@ impl SpotifyClient {
         description: Option<&str>,
     ) -> Result<PlaylistSummary> {
         spotify_rate_limit().await;
-        let token = self.get_access_token().await
+        let token = self
+            .get_access_token()
+            .await
             .ok_or_else(|| anyhow::anyhow!("No access token"))?;
         let mut body = serde_json::json!({
             "name": name,
@@ -2594,7 +3166,8 @@ impl SpotifyClient {
         if let Some(desc) = description {
             body["description"] = serde_json::json!(desc);
         }
-        let resp = self.http
+        let resp = self
+            .http
             .post("https://api.spotify.com/v1/me/playlists")
             .bearer_auth(&token)
             .json(&body)
@@ -2619,7 +3192,6 @@ impl SpotifyClient {
             anyhow::bail!("Create playlist failed ({}): {}", status.as_u16(), text);
         }
     }
-
 }
 
 pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {

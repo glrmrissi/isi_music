@@ -9,17 +9,21 @@ use crate::ui::{ActiveContent, Focus, LocalNode};
 impl App {
     pub async fn handle_library_item(&mut self, idx: usize) -> bool {
         if idx != 4 && !self.spotify.authenticated {
-            self.state.status_msg =
-                Some("Spotify not connected — only Local Files available".to_string());
-            return false;
-        }
-        if self.pending_fetch.is_some() {
+            self.state.status_msg = Some(
+                "Spotify not connected - only Local Files available. Run: isi-music setup-spotify"
+                    .to_string(),
+            );
             return false;
         }
         match idx {
             0 => {
                 self.state.push_nav();
-                self.state.status_msg = Some("Loading Liked Songs…".to_string());
+                let first_load = !self.spotify.library_cache.has_liked_tracks_cache();
+                self.state.status_msg = Some(if first_load {
+                    "Loading Liked Songs (first load may take a while)…".to_string()
+                } else {
+                    "Loading Liked Songs…".to_string()
+                });
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = oneshot::channel();
@@ -37,7 +41,10 @@ impl App {
                 let (tx, rx) = oneshot::channel();
                 self.pending_fetch = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify.fetch_saved_albums(0).await.map_err(|e| e.to_string());
+                    let result = spotify
+                        .fetch_saved_albums(0)
+                        .await
+                        .map_err(|e| e.to_string());
                     let _ = tx.send(FetchResult::Albums(result));
                 });
             }
@@ -49,7 +56,10 @@ impl App {
                 let (tx, rx) = oneshot::channel();
                 self.pending_fetch = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify.fetch_followed_artists().await.map_err(|e| e.to_string());
+                    let result = spotify
+                        .fetch_followed_artists()
+                        .await
+                        .map_err(|e| e.to_string());
                     let _ = tx.send(FetchResult::Artists(result));
                 });
             }
@@ -69,20 +79,20 @@ impl App {
             Some(p) => p.clone(),
             None => return false,
         };
-        if self.pending_fetch.is_some() {
-            return false;
-        }
         self.state.push_nav();
         self.state.status_msg = Some(format!("Loading {}…", playlist.name));
         self.state.loading = true;
         self.state.active_playlist_uri = Some(playlist.uri.clone());
         self.state.active_playlist_id = Some(playlist.id.clone());
         let spotify = Arc::clone(&self.spotify);
-        let playlist_id = playlist.id.clone();
+        let playlist_id = playlist.id;
         let (tx, rx) = oneshot::channel();
         self.pending_fetch = Some(rx);
         tokio::spawn(async move {
-            let result = spotify.fetch_playlist_tracks(&playlist_id, 0).await.map_err(|e| e.to_string());
+            let result = spotify
+                .fetch_playlist_tracks(&playlist_id, 0)
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(FetchResult::PlaylistTracks(result));
         });
         false
@@ -123,13 +133,15 @@ impl App {
         self.local_scan_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
-            let extensions = ["mp3", "flac", "ogg", "wav", "aiff"];
+            let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "opus"];
             let mut nodes: Vec<LocalNode> = Vec::new();
 
             let db_path = crate::config::get_local_db_path();
             let conn = match rusqlite::Connection::open(&db_path) {
                 Ok(c) => {
-                    let _ = c.execute_batch("PRAGMA journal_mode=WAL;");
+                    let _ = c.execute_batch(
+                        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+                    );
                     Some(c)
                 }
                 Err(_) => None,
@@ -150,12 +162,14 @@ impl App {
                 );
             }
 
-            fn scan_dir(
+            fn scan_dir<'a>(
                 dir: &std::path::Path,
                 depth: usize,
                 nodes: &mut Vec<LocalNode>,
                 extensions: &[&str],
-                conn: &Option<rusqlite::Connection>,
+                conn: &'a Option<rusqlite::Connection>,
+                select_stmt: &mut Option<rusqlite::Statement<'a>>,
+                insert_stmt: &mut Option<rusqlite::Statement<'a>>,
             ) {
                 let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
                 let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -193,7 +207,15 @@ impl App {
                         children_count: 0,
                     });
                     let before = nodes.len();
-                    scan_dir(&subdir, depth + 1, nodes, extensions, conn);
+                    scan_dir(
+                        &subdir,
+                        depth + 1,
+                        nodes,
+                        extensions,
+                        conn,
+                        select_stmt,
+                        insert_stmt,
+                    );
                     let added = nodes.len() - before;
                     if let LocalNode::Folder { children_count, .. } = &mut nodes[folder_idx] {
                         *children_count = added;
@@ -209,16 +231,27 @@ impl App {
 
                     let mut track_data: Option<crate::spotify::TrackSummary> = None;
                     if let Some(c) = conn {
-                        let stmt = c
-                            .prepare("SELECT title, artist, album, duration_ms, cover_path FROM tracks WHERE path = ?1")
-                            .ok();
-                        if let Some(mut s) = stmt {
+                        if select_stmt.is_none() {
+                            *select_stmt = c
+                                .prepare("SELECT title, artist, album, duration_ms, cover_path FROM tracks WHERE path = ?1")
+                                .ok();
+                        }
+                        if let Some(s) = select_stmt.as_mut() {
                             track_data = s
                                 .query_row([path_str], |row| {
                                     Ok(crate::spotify::TrackSummary {
-                                        name: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(0)?),
-                                        artist: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(1)?),
-                                        album: crate::app::metadata::sanitize_control_chars(&row.get::<_, String>(2)?),
+                                        name: crate::app::metadata::sanitize_control_chars(
+                                            &row.get::<_, String>(0)?,
+                                        )
+                                        .into_owned(),
+                                        artist: crate::app::metadata::sanitize_control_chars(
+                                            &row.get::<_, String>(1)?,
+                                        )
+                                        .into_owned(),
+                                        album: crate::app::metadata::sanitize_control_chars(
+                                            &row.get::<_, String>(2)?,
+                                        )
+                                        .into_owned(),
                                         duration_ms: row.get(3)?,
                                         uri: uri.clone(),
                                         cover_path: row.get(4).ok(),
@@ -240,9 +273,7 @@ impl App {
 
                             let cache_dir = dirs::cache_dir()
                                 .map(|d| d.join("isi-music/covers"))
-                                .unwrap_or_else(|| {
-                                    std::path::PathBuf::from("/tmp/isi-music/covers")
-                                });
+                                .unwrap_or_else(|| std::env::temp_dir().join("isi-music/covers"));
 
                             if let Err(e) = std::fs::create_dir_all(&cache_dir) {
                                 warn!("Cannot create cover cache dir: {e}");
@@ -262,18 +293,24 @@ impl App {
                         };
 
                         if let Some(c) = conn {
-                            let _ = c.execute(
-                                "INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, cover_path)
-                                VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                                rusqlite::params![
+                            if insert_stmt.is_none() {
+                                *insert_stmt = c
+                                    .prepare(
+                                        "INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, cover_path)
+                                        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                    )
+                                    .ok();
+                            }
+                            if let Some(s) = insert_stmt.as_mut() {
+                                let _ = s.execute(rusqlite::params![
                                     path_str,
                                     crate::app::metadata::sanitize_control_chars(&name),
                                     crate::app::metadata::sanitize_control_chars(&artist),
                                     crate::app::metadata::sanitize_control_chars(&album),
                                     duration_ms as i64,
                                     cover_path
-                                ],
-                            );
+                                ]);
+                            }
                         }
 
                         crate::spotify::TrackSummary {
@@ -291,7 +328,25 @@ impl App {
                 }
             }
 
-            scan_dir(&dir, 0, &mut nodes, &extensions, &conn);
+            if let Some(ref c) = conn {
+                let _ = c.execute_batch("BEGIN TRANSACTION;");
+            }
+            let mut select_stmt: Option<rusqlite::Statement> = None;
+            let mut insert_stmt: Option<rusqlite::Statement> = None;
+            scan_dir(
+                &dir,
+                0,
+                &mut nodes,
+                &extensions,
+                &conn,
+                &mut select_stmt,
+                &mut insert_stmt,
+            );
+            drop(select_stmt);
+            drop(insert_stmt);
+            if let Some(ref c) = conn {
+                let _ = c.execute_batch("COMMIT;");
+            }
             let _ = tx.send(nodes);
         });
     }
@@ -312,6 +367,7 @@ impl App {
             self.state.tracks = tree.all_tracks_flat();
             self.state.tracks_total = track_count as u32;
             self.state.tracks_offset = track_count as u32;
+            self.state.tracks_api_offset = track_count as u32;
             self.state.local_tree = tree;
             self.state
                 .local_tree_list
@@ -328,6 +384,7 @@ impl App {
             } else {
                 self.state.status_msg = Some(format!("{track_count} local tracks loaded"));
             }
+            self.needs_redraw = true;
         }
     }
 }

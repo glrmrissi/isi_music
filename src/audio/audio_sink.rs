@@ -280,20 +280,22 @@ impl AnalyzerSink {
         let shutdown = Arc::new(AtomicBool::new(false));
         Self {
             inner,
-            handle: AnalyzerHandle::spawn_with_enabled(
-                bands,
-                enabled,
-                Arc::clone(&shutdown),
-            ),
+            handle: AnalyzerHandle::spawn_with_enabled(bands, enabled, Arc::clone(&shutdown)),
             sink_factory: Some(sink_factory),
             shutdown,
         }
     }
 
     fn push_stereo_f64(&mut self, samples: &[f64]) {
+        if !self.handle.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(mut producer) = self.handle.producer.lock() else {
+            return;
+        };
         for ch in samples.chunks_exact(2) {
             let mono = ((ch[0] + ch[1]) * 0.5) as f32;
-            self.handle.push_mono(mono);
+            let _ = producer.try_push(mono);
         }
     }
 }
@@ -323,16 +325,10 @@ impl Sink for AnalyzerSink {
     }
 
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
-        let samples = if let AudioPacket::Samples(ref s) = packet {
-            Some(s.clone())
-        } else {
-            None
-        };
-        let result = self.inner.write(packet, converter);
-        if let Some(samples) = samples {
-            self.push_stereo_f64(&samples);
+        if let AudioPacket::Samples(ref s) = packet {
+            self.push_stereo_f64(s);
         }
-        result
+        self.inner.write(packet, converter)
     }
 }
 

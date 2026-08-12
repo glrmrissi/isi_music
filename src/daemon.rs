@@ -2,24 +2,26 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
-use tracing::info;
-#[cfg(feature = "mpris")]
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::config::AppConfig;
 use crate::player::{AudioPlayer, NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
-use crate::utils::ipc::socket_path;
+use crate::utils::ipc::IpcListener;
 use crate::utils::lastfm::LastfmClient;
-#[cfg(feature = "mpris")]
+#[cfg(windows)]
+use crate::utils::media_keys::MediaKey;
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::utils::mpris::{MprisCmd, MprisState};
+#[cfg(windows)]
+use crate::utils::smtc::{SmtcCmd, SmtcState};
 
 struct TrackInfo {
     name: String,
     artist: String,
     album: String,
     duration_ms: u64,
+    uri: String,
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
@@ -34,44 +36,45 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 .with_writer(std::sync::Mutex::new(log_file))
                 .with_ansi(false)
                 .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(
-                            "isi_music=debug"
-                                .parse()
-                                .unwrap_or_else(|_| {
-                                    "isi_music=info"
-                                        .parse()
-                                        .expect("hardcoded valid directive")
-                                }),
-                        ),
+                    tracing_subscriber::EnvFilter::from_default_env().add_directive(
+                        "isi_music=debug".parse().unwrap_or_else(|_| {
+                            "isi_music=info".parse().expect("hardcoded valid directive")
+                        }),
+                    ),
                 )
                 .try_init();
         }
     }
     info!("daemon starting");
 
-    let lastfm = match (
-        &cfg.lastfm.api_key,
-        &cfg.lastfm.api_secret,
-        &cfg.lastfm.session_key,
-    ) {
-        (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(
-            k.clone(),
-            s.clone(),
-            sk.clone(),
-        ))),
+    let lastfm = match &cfg.lastfm.session_key {
+        Some(sk) => {
+            use crate::utils::lastfm::{get_api_key, get_api_secret};
+            Some(Arc::new(LastfmClient::new(
+                get_api_key(),
+                get_api_secret(),
+                sk.clone(),
+            )))
+        }
         _ => None,
     };
 
     let mut spotify = crate::spotify::SpotifyClient::new().await?;
-    let token = spotify
-        .get_access_token()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("No Spotify access token"))?;
-    let mut player: Box<dyn AudioPlayer> = Box::new(NativePlayer::new(token, true).await?);
+    let access_token = spotify.get_access_token().await;
+    crate::player::ensure_streaming_auth().await?;
 
-    // MPRIS D-Bus (optional — gracefully degrades if D-Bus unavailable)
-    #[cfg(feature = "mpris")]
+    let mut player: Box<dyn AudioPlayer> = Box::new(
+        NativePlayer::new(
+            access_token,
+            true,
+            cfg.audio.librespot_bitrate(),
+            cfg.audio.gapless,
+        )
+        .await?,
+    );
+
+    // MPRIS D-Bus (optional — gracefully degrades if D-Bus unavailable; Linux only)
+    #[cfg(all(feature = "mpris", target_os = "linux"))]
     let mut mpris = match crate::utils::mpris::spawn().await {
         Ok(h) => {
             info!("MPRIS D-Bus server started");
@@ -83,14 +86,36 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         }
     };
 
-    // IPC socket
-    let sock = socket_path();
-    if sock.exists() {
-        std::fs::remove_file(&sock).ok();
-    }
-    let listener = UnixListener::bind(&sock)?;
+    // Global media hotkeys (Windows)
+    #[cfg(windows)]
+    let mut media_keys = match crate::utils::media_keys::spawn() {
+        Ok(h) => {
+            info!("Global media hotkeys registered");
+            Some(h)
+        }
+        Err(e) => {
+            warn!("Media hotkeys unavailable: {e}");
+            None
+        }
+    };
 
-    info!("daemon ready — {}", sock.display());
+    // SMTC (Windows)
+    #[cfg(windows)]
+    let smtc = match crate::utils::smtc::spawn() {
+        Ok(h) => {
+            info!("SMTC integration enabled");
+            Some(h)
+        }
+        Err(e) => {
+            warn!("SMTC unavailable: {e}");
+            None
+        }
+    };
+
+    // IPC endpoint (Unix socket on Unix, named pipe on Windows)
+    let mut listener = IpcListener::bind()?;
+
+    info!("daemon ready — {}", listener.describe());
 
     // Playback tracking (for scrobble + status)
     let mut track_list: Vec<TrackInfo> = Vec::new();
@@ -98,19 +123,27 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     let mut track_start_unix: u64 = 0;
     let mut scrobble_sent = false;
     let mut last_tick = Instant::now();
+    let autoplay_enabled = cfg.autoplay_enabled();
+    let mut recent_track_uris: std::collections::VecDeque<String> =
+        std::collections::VecDeque::new();
 
     loop {
         tokio::select! {
             accept = listener.accept() => {
-                let Ok((stream, _)) = accept else { continue };
-                let (r, mut w) = stream.into_split();
+                let Ok(stream) = accept else { continue };
+                let (r, mut w) = tokio::io::split(stream);
                 let mut reader = BufReader::new(r);
                 let mut line = String::new();
                 if reader.read_line(&mut line).await.is_err() { continue }
 
                 let cmd = line.trim().to_string();
 
-                let response: String = if cmd.starts_with("play ") {
+                let response: String = if cmd == "playlists" {
+                    match list_playlists(&mut spotify).await {
+                        Ok(list) => list,
+                        Err(e) => format!("error: {e}"),
+                    }
+                } else if cmd.starts_with("play ") {
                     let arg = cmd.trim_start_matches("play ").trim();
                     match load_playlist(&mut spotify, &mut *player, &mut track_list, arg).await {
                         Ok(n) => {
@@ -121,14 +154,29 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                         }
                         Err(e) => format!("error: {e}"),
                     }
-                } else if cmd == "liked" {
-                    match load_liked(&mut spotify, &mut *player, &mut track_list).await {
+                } else if cmd.starts_with("liked") {
+                    let limit = if cmd == "liked" {
+                        None
+                    } else {
+                        cmd.strip_prefix("liked --limit ")
+                            .and_then(|s| s.parse::<usize>().ok())
+                    };
+                    match load_liked(&mut spotify, &mut *player, &mut track_list, limit).await {
                         Ok(n) => {
                             progress_ms = 0;
                             scrobble_sent = false;
                             track_start_unix = unix_now();
                             format!("ok — {n} liked tracks loaded")
                         }
+                        Err(e) => format!("error: {e}"),
+                    }
+                } else if cmd.starts_with("search ") {
+                    let query = cmd.trim_start_matches("search ").trim();
+                    search_in_queue(&track_list, query)
+                } else if cmd.starts_with("search-global ") {
+                    let query = cmd.trim_start_matches("search-global ").trim();
+                    match search_global(&mut spotify, query).await {
+                        Ok(results) => results,
                         Err(e) => format!("error: {e}"),
                     }
                 } else if cmd.starts_with("play-id ") {
@@ -170,7 +218,28 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                         "vol+" => { player.volume_up();   format!("vol {}", player.volume()) }
                         "vol-" => { player.volume_down(); format!("vol {}", player.volume()) }
                         "status" => status_string(&*player, &track_list, progress_ms),
-                        "ls" => ls_string(&*player, &track_list),
+                        cmd if cmd.starts_with("ls") => {
+                            let limit = cmd.strip_prefix("ls --limit ")
+                                .and_then(|s| s.parse::<usize>().ok());
+                            ls_string(&*player, &track_list, limit)
+                        }
+                        "devices" => {
+                            match list_devices(&mut spotify).await {
+                                Ok(list) => list,
+                                Err(e) => format!("error: {e}"),
+                            }
+                        }
+                        cmd if cmd.starts_with("device") => {
+                            let name = cmd.strip_prefix("device ").unwrap_or("");
+                            if name.is_empty() {
+                                "usage: device <name>".into()
+                            } else {
+                                match set_device(&mut spotify, name).await {
+                                    Ok(msg) => msg,
+                                    Err(e) => format!("error: {e}"),
+                                }
+                            }
+                        }
                         "quit" => {
                             let _ = w.write_all(b"bye\n").await;
                             break;
@@ -188,7 +257,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 last_tick = now;
 
                 // MPRIS: push state + handle incoming commands (media keys, playerctl)
-                #[cfg(feature = "mpris")]
+                #[cfg(all(feature = "mpris", target_os = "linux"))]
                 if let Some(mpris) = &mut mpris {
                     let idx = player.current_index();
                     let (title, artist, duration_us) = idx
@@ -229,14 +298,129 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                     }
                 }
 
+                // Global media hotkeys (Windows)
+                #[cfg(windows)]
+                if let Some(media_keys) = &mut media_keys {
+                    while let Ok(cmd) = media_keys.cmd_rx.try_recv() {
+                        match cmd {
+                            MediaKey::PlayPause => {
+                                player.toggle();
+                            }
+                            MediaKey::Next => {
+                                if player.next() {
+                                    progress_ms = 0;
+                                    scrobble_sent = false;
+                                    track_start_unix = unix_now();
+                                }
+                            }
+                            MediaKey::Previous => {
+                                if player.prev() {
+                                    progress_ms = 0;
+                                    scrobble_sent = false;
+                                    track_start_unix = unix_now();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // SMTC (Windows)
+                #[cfg(windows)]
+                if let Some(smtc) = &smtc {
+                    let idx = player.current_index();
+                    let (title, artist, duration_ms) = idx
+                        .and_then(|i| track_list.get(i))
+                        .map(|t| (t.name.clone(), t.artist.clone(), t.duration_ms))
+                        .unwrap_or_default();
+                    smtc.update(&SmtcState {
+                        title,
+                        artist,
+                        album: String::new(),
+                        art_url: None,
+                        cover_path: None,
+                        duration_ms,
+                        position_ms: progress_ms,
+                        is_playing: player.is_playing(),
+                    });
+
+                    while let Ok(cmd) = smtc.cmd_rx.try_recv() {
+                        match cmd {
+                            SmtcCmd::Play => { player.play(); }
+                            SmtcCmd::Pause => { player.pause(); }
+                            SmtcCmd::Next => {
+                                if player.next() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
+                            }
+                            SmtcCmd::Previous => {
+                                if player.prev() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
+                            }
+                            SmtcCmd::Seek(ms) => {
+                                progress_ms = ms;
+                                player.seek(ms as u32);
+                            }
+                        }
+                    }
+                }
+
                 // Player events
                 while let Some(notif) = player.try_recv_event() {
                     match notif {
                         PlayerNotification::TrackEnded | PlayerNotification::TrackUnavailable => {
+                            // Track recent URIs for autoplay seeding
+                            if let Some(idx) = player.current_index() {
+                                if let Some(t) = track_list.get(idx) {
+                                    if t.uri.starts_with("spotify:track:") {
+                                        recent_track_uris.push_back(t.uri.clone());
+                                        if recent_track_uris.len() > 5 {
+                                            recent_track_uris.pop_front();
+                                        }
+                                    }
+                                }
+                            }
+
                             if player.next() {
                                 progress_ms = 0;
                                 scrobble_sent = false;
                                 track_start_unix = unix_now();
+                            } else if autoplay_enabled && !recent_track_uris.is_empty() {
+                                // Queue exhausted — fetch recommendations and continue
+                                info!("daemon: queue exhausted, fetching autoplay recommendations");
+                                let seeds: Vec<String> = recent_track_uris.iter().cloned().collect();
+                                match spotify.fetch_recommendations(&seeds, 20).await {
+                                    Ok(tracks) if !tracks.is_empty() => {
+                                        for t in &tracks {
+                                            player.add_to_queue(
+                                                t.uri.clone(),
+                                                t.name.clone(),
+                                                t.artist.clone(),
+                                                t.album.clone(),
+                                                t.duration_ms,
+                                                None,
+                                            );
+                                        }
+                                        // Update track_list so status/ls reflect the new tracks
+                                        for t in tracks {
+                                            track_list.push(TrackInfo {
+                                                name: t.name,
+                                                artist: t.artist,
+                                                album: t.album,
+                                                duration_ms: t.duration_ms,
+                                                uri: t.uri,
+                                            });
+                                        }
+                                        info!("daemon: autoplay queued tracks, continuing");
+                                        if player.next() {
+                                            progress_ms = 0;
+                                            scrobble_sent = false;
+                                            track_start_unix = unix_now();
+                                        }
+                                    }
+                                    Ok(_) => {
+                                        warn!("daemon: autoplay returned no tracks");
+                                    }
+                                    Err(e) => {
+                                        warn!("daemon: autoplay failed: {e}");
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -253,19 +437,26 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                     if !scrobble_sent {
                         if let Some(idx) = player.current_index() {
                             if let Some(t) = track_list.get(idx) {
-                                let threshold = (t.duration_ms / 2).min(4 * 60 * 1000);
-                                if progress_ms >= 30_000 && progress_ms >= threshold {
-                                    if let Some(lfm) = lastfm.clone() {
-                                        let artist = t.artist.clone();
-                                        let title  = t.name.clone();
-                                        let album  = t.album.clone();
-                                        let ts  = track_start_unix;
-                                        let dur = t.duration_ms;
-                                        tokio::spawn(async move {
-                                            lfm.scrobble(&artist, &title, &album, ts, dur).await;
-                                        });
+                                if t.duration_ms >= 30_000 {
+                                    let threshold = (t.duration_ms / 2).min(4 * 60 * 1000);
+                                    if progress_ms >= threshold {
+                                        if let Some(lfm) = lastfm.clone() {
+                                            let artist = t.artist.clone();
+                                            let title  = t.name.clone();
+                                            let album  = t.album.clone();
+                                            let now = unix_now();
+                                            let ts = if track_start_unix > 0 {
+                                                track_start_unix
+                                            } else {
+                                                now.saturating_sub((progress_ms / 1000) as u64)
+                                            };
+                                            let dur = t.duration_ms;
+                                            tokio::spawn(async move {
+                                                lfm.scrobble(&artist, &title, &album, ts, dur).await;
+                                            });
+                                        }
+                                        scrobble_sent = true;
                                     }
-                                    scrobble_sent = true;
                                 }
                             }
                         }
@@ -275,7 +466,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         }
     }
 
-    std::fs::remove_file(&sock).ok();
+    IpcListener::cleanup();
     Ok(())
 }
 
@@ -283,18 +474,40 @@ async fn load_playlist(
     spotify: &mut SpotifyClient,
     player: &mut dyn AudioPlayer,
     track_list: &mut Vec<TrackInfo>,
-    uri_or_id: &str,
+    uri_or_id_or_name: &str,
 ) -> Result<usize> {
-    let id = uri_or_id
-        .trim_start_matches("spotify:playlist:")
-        .trim_start_matches("spotify:album:");
+    let id = if uri_or_id_or_name.contains(':') {
+        // Full URI: spotify:playlist:ID
+        uri_or_id_or_name
+            .trim_start_matches("spotify:playlist:")
+            .trim_start_matches("spotify:album:")
+            .to_string()
+    } else if uri_or_id_or_name
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '_')
+    {
+        // Likely an ID (alphanumeric with underscores)
+        uri_or_id_or_name.to_string()
+    } else {
+        // Treat as name: search playlists for match
+        let playlists = spotify.fetch_playlists().await?;
+        let query_lower = uri_or_id_or_name.to_lowercase();
+        let match_id = playlists
+            .iter()
+            .find(|p| p.name.to_lowercase().contains(&query_lower))
+            .map(|p| p.id.clone());
+        match match_id {
+            Some(id) => id,
+            None => anyhow::bail!("playlist not found: {uri_or_id_or_name}"),
+        }
+    };
 
     track_list.clear();
     let mut uris: Vec<String> = Vec::new();
     let mut offset = 0u32;
 
     loop {
-        let (batch, total) = spotify.fetch_playlist_tracks(id, offset).await?;
+        let (batch, total, page_items) = spotify.fetch_playlist_tracks(&id, offset).await?;
         let n = batch.len();
         if n == 0 {
             break;
@@ -306,9 +519,10 @@ async fn load_playlist(
                 artist: t.artist,
                 album: t.album,
                 duration_ms: t.duration_ms,
+                uri: t.uri,
             });
         }
-        offset += n as u32;
+        offset += page_items;
         if offset >= total {
             break;
         }
@@ -325,10 +539,12 @@ async fn load_liked(
     spotify: &mut SpotifyClient,
     player: &mut dyn AudioPlayer,
     track_list: &mut Vec<TrackInfo>,
+    limit: Option<usize>,
 ) -> Result<usize> {
     track_list.clear();
     let mut uris: Vec<String> = Vec::new();
     let mut offset = 0u32;
+    let max = limit.unwrap_or(usize::MAX);
 
     loop {
         let (batch, total) = spotify.fetch_liked_tracks(offset, false).await?;
@@ -337,16 +553,20 @@ async fn load_liked(
             break;
         }
         for t in batch {
+            if uris.len() >= max {
+                break;
+            }
             uris.push(t.uri.clone());
             track_list.push(TrackInfo {
                 name: t.name,
                 artist: t.artist,
                 album: t.album,
                 duration_ms: t.duration_ms,
+                uri: t.uri,
             });
         }
         offset += n as u32;
-        if offset >= total {
+        if offset >= total || uris.len() >= max {
             break;
         }
     }
@@ -359,12 +579,20 @@ async fn load_liked(
 }
 
 /// List all tracks with their index (ID), marking the currently playing one.
-fn ls_string(player: &dyn AudioPlayer, tracks: &[TrackInfo]) -> String {
+/// If limit is Some(N), only show the first N tracks.
+fn ls_string(player: &dyn AudioPlayer, tracks: &[TrackInfo], limit: Option<usize>) -> String {
     if tracks.is_empty() {
-        return "no playlist loaded — use: isi-music --play <spotify:playlist:ID>".into();
+        return "no playlist loaded — use: isi-music --play <ID|name>".into();
     }
     let current = player.current_index();
-    tracks
+    let tracks_to_show: Vec<_> = if let Some(n) = limit {
+        tracks.iter().take(n).collect()
+    } else {
+        tracks.iter().collect()
+    };
+    let total = tracks.len();
+    let shown = tracks_to_show.len();
+    let mut lines = tracks_to_show
         .iter()
         .enumerate()
         .map(|(i, t)| {
@@ -375,8 +603,14 @@ fn ls_string(player: &dyn AudioPlayer, tracks: &[TrackInfo]) -> String {
             };
             format!("{marker} {:>4}  {} — {}", i, t.name, t.artist)
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect::<Vec<_>>();
+    if shown < total {
+        lines.push(format!(
+            "... ({} more tracks, use --ls --limit N to see more)",
+            total - shown
+        ));
+    }
+    lines.join("\n")
 }
 
 /// Build a human-readable status line.
@@ -408,4 +642,116 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// List all user playlists with name and ID.
+async fn list_playlists(spotify: &mut SpotifyClient) -> Result<String> {
+    let playlists = spotify.fetch_playlists().await?;
+    if playlists.is_empty() {
+        return Ok("no playlists found".into());
+    }
+    let lines = playlists
+        .iter()
+        .map(|p| format!("{}  {}", p.id, p.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(lines)
+}
+
+/// Search within the loaded queue by name/artist (case-insensitive, substring).
+fn search_in_queue(tracks: &[TrackInfo], query: &str) -> String {
+    if tracks.is_empty() {
+        return "no playlist loaded — use: isi-music --play <spotify:playlist:ID>".into();
+    }
+    let query_lower = query.to_lowercase();
+    let matches: Vec<_> = tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            t.name.to_lowercase().contains(&query_lower)
+                || t.artist.to_lowercase().contains(&query_lower)
+        })
+        .collect();
+    if matches.is_empty() {
+        return format!("no matches for: {query}");
+    }
+    matches
+        .iter()
+        .map(|(i, t)| format!("{:>4}  {} — {}", i, t.name, t.artist))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Search globally on Spotify (tracks, albums, artists, playlists).
+async fn search_global(spotify: &mut SpotifyClient, query: &str) -> Result<String> {
+    let results = spotify.search_all(query).await?;
+    let mut lines = Vec::new();
+
+    if !results.tracks.is_empty() {
+        lines.push("TRACKS:".into());
+        for t in results.tracks.iter().take(10) {
+            lines.push(format!("  {} — {}", t.name, t.artist));
+        }
+    }
+
+    if !results.albums.is_empty() {
+        lines.push("ALBUMS:".into());
+        for a in results.albums.iter().take(5) {
+            lines.push(format!("  {} — {}", a.name, a.artist));
+        }
+    }
+
+    if !results.artists.is_empty() {
+        lines.push("ARTISTS:".into());
+        for a in results.artists.iter().take(5) {
+            lines.push(format!("  {}", a.name));
+        }
+    }
+
+    if !results.playlists.is_empty() {
+        lines.push("PLAYLISTS:".into());
+        for p in results.playlists.iter().take(5) {
+            lines.push(format!("  {}  {}", p.id, p.name));
+        }
+    }
+
+    if lines.is_empty() {
+        Ok(format!("no results for: {query}"))
+    } else {
+        Ok(lines.join("\n"))
+    }
+}
+
+/// List available Spotify Connect devices.
+async fn list_devices(spotify: &mut SpotifyClient) -> Result<String> {
+    let devices = spotify.fetch_devices().await?;
+    if devices.is_empty() {
+        return Ok("no devices found".into());
+    }
+    let lines = devices
+        .iter()
+        .map(|d: &crate::spotify::Device| {
+            let marker = if d.is_active { "*" } else { " " };
+            format!("{} {}  ({})", marker, d.name, d.device_type)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(lines)
+}
+
+/// Transfer playback to a device by name (fuzzy match).
+async fn set_device(spotify: &mut SpotifyClient, name: &str) -> Result<String> {
+    let devices = spotify.fetch_devices().await?;
+    let name_lower = name.to_lowercase();
+    let match_id = devices
+        .iter()
+        .find(|d| d.name.to_lowercase().contains(&name_lower))
+        .map(|d| d.id.clone());
+    match match_id {
+        Some(id) => {
+            spotify.transfer_playback(&id).await?;
+            Ok(format!("transferred to: {}", name))
+        }
+        None => anyhow::bail!("device not found: {}", name),
+    }
 }

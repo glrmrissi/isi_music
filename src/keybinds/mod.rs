@@ -17,6 +17,7 @@ pub enum Action {
     VolumeDown,
     SeekForward,
     SeekBackward,
+    SeekMiddle,
     ToggleShuffle,
     CycleRepeat,
     ToggleRadio,
@@ -29,6 +30,7 @@ pub enum Action {
     NavDown,
     NavFirst,
     NavLast,
+    NavMiddle,
     TabNext,
     TabPrev,
     Enter,
@@ -51,6 +53,11 @@ pub enum Action {
     RemoveFromPlaylist,
     DeletePlaylist,
     CommandPrompt,
+    FocusLibrary,
+    FocusPlaylists,
+    FocusTracks,
+    FocusQueue,
+    JumpToPlaying,
 }
 
 impl Action {
@@ -59,14 +66,15 @@ impl Action {
         &[
             ("play_pause", &["space"], PlayPause),
             ("next_track", &["n"], NextTrack),
-            ("prev_track", &["p"], PrevTrack),
+            ("prev_track", &["p", "P"], PrevTrack),
             ("volume_up", &["="], VolumeUp),
             ("volume_down", &["-"], VolumeDown),
             ("seek_forward", &["right"], SeekForward),
             ("seek_backward", &["left"], SeekBackward),
+            ("seek_middle", &["5"], SeekMiddle),
             ("toggle_shuffle", &["s"], ToggleShuffle),
             ("cycle_repeat", &["r"], CycleRepeat),
-            ("toggle_radio", &["R"], ToggleRadio),
+            ("toggle_radio", &["´"], ToggleRadio),
             ("recommendations", &["alt+r"], GetRecommendations),
             ("like_track", &["l"], LikeTrack),
             ("add_to_queue", &["a"], AddToQueue),
@@ -76,6 +84,7 @@ impl Action {
             ("nav_down", &["down", "j"], NavDown),
             ("nav_first", &["ctrl+up"], NavFirst),
             ("nav_last", &["ctrl+down"], NavLast),
+            ("nav_middle", &["M"], NavMiddle),
             ("tab_next", &["tab"], TabNext),
             ("tab_prev", &["backtab"], TabPrev),
             ("enter", &["enter"], Enter),
@@ -98,6 +107,11 @@ impl Action {
             ("remove_from_playlist", &["D"], RemoveFromPlaylist),
             ("delete_playlist", &["alt+d"], DeletePlaylist),
             ("command_prompt", &[":"], CommandPrompt),
+            ("focus_library", &["1"], FocusLibrary),
+            ("focus_playlists", &["2"], FocusPlaylists),
+            ("focus_tracks", &["3"], FocusTracks),
+            ("focus_queue", &["4"], FocusQueue),
+            ("jump_to_playing", &["c"], JumpToPlaying),
         ]
     }
 }
@@ -427,6 +441,7 @@ impl Keybinds {
                     Action::VolumeDown,
                     Action::SeekForward,
                     Action::SeekBackward,
+                    Action::SeekMiddle,
                     Action::ToggleShuffle,
                     Action::CycleRepeat,
                     Action::ToggleRadio,
@@ -440,10 +455,16 @@ impl Keybinds {
                     Action::NavDown,
                     Action::NavFirst,
                     Action::NavLast,
+                    Action::NavMiddle,
                     Action::TabNext,
                     Action::TabPrev,
                     Action::Enter,
                     Action::Back,
+                    Action::FocusLibrary,
+                    Action::FocusPlaylists,
+                    Action::FocusTracks,
+                    Action::FocusQueue,
+                    Action::JumpToPlaying,
                 ],
             ),
             (
@@ -539,6 +560,7 @@ impl KeybindsTomlOutput {
                 | Action::VolumeDown
                 | Action::SeekForward
                 | Action::SeekBackward
+                | Action::SeekMiddle
                 | Action::ToggleShuffle
                 | Action::CycleRepeat
                 | Action::ToggleRadio
@@ -548,10 +570,16 @@ impl KeybindsTomlOutput {
                 | Action::NavDown
                 | Action::NavFirst
                 | Action::NavLast
+                | Action::NavMiddle
                 | Action::TabNext
                 | Action::TabPrev
                 | Action::Enter
-                | Action::Back => navigation.push(entry),
+                | Action::Back
+                | Action::FocusLibrary
+                | Action::FocusPlaylists
+                | Action::FocusTracks
+                | Action::FocusQueue
+                | Action::JumpToPlaying => navigation.push(entry),
                 Action::Search
                 | Action::QuickSearch
                 | Action::Help
@@ -568,7 +596,7 @@ impl KeybindsTomlOutput {
                 | Action::RemoveFromQueue
                 | Action::SortTracks
                 | Action::CopyTrackLink
-                |                 Action::AddToPlaylist
+                | Action::AddToPlaylist
                 | Action::RemoveFromPlaylist
                 | Action::DeletePlaylist
                 | Action::CommandPrompt

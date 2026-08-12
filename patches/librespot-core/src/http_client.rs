@@ -212,6 +212,7 @@ impl HttpClient {
                 }
 
                 if !code.is_success() {
+                    warn!("Spotify internal request failed: {code} {}", parts.uri);
                     return Err(HttpClientError::StatusCode(code).into());
                 }
             }

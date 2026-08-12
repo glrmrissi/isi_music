@@ -1,16 +1,12 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 use tokio::task::spawn_blocking;
 use tracing::{info, warn};
 
 use crate::config;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CacheStats {
     pub search_cache_entries: usize,
     pub library_cache_entries: usize,
@@ -18,109 +14,11 @@ pub struct CacheStats {
     pub search_cache_size: u64,
     pub library_cache_size: u64,
     pub lyrics_cache_size: u64,
-    pub last_cleanup: Option<u64>, // Unix timestamp
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LibraryCache {
-    pub liked: Vec<LikedTrack>,
-    pub playlists: HashMap<String, Vec<TrackSummary>>,
-    pub albums: HashMap<String, Vec<TrackSummary>>,
-    pub artists: HashMap<String, Vec<TrackSummary>>,
-    pub shows: HashMap<String, Vec<TrackSummary>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LikedTrack {
-    pub uri: String,
-    pub name: String,
-    pub artist: String,
-    pub album: String,
-    pub duration_ms: u32,
-    pub cover_path: Option<String>,
-    pub saved_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrackSummary {
-    pub uri: String,
-    pub name: String,
-    pub artist: String,
-    pub album: String,
-    pub duration_ms: u32,
-    pub cover_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedSearch {
-    pub tracks: Vec<CachedTrack>,
-    pub artists: Vec<CachedArtist>,
-    pub albums: Vec<CachedAlbum>,
-    pub playlists: Vec<CachedPlaylist>,
-    pub saved_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedTrack {
-    pub uri: String,
-    pub name: String,
-    pub artist: String,
-    pub album: String,
-    pub duration_ms: u32,
-    pub cover_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedArtist {
-    pub id: String,
-    pub name: String,
-    pub uri: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedAlbum {
-    pub id: String,
-    pub name: String,
-    pub artist: String,
-    pub uri: String,
-    pub total_tracks: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedPlaylist {
-    pub id: String,
-    pub name: String,
-    pub uri: String,
-    pub total_tracks: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedLyrics {
-    pub uri: String,
-    pub title: String,
-    pub artist: String,
-    pub lyrics: LyricsData,
-    pub saved_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LyricsData {
-    pub is_synced: bool,
-    pub lines: Vec<LyricLine>,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LyricLine {
-    pub time: Option<i64>,
-    pub text: String,
+    pub last_cleanup: Option<u64>,
 }
 
 pub struct CacheManager {
-    db_path: String,
-    search_cache: Arc<RwLock<SearchCache>>,
-    library_cache: Arc<Mutex<LibraryCache>>,
-    lyrics_cache: Arc<RwLock<LyricsCache>>,
+    conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
     options: CacheOptions,
 }
 
@@ -146,14 +44,6 @@ impl Default for CacheOptions {
     }
 }
 
-struct SearchCache {
-    store: HashMap<String, (u64, CachedSearch)>, // key -> (timestamp, data)
-}
-
-struct LyricsCache {
-    store: HashMap<String, CachedLyrics>,
-}
-
 impl CacheManager {
     pub fn new() -> Self {
         let db_path = config::get_local_db_path();
@@ -162,41 +52,24 @@ impl CacheManager {
 
     pub fn new_with_path(db_path: &str) -> Self {
         let options = CacheOptions::default();
+        let conn = rusqlite::Connection::open(db_path).expect("failed to open cache db");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+        )
+        .expect("failed to set pragmas");
 
         Self {
-            db_path: db_path.to_string(),
-            search_cache: Arc::new(RwLock::new(SearchCache {
-                store: HashMap::new(),
-            })),
-            library_cache: Arc::new(Mutex::new(LibraryCache {
-                liked: Vec::new(),
-                playlists: HashMap::new(),
-                albums: HashMap::new(),
-                artists: HashMap::new(),
-                shows: HashMap::new(),
-            })),
-            lyrics_cache: Arc::new(RwLock::new(LyricsCache {
-                store: HashMap::new(),
-            })),
+            conn: Arc::new(std::sync::Mutex::new(conn)),
             options,
         }
     }
 
-    fn unix_now() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }
-
     pub async fn clear_search(&self) -> Result<()> {
-        let mut search_guard = self.search_cache.write().await;
-        search_guard.store.clear();
-
-        let db_path = self.db_path.clone();
+        let conn = self.conn.clone();
         spawn_blocking(move || {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("DELETE FROM search_cache", [])
+            let Ok(conn) = conn.lock() else { return };
+            let _ = conn
+                .execute("DELETE FROM search_cache", [])
                 .unwrap_or_else(|e| {
                     warn!("Failed to clear search cache: {e}");
                     0
@@ -208,17 +81,11 @@ impl CacheManager {
     }
 
     pub async fn clear_library(&self) -> Result<()> {
-        let mut lib_guard = self.library_cache.lock().unwrap();
-        lib_guard.liked.clear();
-        lib_guard.playlists.clear();
-        lib_guard.albums.clear();
-        lib_guard.artists.clear();
-        lib_guard.shows.clear();
-
-        let db_path = self.db_path.clone();
+        let conn = self.conn.clone();
         spawn_blocking(move || {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("DELETE FROM library_cache", [])
+            let Ok(conn) = conn.lock() else { return };
+            let _ = conn
+                .execute("DELETE FROM library_cache", [])
                 .unwrap_or_else(|e| {
                     warn!("Failed to clear library cache: {e}");
                     0
@@ -230,13 +97,11 @@ impl CacheManager {
     }
 
     pub async fn clear_lyrics(&self) -> Result<()> {
-        let mut lyrics_guard = self.lyrics_cache.write().await;
-        lyrics_guard.store.clear();
-
-        let db_path = self.db_path.clone();
+        let conn = self.conn.clone();
         spawn_blocking(move || {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("DELETE FROM lyrics_cache", [])
+            let Ok(conn) = conn.lock() else { return };
+            let _ = conn
+                .execute("DELETE FROM lyrics_cache", [])
                 .unwrap_or_else(|e| {
                     warn!("Failed to clear lyrics cache: {e}");
                     0
@@ -257,9 +122,9 @@ impl CacheManager {
     }
 
     pub async fn get_stats(&self) -> CacheStats {
-        let db_path = self.db_path.clone();
+        let conn = self.conn.clone();
         spawn_blocking(move || {
-            let Ok(conn) = rusqlite::Connection::open(&db_path) else {
+            let Ok(conn) = conn.lock() else {
                 return CacheStats {
                     search_cache_entries: 0,
                     library_cache_entries: 0,
@@ -306,24 +171,24 @@ impl CacheManager {
     }
 
     pub async fn cleanup_expired(&self) -> Result<()> {
-        let now = Self::unix_now();
         let keep_seconds = self.options.keep_days * 24 * 3600;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-        // Clean search cache
-        {
-            let mut search_guard = self.search_cache.write().await;
-            search_guard
-                .store
-                .retain(|_, (ts, _)| now - (*ts as u64) < keep_seconds.into());
-        }
-
-        // Clean lyrics cache
-        {
-            let mut lyrics_guard = self.lyrics_cache.write().await;
-            lyrics_guard
-                .store
-                .retain(|_, l| now - l.saved_at < keep_seconds.into());
-        }
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let Ok(conn) = conn.lock() else { return };
+            let _ = conn.execute(
+                "DELETE FROM search_cache WHERE (?1 - saved_at) >= ?2",
+                rusqlite::params![now as i64, keep_seconds as i64],
+            );
+            let _ = conn.execute(
+                "DELETE FROM lyrics_cache WHERE (?1 - saved_at) >= ?2",
+                rusqlite::params![now as i64, keep_seconds as i64],
+            );
+        });
 
         info!("Cache cleanup completed");
         Ok(())

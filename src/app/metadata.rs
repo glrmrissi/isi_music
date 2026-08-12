@@ -1,32 +1,122 @@
 use id3::TagLike;
 use std::path::Path;
 
+/// Try to read Opus metadata (OpusTags) using opusmeta.
+/// Returns (title, artist, album, duration_ms, cover_art) if successful.
+fn read_opus_metadata(path: &Path) -> Option<(String, String, String, u64, Option<Vec<u8>>)> {
+    let tag = opusmeta::Tag::read_from_path(path).ok()?;
+
+    let title = tag
+        .get_one(&opusmeta::LowercaseString::new_from_str("TITLE"))
+        .or_else(|| tag.get_one(&opusmeta::LowercaseString::new_from_str("title")))
+        .cloned()
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Unknown")
+                .to_string()
+        });
+
+    let artist = tag
+        .get_one(&opusmeta::LowercaseString::new_from_str("ARTIST"))
+        .or_else(|| tag.get_one(&opusmeta::LowercaseString::new_from_str("artist")))
+        .cloned()
+        .unwrap_or_default();
+
+    let album = tag
+        .get_one(&opusmeta::LowercaseString::new_from_str("ALBUM"))
+        .or_else(|| tag.get_one(&opusmeta::LowercaseString::new_from_str("album")))
+        .cloned()
+        .unwrap_or_default();
+
+    // Get first picture (usually cover front)
+    let cover_art = tag
+        .iter_pictures()
+        .and_then(|mut iter| iter.next().and_then(|res| res.ok()).map(|pic| pic.data));
+
+    // Duration from the last Ogg page's granule position
+    let duration_ms = read_opus_duration(path).unwrap_or(0);
+
+    Some((title, artist, album, duration_ms, cover_art))
+}
+
+/// Duration from the last Ogg page's granule position (granulepos counts
+/// 48 kHz samples including pre-skip).
+fn read_opus_duration(path: &Path) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    const OPUS_SAMPLE_RATE: u32 = 48_000;
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(65536))).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+
+    let idx = buf.windows(4).rposition(|w| w == b"OggS")?;
+    if buf.len() < idx + 27 || buf[idx + 4] != 0 {
+        return None;
+    }
+    let granulepos = u64::from_le_bytes(buf[idx + 6..idx + 14].try_into().ok()?);
+    // Skip preskip from OpusHead (we assume 0 for simplicity; for precision we'd parse the header)
+    let samples = granulepos;
+    Some((samples * 1000) / OPUS_SAMPLE_RATE as u64)
+}
+
 /// Strip control characters from a string, keeping only printable chars, tab, and newline.
 /// Removes C0 controls (0x00-0x08, 0x0B-0x1F), DEL (0x7F), and C1 controls (0x80-0x9F).
-pub fn sanitize_control_chars(s: &str) -> String {
-    s.chars()
-        .filter(|c| {
-            let code = *c as u32;
-            code == 0x09        // TAB
-                || code == 0x0A // LF (newline)
-                || (code >= 0x20 && code != 0x7F && !(0x80..0xA0).contains(&code))
-        })
-        .collect()
+pub fn sanitize_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
+    let needs_sanitize = s.chars().any(|c| {
+        let code = c as u32;
+        code != 0x09
+            && code != 0x0A
+            && (code < 0x20 || code == 0x7F || (0x80..0xA0).contains(&code))
+    });
+    if !needs_sanitize {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(
+        s.chars()
+            .filter(|c| {
+                let code = *c as u32;
+                code == 0x09        // TAB
+                    || code == 0x0A // LF (newline)
+                    || (code >= 0x20 && code != 0x7F && !(0x80..0xA0).contains(&code))
+            })
+            .collect(),
+    )
 }
 
 pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<Vec<u8>>) {
+    let fallback_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    // Try Opus first (symphonia doesn't support Opus codec)
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("opus"))
+        .unwrap_or(false)
+    {
+        if let Some((title, artist, album, duration_ms, cover_art)) = read_opus_metadata(path) {
+            return (
+                sanitize_control_chars(&title).into_owned(),
+                sanitize_control_chars(&artist).into_owned(),
+                sanitize_control_chars(&album).into_owned(),
+                duration_ms,
+                cover_art,
+            );
+        }
+    }
+
     use symphonia::core::{
         formats::FormatOptions,
         io::MediaSourceStream,
         meta::{MetadataOptions, StandardTagKey},
         probe::Hint,
     };
-
-    let fallback_name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Unknown")
-        .to_string();
 
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
@@ -118,9 +208,8 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
                 }
             }
             if cover_art.is_none() {
-                for pic in id3tag.pictures() {
+                if let Some(pic) = id3tag.pictures().next() {
                     cover_art = Some(pic.data.to_vec());
-                    break;
                 }
             }
         }
@@ -160,9 +249,9 @@ pub fn read_audio_metadata(path: &Path) -> (String, String, String, u64, Option<
     }
 
     (
-        sanitize_control_chars(&title),
-        sanitize_control_chars(&artist),
-        sanitize_control_chars(&album),
+        sanitize_control_chars(&title).into_owned(),
+        sanitize_control_chars(&artist).into_owned(),
+        sanitize_control_chars(&album).into_owned(),
         duration_ms,
         cover_art,
     )

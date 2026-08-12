@@ -3,7 +3,8 @@ use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
@@ -198,6 +199,73 @@ fn parse_timestamp(s: &str) -> Option<u64> {
             Some(min * 60_000 + sec * 1_000 + ms)
         }
         _ => None,
+    }
+}
+
+fn uri_hash(uri: &str) -> String {
+    format!("{:x}", md5::compute(uri.as_bytes()))
+}
+
+fn lyrics_cache_path(uri: &str) -> Option<PathBuf> {
+    let dir = crate::config::lyrics_cache_dir().ok()?;
+    Some(dir.join(format!("{}.lrc", uri_hash(uri))))
+}
+
+fn local_lrc_path(uri: &str) -> Option<PathBuf> {
+    let path = if let Some(s) = uri.strip_prefix("file://") {
+        PathBuf::from(s)
+    } else if uri.starts_with("file:") {
+        PathBuf::from(uri.strip_prefix("file:")?)
+    } else if !uri.starts_with("spotify:")
+        && !uri.starts_with("http:")
+        && !uri.starts_with("https:")
+    {
+        PathBuf::from(uri)
+    } else {
+        return None;
+    };
+
+    // Try /music/song.mp3 -> /music/song.lrc
+    let stem = path.file_stem()?;
+    let mut lrc = path.clone();
+    lrc.set_file_name(stem);
+    lrc.set_extension("lrc");
+    Some(lrc)
+}
+
+fn load_lrc_file(path: &Path) -> Option<LyricsData> {
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(parse_lrc(&text))
+}
+
+fn format_lrc(data: &LyricsData) -> String {
+    if data.is_synced && !data.lines.is_empty() {
+        data.lines
+            .iter()
+            .map(|l| {
+                let total_ms = l.time_ms;
+                let min = total_ms / 60_000;
+                let sec = (total_ms % 60_000) / 1000;
+                let cs = (total_ms % 1000) / 10;
+                format!("[{:02}:{:02}.{:02}]{}", min, sec, cs, l.text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        data.lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn save_lrc_file(path: &Path, data: &LyricsData) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::File::create(path) {
+        let _ = f.write_all(format_lrc(data).as_bytes());
     }
 }
 
@@ -633,16 +701,10 @@ impl LyricsHandle {
         if musixmatch_api_key.is_none() {
             debug_overlay.log(
                 LogLevel::Warn,
-                format!(
-                    "lyrics: no musixmatch API key found, using fallback (may have low rate limits)"
-                ),
+                "lyrics: no musixmatch API key found, using fallback (may have low rate limits)"
+                    .to_string(),
             );
         }
-
-        debug_overlay.log(
-            LogLevel::Warn,
-            format!("lyrics: no musixmatch API key found, using fallback (may have low rate limits) {:?}", musixmatch_api_key),
-        );
 
         Ok(Self {
             inner: Arc::new(Mutex::new(HandleInner::default())),
@@ -662,15 +724,43 @@ impl LyricsHandle {
         inner.last_uri = uri.to_string();
         inner.pending = None;
 
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached) = cache.get(uri) {
-                self.debug_overlay
-                    .log(LogLevel::Info, format!("lyrics: found in cache -> {}", uri));
-                let (tx, rx) = oneshot::channel();
-                let _ = tx.send(Some(cached));
-                inner.pending = Some(rx);
-                return;
-            }
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached) = cache.get(uri)
+        {
+            self.debug_overlay
+                .log(LogLevel::Info, format!("lyrics: found in cache -> {}", uri));
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(Some(cached));
+            inner.pending = Some(rx);
+            return;
+        }
+
+        // Fallback 1: local .lrc next to the audio file.
+        if let Some(path) = local_lrc_path(uri)
+            && let Some(data) = load_lrc_file(&path)
+        {
+            self.debug_overlay.log(
+                LogLevel::Info,
+                format!("lyrics: found local .lrc -> {}", path.display()),
+            );
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(Some(data));
+            inner.pending = Some(rx);
+            return;
+        }
+
+        // Fallback 2: cached .lrc file in cache dir.
+        if let Some(path) = lyrics_cache_path(uri)
+            && let Some(data) = load_lrc_file(&path)
+        {
+            self.debug_overlay.log(
+                LogLevel::Info,
+                format!("lyrics: found cached .lrc -> {}", path.display()),
+            );
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(Some(data));
+            inner.pending = Some(rx);
+            return;
         }
 
         let (tx, rx) = oneshot::channel();
@@ -690,6 +780,10 @@ impl LyricsHandle {
             if let Some(ref data) = result {
                 if let Ok(c) = cache.lock() {
                     c.save(&uri, data, &debug_overlay);
+                }
+                // Mirror to cache dir so users can keep an offline .lrc collection.
+                if let Some(path) = lyrics_cache_path(&uri) {
+                    save_lrc_file(&path, data);
                 }
             } else {
                 debug_overlay.log(

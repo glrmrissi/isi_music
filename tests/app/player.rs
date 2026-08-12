@@ -30,6 +30,7 @@ async fn sync_queue_display_shows_player_queue() {
             uri: "spotify:track:a".into(),
             name: "Track A".into(),
             artist: "Artist A".into(),
+            album: String::new(),
             duration_ms: 100_000,
             cover_path: None,
         },
@@ -37,6 +38,7 @@ async fn sync_queue_display_shows_player_queue() {
             uri: "spotify:track:b".into(),
             name: "Track B".into(),
             artist: "Artist B".into(),
+            album: String::new(),
             duration_ms: 200_000,
             cover_path: None,
         },
@@ -64,6 +66,7 @@ async fn sync_queue_display_shows_parked_with_prefix_when_spotify_active() {
         uri: "spotify:track:a".into(),
         name: "Track A".into(),
         artist: "Artist A".into(),
+        album: String::new(),
         duration_ms: 100_000,
         cover_path: None,
     }]));
@@ -71,6 +74,7 @@ async fn sync_queue_display_shows_parked_with_prefix_when_spotify_active() {
         uri: "file:///music/b".into(),
         name: "Track B".into(),
         artist: "Artist B".into(),
+        album: String::new(),
         duration_ms: 200_000,
         cover_path: None,
     }]));
@@ -95,6 +99,7 @@ async fn sync_queue_display_skips_parked_when_none() {
         uri: "spotify:track:a".into(),
         name: "Track A".into(),
         artist: "Artist A".into(),
+        album: String::new(),
         duration_ms: 100_000,
         cover_path: None,
     }]));

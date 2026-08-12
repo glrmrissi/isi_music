@@ -18,7 +18,7 @@ use tracing::warn;
 
 use crate::player::NativePlayer;
 use crate::player::{AudioPlayer, LocalPlayer, PlayerNotification};
-#[cfg(feature = "mpris")]
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::spotify::RepeatState;
 use crate::spotify::SpotifyClient;
 #[cfg(feature = "album-art")]
@@ -26,8 +26,12 @@ use crate::ui::AlbumArtData;
 use crate::ui::{Ui, UiState};
 use crate::utils::discord::DiscordRpc;
 use crate::utils::lastfm::LastfmClient;
-#[cfg(feature = "mpris")]
+#[cfg(windows)]
+use crate::utils::media_keys::{MediaKey, MediaKeysHandle};
+#[cfg(all(feature = "mpris", target_os = "linux"))]
 use crate::utils::mpris::{MprisCmd, MprisHandle, MprisState};
+#[cfg(windows)]
+use crate::utils::smtc::{SmtcCmd, SmtcHandle, SmtcState};
 use crate::utils::theme::Theme;
 
 #[cfg(target_os = "linux")]
@@ -37,10 +41,20 @@ pub enum FetchResult {
     LikedTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     Albums(Result<(Vec<crate::spotify::AlbumSummary>, u32), String>),
     Artists(Result<Vec<crate::spotify::ArtistSummary>, String>),
-    PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
+    PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, u32), String>),
     AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
-    MoreTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, Option<String>), String>),
+    MoreTracks(
+        Result<
+            (
+                Vec<crate::spotify::TrackSummary>,
+                u32,
+                Option<String>,
+                Option<u32>,
+            ),
+            String,
+        >,
+    ),
 }
 
 pub struct App {
@@ -53,6 +67,7 @@ pub struct App {
     saved_volume: u8,
     local_db_path: String,
     lastfm: Option<Arc<LastfmClient>>,
+    pending_lastfm_token: Option<String>,
     ui: Ui,
     state: UiState,
     last_tick: Instant,
@@ -66,16 +81,31 @@ pub struct App {
     album_art_pending: Option<tokio::sync::oneshot::Receiver<Vec<u8>>>,
     #[cfg(feature = "album-art")]
     picker: Picker,
-    #[cfg(feature = "mpris")]
+    #[cfg(all(feature = "mpris", target_os = "linux"))]
     mpris: Option<MprisHandle>,
+    #[cfg(windows)]
+    media_keys: Option<MediaKeysHandle>,
+    #[cfg(windows)]
+    smtc: Option<SmtcHandle>,
     discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
     discord_pending_since: Option<Instant>,
+    #[cfg(feature = "mpris")]
+    mpris_last_title: String,
+    #[cfg(feature = "mpris")]
+    mpris_last_artist: String,
+    #[cfg(feature = "mpris")]
+    mpris_last_album: String,
+    #[cfg(feature = "mpris")]
+    mpris_last_playing: bool,
+    #[cfg(feature = "mpris")]
+    mpris_last_art: Option<String>,
     band_energies: Option<Arc<Mutex<Vec<f32>>>>,
     art_url: Option<String>,
     session_reconnecting: bool,
     radio_mode: bool,
+    autoplay_enabled: bool,
     recent_track_uris: std::collections::VecDeque<String>,
     playing_tracks: Vec<crate::spotify::TrackSummary>,
     theme: Theme,
@@ -94,10 +124,26 @@ pub struct App {
     playing_started_at: Option<Instant>,
     progress_at_play_start: u64,
     initial_sync_done: bool,
-    options_panel: Option<crate::ui::OptionsPanel>,
+    settings_panel: Option<crate::ui::SettingsPanel>,
+    #[cfg(target_os = "linux")]
     trim_counter: u64,
     pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
+    pending_nav_down: bool,
+    audio: crate::config::AudioConfig,
+    needs_redraw: bool,
+    last_click_time: Option<Instant>,
+    last_click_pos: (u16, u16),
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_target: Option<Theme>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_from: Option<Theme>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_start: Option<Instant>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_swatches: Option<Vec<crate::utils::palette::Rgb>>,
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    reactive_toggle_pending: bool,
 }
 
 impl App {
@@ -109,17 +155,23 @@ impl App {
         keybinds_rx: crate::keybinds::KeybindsWatcher,
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
-        let cfg = crate::config::AppConfig::load().unwrap_or_default();
-        let lastfm = match (
-            &cfg.lastfm.api_key,
-            &cfg.lastfm.api_secret,
-            &cfg.lastfm.session_key,
-        ) {
-            (Some(k), Some(s), Some(sk)) => Some(Arc::new(LastfmClient::new(
-                k.clone(),
-                s.clone(),
-                sk.clone(),
-            ))),
+        let settings = Arc::new(Mutex::new(
+            crate::settings::Settings::load().unwrap_or_default(),
+        ));
+        let cfg = settings
+            .lock()
+            .map(|guard| guard.config.clone())
+            .unwrap_or_default();
+        let autoplay_enabled = cfg.autoplay_enabled();
+        let lastfm = match &cfg.lastfm.session_key {
+            Some(sk) => {
+                use crate::utils::lastfm::{get_api_key, get_api_secret};
+                Some(Arc::new(LastfmClient::new(
+                    get_api_key(),
+                    get_api_secret(),
+                    sk.clone(),
+                )))
+            }
             _ => None,
         };
 
@@ -155,10 +207,24 @@ impl App {
             }
         };
 
+        if spotify.authenticated || crate::config::load_streaming_refresh_token().is_some() {
+            crate::player::ensure_streaming_auth()
+                .await
+                .map_err(|e| anyhow::anyhow!("Streaming authentication failed: {e}"))?;
+        }
+
         let volume = crate::config::load_volume();
+        let mut saved_volume = volume;
         let db_path = crate::config::get_local_db_path();
 
         let mut state = UiState::new();
+        state.show_album_art = cfg.show_cover_images();
+        state.show_visualizer = cfg.show_visualizer();
+        state.show_breadcrumb = cfg.show_breadcrumb();
+        state.compact_mode = cfg.compact_mode_default();
+        state.reactive_theme_enabled = theme.reactive_theme;
+        state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
+        state.spotify_authenticated = spotify.authenticated;
 
         if let Some(msg) = startup_warning {
             state.status_msg = Some(msg);
@@ -184,8 +250,13 @@ impl App {
         let initial_art = pb.art_url.clone();
         state.art_url = initial_art.clone();
         state.playback = pb;
+        state.restore_session(&cfg.session);
+        if let Some(vol) = cfg.session.volume {
+            state.playback.volume = vol.min(100);
+            saved_volume = state.playback.volume;
+        }
 
-        #[cfg(feature = "mpris")]
+        #[cfg(all(feature = "mpris", target_os = "linux"))]
         let mpris = match crate::utils::mpris::spawn().await {
             Ok(h) => {
                 debug_overlay.log(LogLevel::Info, format!("MPRIS D-Bus server started"));
@@ -193,6 +264,30 @@ impl App {
             }
             Err(e) => {
                 debug_overlay.log(LogLevel::Error, format!("MPRIS unavailable: {e}"));
+                None
+            }
+        };
+
+        #[cfg(windows)]
+        let media_keys = match crate::utils::media_keys::spawn() {
+            Ok(h) => {
+                debug_overlay.log(LogLevel::Info, format!("Global media hotkeys registered"));
+                Some(h)
+            }
+            Err(e) => {
+                debug_overlay.log(LogLevel::Warn, format!("Media hotkeys unavailable: {e}"));
+                None
+            }
+        };
+
+        #[cfg(windows)]
+        let smtc = match crate::utils::smtc::spawn() {
+            Ok(h) => {
+                debug_overlay.log(LogLevel::Info, format!("SMTC integration enabled"));
+                Some(h)
+            }
+            Err(e) => {
+                debug_overlay.log(LogLevel::Warn, format!("SMTC unavailable: {e}"));
                 None
             }
         };
@@ -209,7 +304,9 @@ impl App {
         };
 
         let cache_manager = crate::utils::cache::CacheManager::new();
-        let options_panel = crate::ui::OptionsPanel::new(cache_manager, theme.clone());
+        let settings_panel = crate::ui::SettingsPanel::new(cache_manager, Arc::clone(&settings));
+
+        state.lastfm_connected = lastfm.is_some();
 
         Ok(Self {
             seek_tx,
@@ -218,9 +315,10 @@ impl App {
             player: None,
             parked_player: None,
             local_active: false,
-            saved_volume: volume,
+            saved_volume,
             local_db_path: db_path,
             lastfm,
+            pending_lastfm_token: None,
             ui: Ui::new(theme.clone(), debug_overlay.clone()),
             state,
             last_tick: Instant::now(),
@@ -234,16 +332,31 @@ impl App {
             album_art_pending: None,
             #[cfg(feature = "album-art")]
             picker,
-            #[cfg(feature = "mpris")]
+            #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris,
+            #[cfg(windows)]
+            media_keys,
+            #[cfg(windows)]
+            smtc,
             discord,
             discord_last_title: String::new(),
             discord_last_playing: false,
             discord_pending_since: None,
+            #[cfg(feature = "mpris")]
+            mpris_last_title: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_artist: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_album: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_playing: false,
+            #[cfg(feature = "mpris")]
+            mpris_last_art: None,
             band_energies: None,
             art_url: initial_art,
             session_reconnecting: false,
             radio_mode: false,
+            autoplay_enabled,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
             theme,
@@ -262,10 +375,26 @@ impl App {
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
-            options_panel: Some(options_panel),
+            settings_panel: Some(settings_panel),
+            #[cfg(target_os = "linux")]
             trim_counter: 0,
             pending_fetch: None,
             pending_pagination: None,
+            pending_nav_down: false,
+            audio: cfg.audio.clone(),
+            needs_redraw: true,
+            last_click_time: None,
+            last_click_pos: (0, 0),
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_target: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_from: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_start: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_swatches: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_toggle_pending: false,
         })
     }
 
@@ -275,7 +404,15 @@ impl App {
         let spotify = crate::spotify::SpotifyClient::new_unauthenticated().await;
         let debug_overlay = Arc::new(DebugOverlay::new());
         let cache_manager = crate::utils::cache::CacheManager::new();
+        let settings = Arc::new(Mutex::new(crate::settings::Settings::default()));
         let mut state = crate::ui::UiState::new();
+        {
+            let cfg = settings.lock().unwrap().config.clone();
+            state.show_album_art = cfg.show_cover_images();
+            state.show_visualizer = cfg.show_visualizer();
+            state.show_breadcrumb = cfg.show_breadcrumb();
+            state.compact_mode = cfg.compact_mode_default();
+        }
 
         if spotify.authenticated {
             if let Ok(playlists) = spotify.fetch_playlists().await {
@@ -286,6 +423,7 @@ impl App {
             }
         }
 
+        let autoplay_enabled = settings.lock().unwrap().config.autoplay_enabled();
         Self {
             seek_tx,
             seek_rx,
@@ -296,6 +434,7 @@ impl App {
             saved_volume: 50,
             local_db_path: String::new(),
             lastfm: None,
+            pending_lastfm_token: None,
             ui: crate::ui::Ui::new(Default::default(), debug_overlay.clone()),
             state,
             last_tick: Instant::now(),
@@ -309,16 +448,31 @@ impl App {
             album_art_pending: None,
             #[cfg(feature = "album-art")]
             picker: ratatui_image::picker::Picker::halfblocks(),
-            #[cfg(feature = "mpris")]
+            #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris: None,
+            #[cfg(windows)]
+            media_keys: None,
+            #[cfg(windows)]
+            smtc: None,
             discord: None,
             discord_last_title: String::new(),
             discord_last_playing: false,
             discord_pending_since: None,
+            #[cfg(feature = "mpris")]
+            mpris_last_title: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_artist: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_album: String::new(),
+            #[cfg(feature = "mpris")]
+            mpris_last_playing: false,
+            #[cfg(feature = "mpris")]
+            mpris_last_art: None,
             band_energies: None,
             art_url: None,
             session_reconnecting: false,
             radio_mode: false,
+            autoplay_enabled,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
             theme: Default::default(),
@@ -337,10 +491,29 @@ impl App {
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
+            #[cfg(target_os = "linux")]
             trim_counter: 0,
-            options_panel: Some(crate::ui::OptionsPanel::new(cache_manager, Theme::default())),
+            settings_panel: Some(crate::ui::SettingsPanel::new(
+                cache_manager,
+                Arc::clone(&settings),
+            )),
             pending_fetch: None,
             pending_pagination: None,
+            pending_nav_down: false,
+            audio: crate::config::AudioConfig::default(),
+            needs_redraw: true,
+            last_click_time: None,
+            last_click_pos: (0, 0),
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_target: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_from: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_start: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_swatches: None,
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            reactive_toggle_pending: false,
         }
     }
 
@@ -360,179 +533,246 @@ impl App {
 
     fn poll_pending_fetch(&mut self) {
         if let Some(rx) = &mut self.pending_fetch {
-            if let Ok(result) = rx.try_recv() {
-                self.pending_fetch = None;
-                self.state.loading = false;
-                self.handle_fetch_result(result);
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.pending_fetch = None;
+                    self.state.loading = false;
+                    self.handle_fetch_result(result);
+                    self.needs_redraw = true;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pending_fetch = None;
+                    self.state.loading = false;
+                    self.state.status_msg = Some("Fetch task failed".to_string());
+                    self.needs_redraw = true;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
             }
         }
 
         if let Some(rx) = &mut self.pending_pagination {
-            if let Ok(result) = rx.try_recv() {
-                self.pending_pagination = None;
-                self.handle_fetch_result(result);
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.pending_pagination = None;
+                    self.handle_fetch_result(result);
+                    self.needs_redraw = true;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.pending_pagination = None;
+                    self.pending_nav_down = false;
+                    self.needs_redraw = true;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
             }
         }
     }
 
     fn handle_fetch_result(&mut self, result: FetchResult) {
-
-            match result {
-                FetchResult::LikedTracks(Ok((tracks, total))) => {
-                    self.state.tracks = tracks;
-                    self.state.tracks_total = total;
-                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                    self.state.active_playlist_uri = Some("liked_songs".to_string());
-                    self.state.active_playlist_id = Some("liked_songs".to_string());
-                    self.state.track_list.select(if self.state.tracks.is_empty() {
+        match result {
+            FetchResult::LikedTracks(Ok((tracks, total))) => {
+                self.state.tracks = tracks;
+                self.state.tracks_total = total;
+                self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
+                self.state.active_playlist_uri = Some("liked_songs".to_string());
+                self.state.active_playlist_id = Some("liked_songs".to_string());
+                self.state
+                    .track_list
+                    .select(if self.state.tracks.is_empty() {
                         None
                     } else {
                         Some(0)
                     });
-                    self.state.active_content = crate::ui::ActiveContent::Tracks;
-                    self.state.search_results = None;
-                    self.state.rebuild_sort_indices();
-                    self.state.status_msg = None;
-                    self.state.focus = crate::ui::Focus::Tracks;
-                    self.state.tracks_cursor = self
-                        .spotify
-                        .library_cache
-                        .get_liked_tracks_page(None, 50)
-                        .and_then(|(_, _, next)| next);
-                }
-                FetchResult::LikedTracks(Err(e)) => {
-                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
-                        self.state.status_msg =
-                            Some("Authorization expired, reconnecting...".to_string());
-                        self.session_reconnecting = true;
-                    } else {
-                        self.state.status_msg = Some(format!("Error: {e}"));
-                    }
-                }
-                FetchResult::Albums(Ok((albums, total))) => {
-                    self.state.albums = albums;
-                    self.state.albums_total = total;
-                    self.state.albums_offset = self.state.albums.len() as u32;
-                    self.state.album_list.select(if self.state.albums.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    });
-                    self.state.active_content = crate::ui::ActiveContent::Albums;
-                    self.state.search_results = None;
-                    self.state.status_msg = None;
-                    self.state.focus = crate::ui::Focus::Tracks;
-                }
-                FetchResult::Albums(Err(e)) => {
-                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
-                        self.state.status_msg =
-                            Some("Authorization expired, reconnecting...".to_string());
-                        self.session_reconnecting = true;
-                    } else {
-                        self.state.status_msg = Some(format!("Error: {e}"));
-                    }
-                }
-                FetchResult::Artists(Ok(artists)) => {
-                    self.state.artists = artists;
-                    self.state.artist_list.select(if self.state.artists.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    });
-                    self.state.active_content = crate::ui::ActiveContent::Artists;
-                    self.state.search_results = None;
-                    self.state.status_msg = None;
-                    self.state.focus = crate::ui::Focus::Tracks;
-                }
-                FetchResult::Artists(Err(e)) => {
-                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
-                        self.state.status_msg =
-                            Some("Authorization expired, reconnecting...".to_string());
-                        self.session_reconnecting = true;
-                    } else {
-                        self.state.status_msg = Some(format!("Error: {e}"));
-                    }
-                }
-                FetchResult::PlaylistTracks(Ok((tracks, total))) => {
-                    self.state.tracks = tracks;
-                    self.state.tracks_total = total;
-                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                    self.state.track_list.select(if self.state.tracks.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    });
-                    self.state.active_content = crate::ui::ActiveContent::Tracks;
-                    self.state.search_results = None;
-                    self.state.rebuild_sort_indices();
-                    self.state.status_msg = None;
-                    self.state.focus = crate::ui::Focus::Tracks;
-                }
-                FetchResult::PlaylistTracks(Err(e)) => {
-                    if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
-                        self.state.status_msg =
-                            Some("Authorization expired, reconnecting...".to_string());
-                        self.session_reconnecting = true;
-                    } else {
-                        self.state.status_msg = Some(format!("Error: {e}"));
-                    }
-                }
-                FetchResult::AlbumTracks(Ok((tracks, total))) => {
-                    self.state.tracks = tracks;
-                    self.state.tracks_total = total;
-                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                    self.state.track_list.select(if self.state.tracks.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    });
-                    self.state.active_content = crate::ui::ActiveContent::Tracks;
-                    self.state.search_results = None;
-                    self.state.rebuild_sort_indices();
-                    self.state.status_msg = None;
-                    self.state.focus = crate::ui::Focus::Tracks;
-                }
-                FetchResult::AlbumTracks(Err(e)) => {
+                self.state.active_content = crate::ui::ActiveContent::Tracks;
+                self.state.search_results = None;
+                self.state.rebuild_sort_indices();
+                self.state.status_msg = None;
+                self.state.focus = crate::ui::Focus::Tracks;
+                self.state.tracks_cursor = self
+                    .spotify
+                    .library_cache
+                    .get_liked_tracks_page(None, 50)
+                    .and_then(|(_, _, next)| next);
+            }
+            FetchResult::LikedTracks(Err(e)) => {
+                if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                    self.state.status_msg =
+                        Some("Authorization expired, reconnecting...".to_string());
+                    self.session_reconnecting = true;
+                } else {
                     self.state.status_msg = Some(format!("Error: {e}"));
-                }
-                FetchResult::ArtistTracks(Ok((tracks, total))) => {
-                    self.state.tracks = tracks;
-                    self.state.tracks_total = total;
-                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                    self.state.track_list.select(if self.state.tracks.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    });
-                    self.state.active_content = crate::ui::ActiveContent::Tracks;
-                    self.state.search_results = None;
-                    self.state.rebuild_sort_indices();
-                    self.state.status_msg = None;
-                    self.state.focus = crate::ui::Focus::Tracks;
-                }
-                FetchResult::ArtistTracks(Err(e)) => {
-                    self.state.status_msg = Some(format!("Error: {e}"));
-                }
-                FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor))) => {
-                    self.state.tracks_loading = false;
-                    self.state.status_msg = None;
-                    if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
-                        if total > self.state.tracks_total {
-                            self.state.tracks_total = total;
-                        }
-                        self.state.tracks_cursor = cursor;
-                    } else {
-                        self.state.tracks_total = total;
-                    }
-                    self.state.tracks_offset += new_tracks.len() as u32;
-                    self.state.tracks.append(&mut new_tracks);
-                    self.state.rebuild_sort_indices();
-                }
-                FetchResult::MoreTracks(Err(e)) => {
-                    self.state.tracks_loading = false;
-                    self.state.status_msg = Some(format!("Load more error: {e}"));
                 }
             }
+            FetchResult::Albums(Ok((albums, total))) => {
+                self.state.albums = albums;
+                self.state.albums_total = total;
+                self.state.albums_offset = self.state.albums.len() as u32;
+                self.state
+                    .album_list
+                    .select(if self.state.albums.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                self.state.active_content = crate::ui::ActiveContent::Albums;
+                self.state.search_results = None;
+                self.state.status_msg = None;
+                self.state.focus = crate::ui::Focus::Tracks;
+            }
+            FetchResult::Albums(Err(e)) => {
+                if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                    self.state.status_msg =
+                        Some("Authorization expired, reconnecting...".to_string());
+                    self.session_reconnecting = true;
+                } else {
+                    self.state.status_msg = Some(format!("Error: {e}"));
+                }
+            }
+            FetchResult::Artists(Ok(artists)) => {
+                self.state.artists = artists;
+                self.state
+                    .artist_list
+                    .select(if self.state.artists.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                self.state.active_content = crate::ui::ActiveContent::Artists;
+                self.state.search_results = None;
+                self.state.status_msg = None;
+                self.state.focus = crate::ui::Focus::Tracks;
+            }
+            FetchResult::Artists(Err(e)) => {
+                if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                    self.state.status_msg =
+                        Some("Authorization expired, reconnecting...".to_string());
+                    self.session_reconnecting = true;
+                } else {
+                    self.state.status_msg = Some(format!("Error: {e}"));
+                }
+            }
+            FetchResult::PlaylistTracks(Ok((tracks, total, page_items))) => {
+                self.state.tracks = tracks;
+                self.state.tracks_total = total;
+                self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = page_items;
+                self.state
+                    .track_list
+                    .select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                self.state.active_content = crate::ui::ActiveContent::Tracks;
+                self.state.search_results = None;
+                self.state.rebuild_sort_indices();
+                self.state.status_msg = None;
+                self.state.focus = crate::ui::Focus::Tracks;
+            }
+            FetchResult::PlaylistTracks(Err(e)) => {
+                if e.contains("SPOTIFY_UNAUTHORIZED") || e.contains("401") {
+                    self.state.status_msg =
+                        Some("Authorization expired, reconnecting...".to_string());
+                    self.session_reconnecting = true;
+                } else {
+                    self.state.status_msg = Some(format!("Error: {e}"));
+                }
+            }
+            FetchResult::AlbumTracks(Ok((tracks, total))) => {
+                self.state.tracks = tracks;
+                self.state.tracks_total = total;
+                self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
+                self.state
+                    .track_list
+                    .select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                self.state.active_content = crate::ui::ActiveContent::Tracks;
+                self.state.search_results = None;
+                self.state.rebuild_sort_indices();
+                self.state.status_msg = None;
+                self.state.focus = crate::ui::Focus::Tracks;
+            }
+            FetchResult::AlbumTracks(Err(e)) => {
+                self.state.status_msg = Some(format!("Error: {e}"));
+            }
+            FetchResult::ArtistTracks(Ok((tracks, total))) => {
+                self.state.tracks = tracks;
+                self.state.tracks_total = total;
+                self.state.tracks_offset = self.state.tracks.len() as u32;
+                self.state.tracks_api_offset = self.state.tracks.len() as u32;
+                self.state
+                    .track_list
+                    .select(if self.state.tracks.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                self.state.active_content = crate::ui::ActiveContent::Tracks;
+                self.state.search_results = None;
+                self.state.rebuild_sort_indices();
+                self.state.status_msg = None;
+                self.state.focus = crate::ui::Focus::Tracks;
+            }
+            FetchResult::ArtistTracks(Err(e)) => {
+                self.state.status_msg = Some(format!("Error: {e}"));
+            }
+            FetchResult::MoreTracks(Ok((mut new_tracks, total, cursor, page_items))) => {
+                let advance_selection = self.pending_nav_down;
+                self.pending_nav_down = false;
+                let selected_display = self.state.track_list.selected();
+                let selected_raw = selected_display
+                    .and_then(|display_idx| self.state.sorted_track_indices.get(display_idx))
+                    .copied();
+                let old_track_len = self.state.tracks.len();
+                self.state.tracks_loading = false;
+                self.state.status_msg = None;
+                if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
+                    if total > self.state.tracks_total {
+                        self.state.tracks_total = total;
+                    }
+                    self.state.tracks_cursor = cursor;
+                } else {
+                    self.state.tracks_total = total;
+                }
+                self.state.tracks_offset += new_tracks.len() as u32;
+                // Advance the API offset by the number of items the API returned
+                // (before episode filtering) to avoid re-fetching items on the next page
+                if let Some(pi) = page_items {
+                    self.state.tracks_api_offset += pi;
+                } else {
+                    self.state.tracks_api_offset += new_tracks.len() as u32;
+                }
+                self.state.tracks.append(&mut new_tracks);
+                self.state.rebuild_sort_indices();
+                if advance_selection {
+                    let next_display = selected_raw
+                        .and_then(|raw_idx| {
+                            self.state
+                                .sorted_track_indices
+                                .iter()
+                                .position(|&idx| idx == raw_idx)
+                        })
+                        .map(|display_idx| display_idx + 1)
+                        .or_else(|| selected_display.map(|display_idx| display_idx + 1));
+                    if let Some(next_display) = next_display {
+                        if next_display < self.state.sorted_track_indices.len()
+                            && self.state.tracks.len() > old_track_len
+                        {
+                            self.state.track_list.select(Some(next_display));
+                        }
+                    }
+                }
+            }
+            FetchResult::MoreTracks(Err(e)) => {
+                self.pending_nav_down = false;
+                self.state.tracks_loading = false;
+                self.state.status_msg = Some(format!("Load more error: {e}"));
+            }
+        }
     }
 
     async fn ensure_spotify_player(&mut self) -> bool {
@@ -545,10 +785,15 @@ impl App {
             self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
             return true;
         }
-        let Some(token) = self.spotify.get_access_token().await else {
-            return false;
-        };
-        match NativePlayer::new(token, false).await {
+        let token = self.spotify.get_access_token().await;
+        match NativePlayer::new(
+            token,
+            false,
+            self.audio.librespot_bitrate(),
+            self.audio.gapless,
+        )
+        .await
+        {
             Ok(mut p) => {
                 p.set_volume(self.saved_volume);
                 p.set_visualizer_enabled(self.state.show_visualizer);
@@ -562,10 +807,16 @@ impl App {
                 if msg.contains("free") || msg.contains("premium") {
                     self.spotify_streaming_disabled = true;
                 }
-                self.debug_overlay.log(
-                    LogLevel::Warn,
-                    format!("Failed to create Spotify player: {e:#}"),
-                );
+                let status =
+                    if msg.contains("setup-spotify") || msg.contains("streaming authentication") {
+                        "Spotify streaming is not authenticated. Run `isi-music setup-spotify`."
+                            .to_string()
+                    } else {
+                        format!("Failed to create Spotify player: {e:#}")
+                    };
+                self.state.status_msg = Some(status.clone());
+                self.debug_overlay
+                    .log(LogLevel::Warn, format!("{status}: {e:#}"));
                 false
             }
         }
@@ -599,10 +850,59 @@ impl App {
         }
     }
 
+    fn save_session(&self) -> Result<()> {
+        let mut cfg = crate::config::AppConfig::load().unwrap_or_default();
+        cfg.session.focus = Some(match self.state.focus {
+            crate::ui::Focus::Library => "library".to_string(),
+            crate::ui::Focus::Playlists => "playlists".to_string(),
+            crate::ui::Focus::Tracks => "tracks".to_string(),
+            crate::ui::Focus::Queue => "queue".to_string(),
+            crate::ui::Focus::Search => "search".to_string(),
+        });
+        cfg.session.active_content = Some(match self.state.active_content {
+            crate::ui::ActiveContent::None => "none".to_string(),
+            crate::ui::ActiveContent::Tracks => "tracks".to_string(),
+            crate::ui::ActiveContent::Albums => "albums".to_string(),
+            crate::ui::ActiveContent::Artists => "artists".to_string(),
+            crate::ui::ActiveContent::Shows => "shows".to_string(),
+            crate::ui::ActiveContent::LocalFiles => "local_files".to_string(),
+        });
+        cfg.session.compact_mode = Some(self.state.compact_mode);
+        cfg.session.library_selected = self.state.library_list.selected();
+        cfg.session.volume = Some(self.saved_volume);
+        cfg.save()
+    }
+
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    fn toggle_reactive_theme(&mut self, enabled: bool) -> anyhow::Result<()> {
+        use crate::utils::theme::Theme;
+        let path = Theme::get_path().unwrap_or_else(|| std::path::PathBuf::from("theme.toml"));
+        let content = std::fs::read_to_string(&path)?;
+        let mut theme: Theme = toml::from_str(&content).unwrap_or_default();
+        theme.reactive_theme = enabled;
+        let new_content = toml::to_string_pretty(&theme)?;
+        std::fs::write(&path, new_content)?;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    fn start_reactive_theme(&mut self, swatches: &[crate::utils::palette::Rgb]) {
+        if swatches.is_empty() {
+            return;
+        }
+        let new_theme = crate::utils::palette::derive_theme(swatches, &self.theme);
+        self.reactive_from = Some(self.ui.theme_snapshot());
+        self.reactive_target = Some(new_theme);
+        self.reactive_start = Some(Instant::now());
+    }
+
     pub async fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        B::Error: Send + Sync + 'static,
+    {
         let tick_rate = Duration::from_millis(16);
         self.last_tick = Instant::now();
 
@@ -610,8 +910,45 @@ impl App {
 
         loop {
             while let Ok(new_theme) = self.theme_rx.try_recv() {
+                let preserve_reactive_transition = {
+                    #[cfg(all(feature = "palette", feature = "album-art"))]
+                    {
+                        let preserve =
+                            self.reactive_toggle_pending || self.reactive_start.is_some();
+                        self.reactive_toggle_pending = false;
+                        preserve
+                    }
+                    #[cfg(not(all(feature = "palette", feature = "album-art")))]
+                    {
+                        false
+                    }
+                };
+                #[cfg(all(feature = "palette", feature = "album-art"))]
+                tracing::debug!(
+                    "reactive: theme_watcher fired, preserve={}, reactive_start={}",
+                    preserve_reactive_transition,
+                    self.reactive_start.is_some()
+                );
                 self.theme = new_theme.clone();
-                self.ui = Ui::new(new_theme, self.debug_overlay.clone());
+                if !preserve_reactive_transition {
+                    #[cfg(all(feature = "palette", feature = "album-art"))]
+                    let skip_apply = self.theme.reactive_theme
+                        && self.reactive_start.is_none()
+                        && self.reactive_target.is_none();
+                    #[cfg(not(all(feature = "palette", feature = "album-art")))]
+                    let skip_apply = false;
+
+                    if !skip_apply {
+                        self.ui = Ui::new(new_theme, self.debug_overlay.clone());
+                        #[cfg(all(feature = "palette", feature = "album-art"))]
+                        {
+                            self.reactive_start = None;
+                            self.reactive_from = None;
+                            self.reactive_target = None;
+                        }
+                    }
+                }
+                self.state.reactive_theme_enabled = self.theme.reactive_theme;
             }
             while let Ok(new_keybinds) = self.keybinds_rx.rx.try_recv() {
                 self.keybinds = new_keybinds;
@@ -620,6 +957,26 @@ impl App {
             let now = Instant::now();
             let delta_ms = now.duration_since(self.last_tick).as_millis() as u64;
             self.last_tick = now;
+
+            #[cfg(all(feature = "palette", feature = "album-art"))]
+            if let (Some(start), Some(from), Some(target)) = (
+                self.reactive_start,
+                self.reactive_from.as_ref(),
+                self.reactive_target.as_ref(),
+            ) {
+                let elapsed = now.duration_since(start).as_millis() as f32;
+                let dur = self.theme.reactive_cross_fade_ms.max(1) as f32;
+                let t = (elapsed / dur).min(1.0);
+                let blended = Theme::lerp(from, target, t);
+                self.ui = Ui::new(blended, self.debug_overlay.clone());
+                self.needs_redraw = true;
+                if t >= 1.0 {
+                    self.theme = target.clone();
+                    self.reactive_start = None;
+                    self.reactive_from = None;
+                    self.reactive_target = None;
+                }
+            }
 
             self.poll_local_scan();
             self.poll_pending_fetch();
@@ -669,9 +1026,27 @@ impl App {
                         self.state.playback.shuffle = pb.shuffle;
                         self.state.playback.repeat = pb.repeat;
                         if pb.is_playing {
+                            // Only adopt the player's progress if we have no
+                            // local clock running yet, or if it has drifted
+                            // significantly (>2s). This prevents the progress
+                            // bar from jumping back and forth between the
+                            // locally-interpolated value and the player's
+                            // (potentially stale) reported position.
+                            let local_progress = self
+                                .playing_started_at
+                                .map(|t| {
+                                    self.progress_at_play_start + t.elapsed().as_millis() as u64
+                                })
+                                .unwrap_or(u64::MAX);
+                            if self.playing_started_at.is_none()
+                                || local_progress.abs_diff(pb.progress_ms) > 2000
+                            {
+                                self.progress_at_play_start = pb.progress_ms;
+                                self.playing_started_at = Some(Instant::now());
+                            }
+                        } else {
                             self.state.playback.progress_ms = pb.progress_ms;
-                        }
-                        if self.playing_started_at.is_none() {
+                            self.playing_started_at = None;
                             self.progress_at_play_start = pb.progress_ms;
                         }
                     }
@@ -719,6 +1094,7 @@ impl App {
                         self.state.playback.lyrics_loading = false;
                         self.state.playback.lyrics =
                             if data.is_empty() { None } else { Some(data) };
+                        self.needs_redraw = true;
                     }
                     (None, true) => {
                         self.state.playback.lyrics_loading = true;
@@ -741,7 +1117,9 @@ impl App {
                             } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if self.radio_mode && !self.local_active {
+                            } else if (self.radio_mode || self.autoplay_enabled)
+                                && !self.local_active
+                            {
                                 needs_radio_refill = true;
                             } else {
                                 needs_crossover = true;
@@ -766,7 +1144,9 @@ impl App {
                             } else if parked_has_queue {
                                 needs_crossover = true;
                                 self.state.playback.is_playing = false;
-                            } else if self.radio_mode && !self.local_active {
+                            } else if (self.radio_mode || self.autoplay_enabled)
+                                && !self.local_active
+                            {
                                 needs_radio_refill = true;
                             } else {
                                 needs_crossover = true;
@@ -797,6 +1177,9 @@ impl App {
 
                                 needs_player_swap = true;
                             }
+                        }
+                        PlayerNotification::PreloadNextTrack => {
+                            player.preload_next();
                         }
                     }
                 }
@@ -855,19 +1238,30 @@ impl App {
                 self.sync_track_selection();
                 self.sync_queue_display();
                 if self.player.is_none() {
-                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                    if let Ok(Ok(current_pb)) =
+                        tokio::time::timeout(Duration::from_secs(5), self.spotify.fetch_playback())
+                            .await
+                    {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
+                        // Preserve locally-interpolated progress to avoid
+                        // the bar jumping backwards when the API reports a
+                        // slightly stale position.
+                        let local_progress = self.state.playback.progress_ms;
+                        let local_playing = self.state.playback.is_playing;
                         self.state.playback.merge_from_api(current_pb);
-                        if self.playing_started_at.is_none() {
-                            self.state.playback.is_playing = false;
-                        }
-                        if pb_playing {
-                            if self.playing_started_at.is_some() {
-                                self.playing_started_at = Some(Instant::now());
+                        if local_playing && pb_playing {
+                            // Keep our local progress if it's close to API's
+                            if local_progress.abs_diff(pb_progress) <= 2000 {
+                                self.state.playback.progress_ms = local_progress;
+                            } else {
                                 self.progress_at_play_start = pb_progress;
+                                self.playing_started_at = Some(Instant::now());
                             }
+                        } else if pb_playing {
+                            self.progress_at_play_start = pb_progress;
+                            self.playing_started_at = Some(Instant::now());
                         } else {
                             self.playing_started_at = None;
                             self.progress_at_play_start = pb_progress;
@@ -891,22 +1285,32 @@ impl App {
             {
                 self.last_playback_health_check = Instant::now();
 
-                if let Some(_token) = self.spotify.get_access_token().await {}
+                if let Ok(Some(_token)) =
+                    tokio::time::timeout(Duration::from_secs(5), self.spotify.get_access_token())
+                        .await
+                {}
 
                 if self.player.is_none() {
-                    if let Ok(current_pb) = self.spotify.fetch_playback().await {
+                    if let Ok(Ok(current_pb)) =
+                        tokio::time::timeout(Duration::from_secs(5), self.spotify.fetch_playback())
+                            .await
+                    {
                         let pb_playing = current_pb.is_playing;
                         let pb_progress = current_pb.progress_ms;
                         self.art_url = current_pb.art_url.clone();
+                        let local_progress = self.state.playback.progress_ms;
+                        let local_playing = self.state.playback.is_playing;
                         self.state.playback.merge_from_api(current_pb);
-                        if self.playing_started_at.is_none() {
-                            self.state.playback.is_playing = false;
-                        }
-                        if pb_playing {
-                            if self.playing_started_at.is_some() {
-                                self.playing_started_at = Some(Instant::now());
+                        if local_playing && pb_playing {
+                            if local_progress.abs_diff(pb_progress) <= 2000 {
+                                self.state.playback.progress_ms = local_progress;
+                            } else {
                                 self.progress_at_play_start = pb_progress;
+                                self.playing_started_at = Some(Instant::now());
                             }
+                        } else if pb_playing {
+                            self.progress_at_play_start = pb_progress;
+                            self.playing_started_at = Some(Instant::now());
                         } else {
                             self.playing_started_at = None;
                             self.progress_at_play_start = pb_progress;
@@ -930,24 +1334,46 @@ impl App {
                 }
             }
 
-            #[cfg(feature = "mpris")]
+            #[cfg(all(feature = "mpris", target_os = "linux"))]
             if let Some(mpris) = &mut self.mpris {
                 let pb = &self.state.playback;
-                let _art_url = self.state.art_url.clone();
 
-                mpris.update(MprisState {
-                    title: pb.title.clone(),
-                    artist: pb.artist.clone(),
-                    album: pb.album.clone(),
-                    duration_us: pb.duration_ms as i64 * 1000,
-                    position_us: pb.progress_ms as i64 * 1000,
-                    volume: pb.volume as f64 / 100.0,
-                    is_playing: pb.is_playing,
-                    shuffle: pb.shuffle,
-                    repeat_track: pb.repeat == RepeatState::Track,
-                    repeat_queue: pb.repeat == RepeatState::Context,
-                    art_url: pb.art_url.clone(),
-                });
+                let changed = pb.title != self.mpris_last_title
+                    || pb.artist != self.mpris_last_artist
+                    || pb.album != self.mpris_last_album
+                    || pb.is_playing != self.mpris_last_playing
+                    || pb.art_url != self.mpris_last_art;
+
+                if changed {
+                    self.mpris_last_title = pb.title.clone();
+                    self.mpris_last_artist = pb.artist.clone();
+                    self.mpris_last_album = pb.album.clone();
+                    self.mpris_last_playing = pb.is_playing;
+                    self.mpris_last_art = pb.art_url.clone();
+
+                    mpris.update(MprisState {
+                        title: pb.title.clone(),
+                        artist: pb.artist.clone(),
+                        album: pb.album.clone(),
+                        duration_us: pb.duration_ms as i64 * 1000,
+                        position_us: pb.progress_ms as i64 * 1000,
+                        volume: pb.volume as f64 / 100.0,
+                        is_playing: pb.is_playing,
+                        shuffle: pb.shuffle,
+                        repeat_track: pb.repeat == RepeatState::Track,
+                        repeat_queue: pb.repeat == RepeatState::Context,
+                        art_url: pb.art_url.clone(),
+                    });
+                } else {
+                    // Update position without cloning strings
+                    let mut state = mpris.state.lock().unwrap();
+                    state.position_us = pb.progress_ms as i64 * 1000;
+                    state.volume = pb.volume as f64 / 100.0;
+                    state.is_playing = pb.is_playing;
+                    state.shuffle = pb.shuffle;
+                    state.repeat_track = pb.repeat == RepeatState::Track;
+                    state.repeat_queue = pb.repeat == RepeatState::Context;
+                }
 
                 let cmds: Vec<MprisCmd> = {
                     let mut v = Vec::new();
@@ -1009,21 +1435,217 @@ impl App {
                 }
             }
 
+            #[cfg(windows)]
+            if let Some(smtc) = &self.smtc {
+                let pb = &self.state.playback;
+                smtc.update(&SmtcState {
+                    title: pb.title.clone(),
+                    artist: pb.artist.clone(),
+                    album: pb.album.clone(),
+                    art_url: pb.art_url.clone(),
+                    cover_path: pb.cover_path.clone(),
+                    duration_ms: pb.duration_ms,
+                    position_ms: pb.progress_ms,
+                    is_playing: pb.is_playing,
+                });
+            }
+
+            #[cfg(windows)]
+            let smtc_cmds: Vec<SmtcCmd> = {
+                if let Some(smtc) = &self.smtc {
+                    let mut v = Vec::new();
+                    while let Ok(c) = smtc.cmd_rx.try_recv() {
+                        v.push(c);
+                    }
+                    v
+                } else {
+                    Vec::new()
+                }
+            };
+
+            #[cfg(windows)]
+            for cmd in smtc_cmds {
+                match cmd {
+                    SmtcCmd::Play => {
+                        if let Some(p) = &mut self.player {
+                            p.play();
+                            self.state.playback.is_playing = true;
+                        } else {
+                            self.ensure_spotify_player().await;
+                            if self.player.is_none() {
+                                self.ensure_local_player().await;
+                            }
+                            if let Some(p) = &mut self.player {
+                                p.play();
+                                self.state.playback.is_playing = true;
+                            }
+                        }
+                    }
+                    SmtcCmd::Pause => {
+                        if let Some(p) = &mut self.player {
+                            p.pause();
+                            self.state.playback.is_playing = false;
+                        }
+                    }
+                    SmtcCmd::Next => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.next() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.next_track().await;
+                        }
+                    }
+                    SmtcCmd::Previous => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.prev() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.prev_track().await;
+                        }
+                    }
+                    SmtcCmd::Seek(ms) => {
+                        self.state.playback.progress_ms = ms;
+                        self.progress_at_play_start = ms;
+                        if self.state.playback.is_playing {
+                            self.playing_started_at = Some(Instant::now());
+                        }
+                        if let Some(p) = &mut self.player {
+                            p.seek_mut(ms as u32);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(windows)]
+            let media_key_cmds: Vec<MediaKey> = {
+                if let Some(media_keys) = &self.media_keys {
+                    let mut v = Vec::new();
+                    while let Ok(cmd) = media_keys.cmd_rx.try_recv() {
+                        v.push(cmd);
+                    }
+                    v
+                } else {
+                    Vec::new()
+                }
+            };
+
+            #[cfg(windows)]
+            for cmd in media_key_cmds {
+                match cmd {
+                    MediaKey::PlayPause => {
+                        if self.state.playback.is_playing {
+                            if let Some(p) = &mut self.player {
+                                p.pause();
+                            }
+                            self.state.playback.is_playing = false;
+                        } else if let Some(p) = &mut self.player {
+                            p.play();
+                            self.state.playback.is_playing = true;
+                        } else {
+                            self.ensure_spotify_player().await;
+                            if self.player.is_none() {
+                                self.ensure_local_player().await;
+                            }
+                            if let Some(p) = &mut self.player {
+                                if !p.is_playing() {
+                                    p.play();
+                                }
+                                self.state.playback.is_playing = true;
+                            } else if self.spotify.authenticated {
+                                let _ = self.spotify.toggle_playback().await;
+                            }
+                        }
+                    }
+                    MediaKey::Next => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.next() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.next_track().await;
+                        }
+                    }
+                    MediaKey::Previous => {
+                        if self.player.is_none() {
+                            self.ensure_spotify_player().await;
+                        }
+                        if let Some(p) = &mut self.player {
+                            if p.prev() {
+                                self.sync_track_selection();
+                                self.sync_queue_display();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.prev_track().await;
+                        }
+                    }
+                }
+            }
+
             #[cfg(feature = "album-art")]
             if let Some(rx) = &mut self.album_art_pending {
                 if let Ok(bytes) = rx.try_recv() {
                     self.album_art_pending = None;
-                    match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            let resized = img.thumbnail(256, 256);
-                            let image_state = self.picker.new_resize_protocol(resized);
+
+                    // Feed the SMTC thumbnail: Spotify tracks played via
+                    // librespot never populate `pb.art_url`/`pb.cover_path`,
+                    // so we materialise the downloaded cover bytes into a temp
+                    // file and expose it via `cover_path` for the SMTC worker.
+                    #[cfg(windows)]
+                    if let Some(path) = crate::utils::smtc::cache_cover_bytes(&bytes)
+                        && let Some(s) = path.to_str()
+                    {
+                        self.state.playback.cover_path = Some(s.to_string());
+                    }
+
+                    let decoded = tokio::task::spawn_blocking(move || {
+                        let img = image::load_from_memory(&bytes)?;
+                        Ok::<_, anyhow::Error>(img.thumbnail(256, 256))
+                    })
+                    .await;
+                    match decoded {
+                        Ok(Ok(img)) => {
+                            #[cfg(all(feature = "palette", feature = "album-art"))]
+                            {
+                                let swatches = crate::utils::palette::extract_palette(&img, 5);
+                                tracing::debug!(
+                                    "reactive: swatches={} theme.reactive_theme={}",
+                                    swatches.len(),
+                                    self.theme.reactive_theme
+                                );
+                                self.reactive_swatches = Some(swatches.clone());
+                                if self.theme.reactive_theme {
+                                    self.start_reactive_theme(&swatches);
+                                    tracing::debug!("reactive: start_reactive_theme called");
+                                }
+                            }
+
+                            let image_state = self.picker.new_resize_protocol(img);
                             self.state.album_art = Some(AlbumArtData {
                                 image_state: Some(image_state),
                             });
+                            self.needs_redraw = true;
+                        }
+                        Ok(Err(e)) => {
+                            self.debug_overlay
+                                .log(LogLevel::Error, format!("Failed to decode album art: {e}"));
                         }
                         Err(e) => {
                             self.debug_overlay
-                                .log(LogLevel::Error, format!("Failed to decode album art: {e}"));
+                                .log(LogLevel::Error, format!("Album art task failed: {e}"));
                         }
                     }
                 }
@@ -1070,38 +1692,80 @@ impl App {
             #[cfg(feature = "album-art")]
             self.maybe_fetch_album_art().await;
 
-            terminal.draw(|f| {
-                self.ui.render(f, &mut self.state);
-                if let Some(ref panel) = self.options_panel {
-                    panel.render(f, &self.state);
-                }
-            })?;
+            let active = self.state.playback.is_playing
+                || self.state.loading
+                || self.state.search_active
+                || self.state.quick_search_active
+                || self.state.command_mode
+                || self.state.add_to_playlist_mode
+                || self.state.delete_playlist_confirm
+                || self.settings_panel.as_ref().map_or(false, |p| p.visible)
+                || self.pending_fetch.is_some()
+                || self.pending_pagination.is_some()
+                || self.local_scan_rx.is_some()
+                || self.album_art_pending.is_some()
+                || self.lyrics.as_ref().map_or(false, |l| l.is_loading())
+                || self.state.status_msg.is_some();
 
-            let timeout = tick_rate
-                .checked_sub(now.elapsed())
-                .unwrap_or_else(|| Duration::from_secs(0));
+            if self.needs_redraw || active {
+                terminal.draw(|f| {
+                    self.ui.render(f, &mut self.state);
+                    if let Some(ref panel) = self.settings_panel {
+                        panel.render(f, &self.state, &self.theme, self.autoplay_enabled);
+                    }
+                })?;
+                self.needs_redraw = false;
+            }
 
+            let timeout = if active {
+                tick_rate
+            } else {
+                Duration::from_millis(100)
+            }
+            .checked_sub(now.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+
+            let mut event_received = false;
             if crossterm::event::poll(timeout)? {
-                if let crossterm::event::Event::Key(key_event) = crossterm::event::read()? {
-                    self.handle_key(key_event.code, key_event.modifiers).await?;
+                match crossterm::event::read()? {
+                    crossterm::event::Event::Key(key_event) => {
+                        // Windows consoles also emit Release events — handle only
+                        // Press/Repeat or every physical keypress is processed twice
+                        if matches!(
+                            key_event.kind,
+                            crossterm::event::KeyEventKind::Press
+                                | crossterm::event::KeyEventKind::Repeat
+                        ) {
+                            self.handle_key(key_event.code, key_event.modifiers).await?;
+                            event_received = true;
+                        }
+                    }
+                    crossterm::event::Event::Mouse(mouse_event) => {
+                        self.handle_mouse(mouse_event).await?;
+                        event_received = true;
+                    }
+                    _ => {}
+                }
+                if event_received {
+                    self.needs_redraw = true;
                 }
             }
 
             if self.state.playback.is_playing {
-                if self.player.is_some() && !self.local_active {
-                    // NativePlayer: progress already interpolated inside
-                    // current_playback_state() - nothing to do here
-                } else {
-                    if self.playing_started_at.is_none() {
-                        self.playing_started_at = Some(Instant::now());
-                        self.progress_at_play_start = self.state.playback.progress_ms;
-                    }
-                    let elapsed = self
-                        .playing_started_at
-                        .map(|t| t.elapsed().as_millis() as u64)
-                        .unwrap_or(0);
-                    self.state.playback.progress_ms = self.progress_at_play_start + elapsed;
+                // Interpolate progress locally using progress_at_play_start
+                // + elapsed time. For Spotify, progress_at_play_start is
+                // synced from current_playback_state() every tick (line ~954),
+                // so this produces a smooth progress bar without relying on
+                // the player's (potentially stale) reported position.
+                if self.playing_started_at.is_none() {
+                    self.playing_started_at = Some(Instant::now());
+                    self.progress_at_play_start = self.state.playback.progress_ms;
                 }
+                let elapsed = self
+                    .playing_started_at
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                self.state.playback.progress_ms = self.progress_at_play_start + elapsed;
                 if self.state.playback.progress_ms >= self.state.playback.duration_ms {
                     if self.player.is_none() {
                         self.state.playback.is_playing = false;
@@ -1131,12 +1795,17 @@ impl App {
                     let progress = self.state.playback.progress_ms;
                     let duration = self.state.playback.duration_ms;
 
-                    if progress >= 30_000 && duration > 30_000 {
+                    if duration >= 30_000 && (progress >= duration / 2 || progress >= 240_000) {
                         if let Some(lfm) = self.lastfm.clone() {
                             let artist = self.state.playback.artist.clone();
                             let track = self.state.playback.title.clone();
                             let album = self.state.playback.album.clone();
-                            let ts = self.track_start_unix;
+                            let now = crate::app::metadata::unix_now();
+                            let ts = if self.track_start_unix > 0 {
+                                self.track_start_unix
+                            } else {
+                                now.saturating_sub(progress / 1000)
+                            };
                             let dur = duration;
                             tokio::spawn(async move {
                                 lfm.scrobble(&artist, &track, &album, ts, dur).await;
@@ -1150,7 +1819,7 @@ impl App {
             #[cfg(target_os = "linux")]
             {
                 self.trim_counter += 1;
-                if self.trim_counter % 50 == 0 {
+                if self.trim_counter % 300 == 0 {
                     unsafe {
                         libc::malloc_trim(0);
                     }
@@ -1158,10 +1827,74 @@ impl App {
             }
 
             if self.should_quit {
+                let _ = self.save_session();
                 break;
             }
         }
 
         Ok(())
+    }
+
+    pub async fn toggle_lastfm_scrobbling(&mut self) {
+        use crate::utils::lastfm::{LastfmClient, get_api_key, get_api_secret};
+
+        let mut cfg = crate::config::AppConfig::load().unwrap_or_default();
+
+        if cfg.lastfm.session_key.is_some() {
+            cfg.lastfm.session_key = None;
+            let _ = cfg.save();
+            self.lastfm = None;
+            self.pending_lastfm_token = None;
+            self.state.lastfm_connected = false;
+            self.state.lastfm_pending = false;
+            self.state.status_msg = Some("Last.fm scrobbling disconnected".to_string());
+            return;
+        }
+
+        if let Some(token) = self.pending_lastfm_token.clone() {
+            self.state.status_msg = Some("Exchanging session key with Last.fm...".to_string());
+            match LastfmClient::get_session(&get_api_key(), &get_api_secret(), &token).await {
+                Ok(session_key) => {
+                    cfg.lastfm.session_key = Some(session_key.clone());
+                    let _ = cfg.save();
+                    self.lastfm = Some(Arc::new(LastfmClient::new(
+                        get_api_key(),
+                        get_api_secret(),
+                        session_key,
+                    )));
+                    self.pending_lastfm_token = None;
+                    self.state.lastfm_connected = true;
+                    self.state.lastfm_pending = false;
+                    self.state.status_msg =
+                        Some("Last.fm connected! Scrobbling enabled.".to_string());
+                }
+                Err(e) => {
+                    self.state.status_msg = Some(format!(
+                        "Last.fm auth not complete. Please authorize in browser, then press Enter again. ({e})"
+                    ));
+                }
+            }
+            return;
+        }
+
+        self.state.status_msg = Some("Requesting Last.fm auth token...".to_string());
+        match LastfmClient::get_auth_token(&get_api_key()).await {
+            Ok(token) => {
+                let auth_url = format!(
+                    "https://www.last.fm/api/auth/?api_key={}&token={}",
+                    get_api_key(),
+                    token
+                );
+                let _ = open::that(&auth_url);
+                self.pending_lastfm_token = Some(token);
+                self.state.lastfm_pending = true;
+                self.state.status_msg = Some(
+                    "Opened Last.fm in browser. Authorize, then press Enter on Last.fm in Options to finish.".to_string(),
+                );
+            }
+            Err(e) => {
+                self.state.status_msg = Some(format!("Failed to get Last.fm token: {e}"));
+            }
+        }
     }
 }

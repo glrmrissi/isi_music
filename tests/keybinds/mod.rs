@@ -13,7 +13,7 @@ fn defaults_contains_all_actions() {
 fn defaults_no_duplicate_key_combos() {
     let k = Keybinds::defaults();
     let lookup: &HashMap<KeyCombo, Action> = &k.action_for;
-    assert_eq!(lookup.len(), 44);
+    assert_eq!(lookup.len(), 52);
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn format_help_text_key_strings() {
 #[test]
 fn action_variants_count() {
     let count = Action::all().len();
-    assert_eq!(count, 41, "Action::all() should have 41 entries");
+    assert_eq!(count, 48, "Action::all() should have 48 entries");
 }
 
 #[test]
@@ -358,8 +358,8 @@ fn parse_key_combo_alt_uppercase_shift_arrow() {
 #[test]
 fn keybinds_toml_output_sections() {
     let output = KeybindsTomlOutput::from_defaults();
-    assert_eq!(output.playback.len(), 12);
-    assert_eq!(output.navigation.len(), 8);
+    assert_eq!(output.playback.len(), 13);
+    assert_eq!(output.navigation.len(), 14);
     assert_eq!(output.modes.len(), 12);
     assert_eq!(output.actions.len(), 9);
 }
@@ -398,6 +398,19 @@ fn lookup_nav_first_last() {
     assert_eq!(
         k.lookup(KeyCode::Down, KeyModifiers::CONTROL),
         Some(Action::NavLast)
+    );
+}
+
+#[test]
+fn lookup_middle_shortcuts() {
+    let k = Keybinds::defaults();
+    assert_eq!(
+        k.lookup(KeyCode::Char('M'), KeyModifiers::SHIFT),
+        Some(Action::NavMiddle)
+    );
+    assert_eq!(
+        k.lookup(KeyCode::Char('5'), KeyModifiers::empty()),
+        Some(Action::SeekMiddle)
     );
 }
 

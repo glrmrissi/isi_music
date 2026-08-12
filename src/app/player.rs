@@ -16,6 +16,18 @@ impl App {
         self.progress_at_play_start = 0;
         self.state.playback.radio_mode = self.radio_mode;
 
+        const KEEP_BEHIND: usize = 20;
+        if let Some(player) = &mut self.player {
+            let idx = player.current_index().unwrap_or(0);
+            if idx > KEEP_BEHIND {
+                let remove = idx - KEEP_BEHIND;
+                if player.trim_played(KEEP_BEHIND) {
+                    let drain_len = remove.min(self.playing_tracks.len());
+                    self.playing_tracks.drain(0..drain_len);
+                }
+            }
+        }
+
         if self.current_track_uri.starts_with("spotify:track:") {
             self.recent_track_uris
                 .push_back(self.current_track_uri.clone());
@@ -66,13 +78,16 @@ impl App {
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
             self.state.playback.artist = qt.artist;
-            self.state.playback.album = String::new();
+            self.state.playback.album = qt.album;
             self.state.playback.duration_ms = qt.duration_ms;
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
 
             self.state.playback.art_url = None;
-            self.state.playback.cover_path = qt.cover_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+            self.state.playback.cover_path = qt
+                .cover_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned());
 
             self.current_track_uri = qt.uri;
             self.on_track_started();
@@ -90,6 +105,11 @@ impl App {
                         self.state.playback.cover_path = track.cover_path.clone();
                     } else {
                         self.state.playback.art_url = track.cover_path.clone();
+                        // Spotify tracks don't carry a local cover path; clear
+                        // the previous track's cached cover so the SMTC/MPRIS
+                        // thumbnail doesn't show a stale image until the new
+                        // cover is fetched.
+                        self.state.playback.cover_path = None;
                     }
                     self.debug_overlay.log(
                         crate::utils::debug_overlay::LogLevel::Info,
@@ -177,10 +197,19 @@ impl App {
     }
 
     pub async fn radio_refill(&mut self) {
-        let seeds: Vec<String> = self.recent_track_uris.iter().cloned().collect();
+        // Seed from the current playing track first, then recent tracks
+        let mut seeds: Vec<String> = Vec::new();
+        if self.current_track_uri.starts_with("spotify:track:") {
+            seeds.push(self.current_track_uri.clone());
+        }
+        for uri in self.recent_track_uris.iter().rev() {
+            if !seeds.contains(uri) && seeds.len() < 5 {
+                seeds.push(uri.clone());
+            }
+        }
         if seeds.is_empty() {
             self.state.status_msg =
-                Some("Radio: no seed tracks yet — play a Spotify track first".to_string());
+                Some("Autoplay: no seed track — play a Spotify track first".to_string());
             return;
         }
 
@@ -188,17 +217,40 @@ impl App {
             Ok(tracks) if !tracks.is_empty() => {
                 let count = tracks.len();
                 if let Some(player) = &mut self.player {
-                    for t in tracks {
-                        player.add_to_queue(t.uri, t.name, t.artist, t.duration_ms, None);
+                    // Also update playing_tracks so the now-playing display
+                    // (title/artist/album) works for autoplay-queued tracks
+                    self.playing_tracks.reserve(tracks.len());
+                    for t in &tracks {
+                        player.add_to_queue(
+                            t.uri.clone(),
+                            t.name.clone(),
+                            t.artist.clone(),
+                            t.album.clone(),
+                            t.duration_ms,
+                            None,
+                        );
                     }
-                    self.state.status_msg = Some(format!("Radio: queued {count} tracks"));
+                    self.playing_tracks.extend(tracks);
+                    let label = if self.radio_mode {
+                        "Autoplay"
+                    } else {
+                        "Autoplay"
+                    };
+                    self.state.status_msg = Some(format!("{label}: queued {count} tracks"));
                     self.sync_queue_display();
                 }
             }
             Ok(_) | Err(_) => {
-                self.radio_mode = false;
-                self.state.playback.radio_mode = false;
-                self.state.status_msg = Some("Radio: could not find tracks, radio off".to_string());
+                // Only disable radio_mode if it was manually toggled, not autoplay
+                if self.radio_mode {
+                    self.radio_mode = false;
+                    self.state.playback.radio_mode = false;
+                    self.state.status_msg =
+                        Some("Autoplay: could not find tracks, autoplay off".to_string());
+                } else {
+                    self.state.status_msg =
+                        Some("Autoplay: could not find recommendations".to_string());
+                }
             }
         }
     }
@@ -244,11 +296,11 @@ impl App {
                 self.state.tracks = tracks;
                 self.state.tracks_total = count as u32;
                 self.state.tracks_offset = count as u32;
+                self.state.tracks_api_offset = count as u32;
                 self.state.active_playlist_uri = Some("radio:recommendations".to_string());
                 self.state.active_playlist_id = Some("radio:recommendations".to_string());
-                self.state
-                    .track_list
-                    .select(if count == 0 { None } else { Some(0) });
+                self.state.track_sort_by = crate::ui::state::TrackSortBy::Default;
+                self.state.rebuild_sort_indices();
                 self.state.push_nav();
                 self.state.active_content = crate::ui::ActiveContent::Tracks;
                 self.state.search_results = None;
@@ -335,17 +387,16 @@ impl App {
         self.player = None;
         self.band_energies = None;
 
-        let Some(token) = self.spotify.get_access_token().await else {
-            warn!("Could not get access token for reconnect");
-            self.debug_overlay.log(
-                crate::utils::debug_overlay::LogLevel::Warn,
-                format!("Could not get access token for reconnect"),
-            );
-            self.state.status_msg = Some("Reconnect failed: no token".to_string());
-            return;
-        };
+        let token = self.spotify.get_access_token().await;
 
-        match NativePlayer::new(token, false).await {
+        match NativePlayer::new(
+            token,
+            false,
+            self.audio.librespot_bitrate(),
+            self.audio.gapless,
+        )
+        .await
+        {
             Ok(mut p) => {
                 p.set_volume(saved_volume);
                 if !saved_queue.is_empty() {

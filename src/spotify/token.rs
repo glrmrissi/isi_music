@@ -14,13 +14,13 @@ pub struct TokenManager {
 }
 
 impl TokenManager {
-    pub fn new(client_id: String) -> Self {
+    pub fn new(client_id: String, http: reqwest::Client) -> Self {
         Self {
             access_token: RwLock::new(String::new()),
             refresh_token: RwLock::new(None),
             expires_at: RwLock::new(None),
             client_id,
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -87,6 +87,10 @@ impl TokenManager {
         if !status.is_success() {
             let body = serde_json::to_string(&json).unwrap_or_default();
             if status.as_u16() == 403 {
+                config::clear_refresh_token();
+                if let Ok(mut r) = self.refresh_token.write() {
+                    *r = None;
+                }
                 anyhow::bail!("SPOTIFY_FORBIDDEN: token refresh returned 403. Details: {body}");
             }
             anyhow::bail!("token endpoint {status}: {body}");

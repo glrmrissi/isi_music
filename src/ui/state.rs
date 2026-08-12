@@ -1,7 +1,9 @@
 // TODO: modularize this file (~780 lines) into smaller modules
 use ratatui::widgets::ListState;
+use std::collections::HashMap;
 
 use super::{LIBRARY_ITEMS, LocalNode, SearchResults};
+use crate::utils::theme::UiWidget;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
@@ -119,6 +121,7 @@ pub struct UiState {
     pub active_playlist_uri: Option<String>,
     pub active_playlist_id: Option<String>,
     pub tracks_offset: u32,
+    pub tracks_api_offset: u32,
     pub tracks_total: u32,
     pub tracks_loading: bool,
     pub tracks_cursor: Option<String>,
@@ -154,6 +157,7 @@ pub struct UiState {
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
     pub show_visualizer: bool,
+    pub reactive_theme_enabled: bool,
     pub track_sort_by: TrackSortBy,
     pub sorted_track_indices: Vec<usize>,
     pub show_lyrics: bool,
@@ -167,6 +171,11 @@ pub struct UiState {
     pub loading: bool,
     pub delete_playlist_confirm: bool,
     pub delete_playlist_target: Option<String>,
+    pub lastfm_connected: bool,
+    pub lastfm_pending: bool,
+    pub first_run: bool,
+    pub spotify_authenticated: bool,
+    pub widget_rects: HashMap<UiWidget, ratatui::layout::Rect>,
 }
 
 impl UiState {
@@ -186,6 +195,7 @@ impl UiState {
             active_playlist_uri: None,
             active_playlist_id: None,
             tracks_offset: 0,
+            tracks_api_offset: 0,
             tracks_total: 0,
             tracks_loading: false,
             tracks_cursor: None,
@@ -221,6 +231,7 @@ impl UiState {
             viz_bands: Vec::new(),
             art_url: None,
             show_visualizer: true,
+            reactive_theme_enabled: false,
             track_sort_by: TrackSortBy::Default,
             sorted_track_indices: Vec::new(),
             show_lyrics: false,
@@ -234,11 +245,34 @@ impl UiState {
             loading: false,
             delete_playlist_confirm: false,
             delete_playlist_target: None,
+            lastfm_connected: false,
+            lastfm_pending: false,
+            first_run: false,
+            spotify_authenticated: false,
+            widget_rects: HashMap::new(),
         }
     }
 
     pub fn selected_track_index(&self) -> Option<usize> {
         self.track_list.selected()
+    }
+
+    /// Clear stored widget rects at the start of a render pass.
+    pub fn clear_widget_rects(&mut self) {
+        self.widget_rects.clear();
+    }
+
+    /// Record the rect for a widget during rendering.
+    pub fn store_widget_rect(&mut self, widget: UiWidget, rect: ratatui::layout::Rect) {
+        self.widget_rects.insert(widget, rect);
+    }
+
+    /// Find which widget contains the given (x, y) point.
+    pub fn widget_at(&self, x: u16, y: u16) -> Option<UiWidget> {
+        self.widget_rects
+            .iter()
+            .find(|(_, r)| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+            .map(|(w, _)| *w)
     }
 
     pub fn selected_album_index(&self) -> Option<usize> {
@@ -439,6 +473,29 @@ impl UiState {
             ActiveContent::Artists => "Artists".to_string(),
             ActiveContent::Shows => "Shows".to_string(),
             ActiveContent::LocalFiles => "Local Files".to_string(),
+        }
+    }
+
+    pub fn restore_session(&mut self, session: &crate::config::SessionState) {
+        // Always start with focus on Library — this is the entry point
+        // the user expects when opening the app.
+        self.focus = Focus::Library;
+        if let Some(ref content) = session.active_content {
+            match content.as_str() {
+                "tracks" => self.active_content = ActiveContent::Tracks,
+                "albums" => self.active_content = ActiveContent::Albums,
+                "artists" => self.active_content = ActiveContent::Artists,
+                "shows" => self.active_content = ActiveContent::Shows,
+                "local_files" => self.active_content = ActiveContent::LocalFiles,
+                _ => {}
+            }
+        }
+        if let Some(compact) = session.compact_mode {
+            self.compact_mode = compact;
+            self.compact_effective = compact;
+        }
+        if let Some(sel) = session.library_selected {
+            self.library_list.select(Some(sel));
         }
     }
 
@@ -724,6 +781,75 @@ impl UiState {
                 let n = self.queue_items.len();
                 if n > 0 {
                     self.queue_list.select(Some(n - 1));
+                }
+            }
+        }
+    }
+
+    pub fn nav_middle(&mut self) {
+        if self.compact_effective
+            && self.focus == Focus::Tracks
+            && self.active_content == ActiveContent::None
+        {
+            let selectable = self.compact_selectable_positions();
+            if !selectable.is_empty() {
+                self.library_list
+                    .select(Some(selectable[selectable.len() / 2]));
+            }
+            return;
+        }
+        match self.focus {
+            Focus::Library => self.library_list.select(Some(LIBRARY_ITEMS.len() / 2)),
+            Focus::Playlists => {
+                let n = self.playlists.len();
+                if n > 0 {
+                    self.playlist_list.select(Some(n / 2));
+                }
+            }
+            Focus::Tracks => match self.active_content {
+                ActiveContent::Albums => {
+                    let n = self.albums.len();
+                    if n > 0 {
+                        self.album_list.select(Some(n / 2));
+                    }
+                }
+                ActiveContent::Artists => {
+                    let n = self.artists.len();
+                    if n > 0 {
+                        self.artist_list.select(Some(n / 2));
+                    }
+                }
+                ActiveContent::Shows => {
+                    let n = self.shows.len();
+                    if n > 0 {
+                        self.show_list.select(Some(n / 2));
+                    }
+                }
+                ActiveContent::LocalFiles => {
+                    let n = self.sorted_track_indices.len();
+                    if n > 0 {
+                        self.local_tree_list.select(Some(n / 2));
+                    }
+                }
+                _ => {
+                    let n = self.sorted_track_indices.len();
+                    if n > 0 {
+                        self.track_list.select(Some(n / 2));
+                    }
+                }
+            },
+            Focus::Search => {
+                if let Some(sr) = &mut self.search_results {
+                    let n = sr.current_len();
+                    if n > 0 {
+                        sr.current_list_mut().select(Some(n / 2));
+                    }
+                }
+            }
+            Focus::Queue => {
+                let n = self.queue_items.len();
+                if n > 0 {
+                    self.queue_list.select(Some(n / 2));
                 }
             }
         }

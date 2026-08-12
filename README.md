@@ -1,626 +1,414 @@
-# isi-music
+<p align="center">
+  <img src="assets/icons/hicolor/256x256/apps/isi-music.png" alt="isi-music logo" width="180">
+</p>
 
-[![Release](https://img.shields.io/github/v/release/glrmrissi/isi_music?style=flat-square&color=1DB954&label=version)](https://github.com/glrmrissi/isi_music/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build)](https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square)](LICENSE)
+<h1 align="center">isi-music</h1>
 
-isi-music is a terminal audio player for Spotify streaming and local file playback, built in Rust. It replaces resource-heavy desktop clients with a native TUI that runs in any terminal emulator.
+<p align="center">Spotify and local music in the terminal.</p>
 
-## Features
+<p align="center">
+  <a href="https://github.com/glrmrissi/isi_music/releases/latest"><img src="https://img.shields.io/github/v/release/glrmrissi/isi_music?style=flat-square&color=1DB954&label=version" alt="Release"></a>
+  <a href="https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build" alt="Build"></a>
+  <a href="https://github.com/glrmrissi/isi_music/blob/main/LICENSE"><img src="https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square" alt="License"></a>
+</p>
 
-- **Spotify streaming** via librespot -- no official Spotify app required
-- **Local file playback** -- MP3 and FLAC with automatic metadata extraction
-- **Real-time audio visualizer** using braille characters (Spotify + local files)
-- **Full-text search** across tracks, albums, artists, playlists, and podcasts
-- **Queue management** with cross-player support (mix Spotify and local tracks)
-- **Shuffle and repeat** modes (off / queue / track)
-- **Album art** rendered via Kitty / Sixel / half-block (terminal auto-detected)
-- **Embedded cover art** support for local files
-- **MPRIS2 D-Bus** -- media keys, Waybar widget, playerctl support
-- **Last.fm scrobbling** -- now playing + automatic scrobble at 50% or 4 minutes
-- **Discord Rich Presence** -- shows current track in Discord activity
-- **Daemon mode** -- keep playback after closing the terminal, control via CLI
-- **Playlist management** -- add and remove tracks via keyboard (tiling picker)
-- **Command mode** -- `:` prefix commands like `ap <search>`, `newplaylist <name>`
-- **Seek support** for all audio formats
+isi-music is a terminal audio player for Spotify and local music, built in Rust with Ratatui. It combines Spotify streaming, local files, album art, a visualizer, lyrics, and desktop integrations in one TUI.
 
-> Spotify Premium is required for streaming. Local file playback works without any Spotify account.
-> See the [Spotify Setup](#spotify-setup) section below.
+> Spotify Premium is required for streaming. Local playback does not require a Spotify account.
 
-## Getting Started
+<table>
+  <tr>
+    <td align="center"><img src="assets/showcases/gifs/showcase-1.gif" alt="Showcase 1"></td>
+    <td align="center"><img src="assets/showcases/gifs/showcase-2.gif" alt="Showcase 2"></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><video src="https://github.com/user-attachments/assets/7efd70f0-72cb-4ff7-8c68-a0a38f7ceecf" controls width="800"></video></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/showcases/gifs/showcase-3.gif" alt="Showcase 3"></td>
+    <td align="center"><img src="assets/showcases/gifs/showcase-4.gif" alt="Showcase 4"></td>
+  </tr>
+</table>
 
-### Prerequisites: Nerd Font
+## Installation
 
-A Nerd Font is required for proper album art and UI rendering.
+### Quick install
 
-**Linux:**
+The installers download the latest release, install Linux audio dependencies when needed, and start the setup wizard.
+
+**Linux**
+
 ```bash
-mkdir -p ~/.local/share/fonts
-unzip NerdFont.zip -d ~/.local/share/fonts
-fc-cache -fv
+curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install.sh | bash
 ```
 
-**macOS:**
-```bash
-brew tap homebrew/cask-fonts
-brew install font-fira-code-nerd-font
+**Windows PowerShell**
+
+```powershell
+irm https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install.ps1 | iex
 ```
 
-**Windows:**
-Download from https://www.nerdfonts.com/font-downloads, extract, right-click and install the .ttf files.
+On Windows, the installer adds the program to the user `PATH` and creates a Start Menu shortcut when Windows Terminal is available.
 
-Configure your terminal to use the font (e.g. "FiraCode Nerd Font" or "JetBrains Mono Nerd Font").
+### Manual download
 
-### Download
+**Linux**
 
-**Linux:**
 ```bash
 curl -L https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-linux-x86_64 -o isi-music
 chmod +x isi-music
 sudo mv isi-music /usr/local/bin/
 ```
 
-**macOS:**
-```bash
-curl -L https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-macos-arm64 -o isi-music
-chmod +x isi-music
-sudo mv isi-music /usr/local/bin/
+**Windows**
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/glrmrissi/isi_music/releases/latest/download/isi-music-windows-x86_64.exe -OutFile isi-music.exe
+mkdir "$env:LOCALAPPDATA\Programs\isi-music" -Force
+move isi-music.exe "$env:LOCALAPPDATA\Programs\isi-music\"
 ```
 
-**Linux audio dependencies:**
+### Linux dependencies
 
-| Distro | Command |
-|--------|---------|
+| Distribution | Command |
+| --- | --- |
 | Debian / Ubuntu | `sudo apt install libasound2t64 libpulse0` |
 | Arch Linux | `sudo pacman -S alsa-lib libpulse` |
 | Fedora | `sudo dnf install alsa-lib pulseaudio-libs` |
 
-### First Run
+Windows uses WASAPI and does not need additional audio packages. Windows Terminal is recommended for true color and mouse support.
 
-```bash
-isi-music
-```
+## First run
 
-On first launch, run the setup wizard to configure Spotify, Last.fm, and theme:
+Start the wizard:
 
 ```bash
 isi-music setup
 ```
 
-Individual setup commands:
+For a specific setup step:
 
 ```bash
-isi-music setup-spotify   # Spotify Client ID + PKCE OAuth
-isi-music setup-lastfm    # Last.fm API key + session
+isi-music setup-spotify
+isi-music setup-lastfm
+isi-music doctor
+isi-music update
 ```
 
-## Configuration
+The Spotify setup uses your custom Client ID for the Web API and the built-in librespot Client ID for streaming. Configure both OAuth accounts at startup. Leave the Web API Client ID blank for streaming-only mode.
 
-All config lives under `~/.config/isi-music/` on Linux, `~/Library/Application Support/isi-music/` on macOS, and `%APPDATA%\isi-music\` on Windows.
+## Spotify authentication
 
-```toml
-[spotify]
-client_id = "your_client_id_here"
+The Web API uses your own Spotify Developer Client ID. The built-in librespot Client ID is used only for streaming.
 
-[local]
-music_dir = "~/Music"
+Run:
 
-[lastfm]
-api_key    = "your_lastfm_api_key"
-api_secret = "your_lastfm_api_secret"
-session_key = "obtained_via_setup-lastfm"
-
-[discord]
-enabled = true
-
-[musixmatch]
-musixmatch_api_key = "your_musixmatch_api_key"
+```bash
+isi-music setup-spotify
 ```
 
-See [Spotify Setup](#spotify-setup) for obtaining a Client ID.
+Enter your Web API Client ID and add this redirect URI to your Spotify Developer app:
 
-### Theme
-
-Create `~/.config/isi-music/theme.toml` to customize colors and layout.
-
-```toml
-border_active = "#00d4ff"
-border_inactive = "#ffffff"
-highlight_bg = "#004b7a"
-text_primary = "#ffffff"
-accent_color = "#ffeb3b"
-background = "#141414"
-text_secondary = "#888888"
-status_bar = "#1e1e1e"
-show_ascii_art = false
-highlight_symbol = "> "
-options_panel_symbol = "▶ "
+```text
+http://127.0.0.1:8888/callback
 ```
 
-**Color reference:**
+The setup then opens the second OAuth flow for librespot streaming using its registered redirect URI:
 
-| Variable | Purpose |
-|----------|---------|
-| `border_active` | Focused panel borders, active indicators |
-| `border_inactive` | Unfocused borders, secondary text |
-| `highlight_bg` | Selected list items background |
-| `text_primary` | Titles, artists, primary text |
-| `accent_color` | Progress bars, icons, seek bar |
-| `background` | Root background fill |
-| `text_secondary` | Subtle text, timestamps, metadata |
-| `status_bar` | Bottom status bar background |
-| `highlight_symbol` | List selection indicator (default: `"> "`) |
-| `options_panel_symbol` | Options panel selection indicator (default: `"▶ "`) |
-
-Colors can be specified as hex (`#rrggbb`), named (`white`, `red`, `green`, etc.), or RGB function (`rgb(r,g,b)`).
-
-The theme file supports custom layout trees, widget styles, and ASCII art:
-
-```toml
-border_active = "#00d4ff"
-border_inactive = "#ffffff"
-highlight_bg = "#004b7a"
-text_primary = "#ffffff"
-accent_color = "#ffeb3b"
-background = "#141414"
-text_secondary = "#888888"
-status_bar = "#1e1e1e"
-
-ascii_art_inline = [
-    "      .---.         ",
-    '     /|66_\        ',
-    '     \| ^ /---.    ',
-    "      |'-'| UI |   ",
-    "      |   |____|   ",
-    "      |   |        ",
-    "      '---'        ",
-    "    _________      ",
-    "   /        /|     ",
-    "  /________/ |     ",
-    "  |        | |     ",
-    "  |  ISI   | /     ",
-    "  |________|/      ",
-]
-show_ascii_art = false
-
-[widget_styles]
-
-[layout_tree]
-direction = "vertical"
-
-[[layout_tree.constraints]]
-length = 3
-
-[[layout_tree.constraints]]
-fill = 1
-
-[[layout_tree.constraints]]
-length = 1
-
-[[layout_tree.constraints]]
-length = 1
-
-[[layout_tree.children]]
-direction = "horizontal"
-
-[[layout_tree.children.constraints]]
-fill = 1
-
-[[layout_tree.children.constraints]]
-length = 40
-
-[[layout_tree.children.children]]
-widget = "header"
-
-[[layout_tree.children.children]]
-widget = "visualizer"
-
-[[layout_tree.children]]
-direction = "horizontal"
-
-[[layout_tree.children.constraints]]
-percentage = 20
-
-[[layout_tree.children.constraints]]
-fill = 1
-
-[[layout_tree.children.children]]
-direction = "vertical"
-
-[[layout_tree.children.children.constraints]]
-length = 7
-
-[[layout_tree.children.children.constraints]]
-length = 15
-
-[[layout_tree.children.children.constraints]]
-fill = 1
-
-[[layout_tree.children.children.children]]
-widget = "library"
-
-[[layout_tree.children.children.children]]
-widget = "playlists"
-
-[[layout_tree.children.children.children]]
-widget = "ascii_art"
-
-[[layout_tree.children.children]]
-direction = "vertical"
-
-[[layout_tree.children.children.constraints]]
-fill = 1
-
-[[layout_tree.children.children.constraints]]
-length = 8
-
-[[layout_tree.children.children.children]]
-widget = "main_content"
-
-[[layout_tree.children.children.children]]
-widget = "queue"
-
-[[layout_tree.children]]
-direction = "horizontal"
-
-[[layout_tree.children.constraints]]
-percentage = 30
-
-[[layout_tree.children.constraints]]
-fill = 1
-
-[[layout_tree.children.children]]
-widget = "marquee"
-
-[[layout_tree.children.children]]
-widget = "progress"
-
-[[layout_tree.children]]
-widget = "help"
-
-[compact_layout]
-direction = "vertical"
-
-[[compact_layout.constraints]]
-length = 1
-
-[[compact_layout.constraints]]
-fill = 1
-
-[[compact_layout.constraints]]
-length = 1
-
-[[compact_layout.children]]
-widget = "header"
-
-[[compact_layout.children]]
-direction = "horizontal"
-
-[[compact_layout.children.constraints]]
-percentage = 35
-
-[[compact_layout.children.constraints]]
-fill = 1
-
-[[compact_layout.children.children]]
-widget = "ascii_art"
-
-[[compact_layout.children.children]]
-widget = "main_content"
-
-[[compact_layout.children]]
-direction = "horizontal"
-
-[[compact_layout.children.constraints]]
-percentage = 30
-
-[[compact_layout.children.constraints]]
-fill = 1
-
-[[compact_layout.children.children]]
-widget = "marquee"
-
-[[compact_layout.children.children]]
-widget = "progress"
-
-[fullscreen_layout]
-direction = "vertical"
-
-[[fullscreen_layout.constraints]]
-length = 18
-
-[[fullscreen_layout.constraints]]
-length = 8
-
-[[fullscreen_layout.constraints]]
-min = 0
-
-[[fullscreen_layout.children]]
-widget = "now_playing"
-
-[[fullscreen_layout.children]]
-widget = "fullscreen_lyrics"
-
-[[fullscreen_layout.children]]
-widget = "visualizer"
+```text
+http://127.0.0.1:8898/login
 ```
 
-Run the wizard (`isi-music setup`) to choose from 8 color presets that preserve your existing layout settings.
-
-### Custom Keybindings
-
-Create `~/.config/isi-music/keybinds.toml` to override default keybindings. See the full action list in the [Keybindings](#keybindings) section.
-
-## Spotify Setup
-
-The February 2026 Spotify Web API changes require a Client ID for all API requests.
-
-1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and click **"Create app"**
-2. Set the Redirect URI to **`http://127.0.0.1:8888/callback`**
-3. Copy the Client ID
-4. Run `isi-music setup-spotify` or add it to `config.toml` manually:
-
-```toml
-[spotify]
-client_id = "your_client_id_here"
-```
-
-The setup wizard uses PKCE OAuth -- no `client_secret` is required. Your browser will open for authorization.
+Both authentications happen during setup/startup. No `client_secret` is required because the flow uses PKCE. Leave the Web API Client ID blank to use streaming-only mode.
 
 ## Usage
 
-### Keybindings
+### TUI controls
 
 | Key | Action |
-|-----|--------|
-| `Tab` / `Shift+Tab` | Next / previous panel |
-| `↑` / `↓` or `k` / `j` | Navigate within a panel |
-| `Ctrl+↑` / `Ctrl+↓` | First / last item |
-| `Enter` | Play selected / open album or artist |
-| `Space` | Play / pause |
-| `n` / `p` | Next / previous track |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Move between panels |
+| `↑` / `↓` or `j` / `k` | Navigate |
+| `Ctrl+↑` / `Ctrl+↓` | Jump to first or last item |
+| `M` | Jump to middle of list |
+| `PageUp` / `PageDown` | Scroll up or down |
+| `1` / `2` / `3` / `4` | Focus Library, Playlists, Tracks, or Queue |
+| `Enter` | Play, open an album, or open an artist |
+| `Esc` | Go back |
+| `Space` | Play or pause |
+| `n` / `p` | Next or previous track |
 | `s` | Toggle shuffle |
-| `r` | Cycle repeat (off -> queue -> track) |
-| `+` / `-` | Volume up / down |
-| `←` / `→` | Seek +/- 5s (hold for +/- 10s) |
+| `r` | Cycle repeat mode |
+| `+` / `-` | Change volume |
+| `←` / `→` | Seek five seconds |
+| `5` | Seek to middle of track |
 | `/` | Search |
-| `Esc` | Back / close search / exit fullscreen |
-| `q` or `Ctrl+C` | Quit |
-
-**Playlist & Library:**
-
-| Key | Action |
-|-----|--------|
-| `l` | Like current track |
-| `A` | Add selected track to playlist (tiling picker) |
-| `D` | Remove selected track from playlist / unlike |
-| `:` | Command prompt (`ap <search>`, `newplaylist <name>`) |
-| `a` | Add track to queue |
-| `Delete` | Remove selected item from queue |
-| `o` | Sort tracks (default / title / artist / album / duration) |
-| `R` | Toggle radio mode (auto-recommendations) |
-| `Alt+r` | Get similar tracks for selection |
-| `Ctrl+y` | Copy track link to clipboard |
-
-**Display:**
-
-| Key | Action |
-|-----|--------|
-| `z` | Toggle fullscreen player |
+| `Ctrl+F` | Quick search |
+| `c` | Jump to the playing track |
+| `a` | Add the selected track to the queue |
+| `Delete` | Remove from queue |
+| `l` | Like the current track |
+| `o` | Sort tracks |
+| `A` | Add to playlist |
+| `D` | Remove from playlist |
+| `Alt+D` | Delete playlist |
+| `z` | Toggle fullscreen |
 | `m` | Toggle compact mode |
 | `v` | Toggle visualizer |
 | `y` | Toggle lyrics |
+| `t` | Open options |
+| `:` | Command prompt |
+| `Ctrl+Y` | Copy track link |
+| `Shift+B` | Toggle breadcrumb |
 | `d` | Toggle debug overlay |
-| `Shift+b` | Toggle breadcrumb |
-| `t` | Open options panel |
-| `?` | Open help panel |
-| `Ctrl+f` | Quick search (filter current track list) |
-| `PgUp` / `PgDown` | Scroll lyrics |
-All keybindings are customizable in `keybinds.toml`.
+| `?` | Open help |
+| `q` or `Ctrl+C` | Quit |
 
-### Daemon Mode
+All keybindings can be overridden in `keybinds.toml`.
 
-Keep playback running in the background, controlled from the command line.
+### CLI commands
 
 ```bash
-# Start the daemon
-isi-music --daemon
+isi-music --status
+isi-music --devices
+isi-music --device <name>
+isi-music --next
+isi-music --prev
+isi-music --toggle
+isi-music --vol+
+isi-music --vol-
+isi-music --playlists
+isi-music --play <ID|name>
+isi-music --liked [--limit N]
+isi-music --search <query>
+isi-music --search-global <query>
+isi-music --ls [--limit N]
+isi-music --play-id <N>
+isi-music --clear-logs
+isi-music update
+```
 
-# Load and play
+### Daemon mode
+
+Keep Spotify playback running in the background:
+
+```bash
+isi-music --daemon
 isi-music --play spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
 isi-music --liked
-
-# List loaded tracks
 isi-music --ls
-
-# Play by index
 isi-music --play-id 2
-
-# Playback controls
-isi-music --toggle       # play / pause
-isi-music --next         # next track
-isi-music --prev         # previous track
-isi-music --vol+         # volume +5%
-isi-music --vol-         # volume -5%
-
-# Query status
-isi-music --status       # shows current track and progress
-
-# Stop the daemon
+isi-music --status
 isi-music --quit-daemon
 ```
 
-Logs are written to `~/.cache/isi-music/isi-music.log` (Linux) or the equivalent cache path on other platforms. Clear them with `isi-music --clear-logs`.
+Daemon logs are stored at `~/.local/share/isi-music/isi-music.log` on Linux and in the platform data directory on Windows. Local file playback is available in TUI mode.
 
-> Daemon mode currently supports Spotify playback only. Local file playback works in TUI mode.
+## Local files
 
-## Local Files
-
-isi-music can play local audio files without a Spotify account. Point it at your music directory in `config.toml`:
+Set a music directory in `config.toml`:
 
 ```toml
 [local]
 music_dir = "~/Music"
 ```
 
-Supported formats: MP3, FLAC.
+On Windows, use forward slashes:
 
-Navigate to **Local Files** in the library panel and press Enter to scan. The first scan extracts metadata and embedded cover art, cached in SQLite for instant subsequent loads.
+```toml
+music_dir = "C:/Users/you/Music"
+```
 
-You can mix local and Spotify tracks in the same queue -- isi-music routes each track to the appropriate player automatically.
+Supported formats are MP3, FLAC, Opus, Ogg Vorbis, and WAV. Select **Local Files** in the Library and press Enter to scan. Metadata and embedded cover art are cached in SQLite.
+
+Spotify and local tracks can be mixed in the same queue.
+
+## Configuration
+
+Configuration files live in:
+
+| Platform | Location |
+| --- | --- |
+| Linux | `~/.config/isi-music/` |
+| Windows | `%APPDATA%\isi-music\` |
+
+A minimal configuration looks like this:
+
+```toml
+[spotify]
+# Client ID for the Web API. Omit for streaming-only mode.
+# client_id = "your_client_id_here"
+
+[local]
+music_dir = "~/Music"
+
+[discord]
+enabled = false
+```
+
+The application also stores its SQLite database and caches under the platform data and cache directories.
+
+### Themes
+
+The setup wizard creates `theme.toml`. It supports colors, layouts, widget styles, ASCII art, and per-widget borders. Common options include:
+
+```toml
+background = "#141414"
+background_panel = "#1e1e1e"
+text_primary = "#ffffff"
+text_secondary = "#888888"
+accent_color = "#00d4ff"
+highlight_bg = "#004b7a"
+highlight_symbol = "> "
+options_panel_symbol = "▶ "
+reactive_theme = true
+reactive_cross_fade_ms = 800
+
+[visualizer]
+style = "braille_bars"
+height = 8
+```
+
+Available visualizer styles are `braille_bars`, `block_bars`, `plasma`, and `anime_art`. Colors accept hex, named colors, or `rgb(r,g,b)` values.
+
+When `reactive_theme` is enabled, the interface colors shift to match the album art of the currently playing track, with a smooth cross-fade controlled by `reactive_cross_fade_ms`.
+
+The wizard offers 9 color palettes: Neutral Dark, Catppuccin Mocha, Gruvbox Dark, Nord, Rose Pine, Tokyo Night, Dracula, Monochrome, and Clean.
+
+It also offers 6 layouts:
+
+| Layout | Description |
+| --- | --- |
+| Default | Standard three-column layout |
+| Clean | Minimal borders, focused on content |
+| Focus | Centered track list with sidebar navigation |
+| Sidebar Right | Navigation on the right side |
+| Full Player | Album art, lyrics, and visualizer with library and playlists |
+| Showcase | Central album art with track info, lyrics, and visualizer |
+
+### Custom keybindings
+
+Create `keybinds.toml` to override actions:
+
+```toml
+[navigation]
+focus_library = ["1"]
+focus_playlists = ["2"]
+focus_tracks = ["3"]
+focus_queue = ["4"]
+jump_to_playing = ["c"]
+
+[modes]
+quick_search = ["ctrl+f"]
+toggle_compact = ["m"]
+toggle_fullscreen = ["z"]
+```
 
 ## Integrations
 
-### MPRIS2 (Linux)
+### MPRIS2 on Linux
 
-isi-music registers on D-Bus as `org.mpris.MediaPlayer2.isi_music`, enabling media keys, Waybar widgets, and `playerctl`.
+MPRIS registers as `org.mpris.MediaPlayer2.isi_music`, enabling media keys, Waybar, and `playerctl`. It requires a running D-Bus session.
 
-**Waybar config:**
-```json
-"mpris": {
-    "format": "{player_icon} {title} -- {artist}",
-    "player-icons": { "isi_music": "" },
-    "status-icons": { "playing": ">", "paused": "||" }
-}
+```bash
+playerctl --player=isi_music play-pause
+playerctl --player=isi_music next
 ```
 
-**Hyprland media key bindings:**
-```
-bind = , XF86AudioPlay, exec, playerctl play-pause
-bind = , XF86AudioNext, exec, playerctl next
-bind = , XF86AudioPrev, exec, playerctl previous
-```
+### Last.fm
 
-MPRIS works in both TUI and daemon modes.
-
-### Last.fm Scrobbling
-
-Run `isi-music setup-lastfm` to configure. The wizard will prompt for your API credentials and open your browser for authorization.
-
-Scrobbling behavior:
-- Track starts: `track.updateNowPlaying`
-- Track reaches 50% or 4 minutes (whichever comes first): `track.scrobble`
-
-To disable, remove the `[lastfm]` section from your config.
+Run `isi-music setup-lastfm` to authorize Last.fm. Scrobbling starts after 50% of a track or four minutes, whichever comes first.
 
 ### Discord Rich Presence
 
-Enable in `config.toml`:
+Enable it in `config.toml`:
+
 ```toml
 [discord]
 enabled = true
 ```
 
-Optional: use a custom app ID (default: isi-music official app):
-```toml
-[discord]
-enabled = true
-app_id = "your_custom_app_id"
-```
+### Desktop integration
 
-Your status will show "Listening to [Track] by [Artist]".
+The repository includes the application logo, Windows icon, and Linux `.desktop` launcher under `assets/`. Installers configure the platform integration automatically where supported.
+
+### IPC
+
+The daemon communicates with CLI commands via a Unix socket on Linux (`$XDG_RUNTIME_DIR/isi-music.sock`) and a named pipe on Windows (`\\.\pipe\isi-music`). This allows `isi-music --status`, `--next`, `--play`, and other commands to control a running daemon.
 
 ## Development
 
-### Build from Source
+### Build from source
 
-Requires Rust 1.85+ (edition 2024).
+Requires Rust 1.88 or newer.
+
+**Linux dependencies:**
+
+```bash
+sudo apt install libasound2-dev libpulse-dev libdbus-1-dev pkg-config cmake
+```
+
+Then:
 
 ```bash
 git clone https://github.com/glrmrissi/isi_music.git
 cd isi_music
-
-# Linux build dependencies
-sudo apt install libasound2-dev libpulse-dev libdbus-1-dev pkg-config
-
 cargo build --release
-
-# Run with debug logging
-RUST_LOG=isi_music=debug cargo run
-
-# Run tests (154 tests)
 cargo test
 ```
 
-### Build Variants
+Windows requires MSVC Build Tools and CMake. The bundled Opus build uses CMake on Linux and Windows.
 
-Pre-built binaries come in two variants:
+### Feature flags
 
-| Variant | Size | Features | Use Case |
-|---------|------|----------|----------|
-| `isi-music-<platform>` | ~10 MB | All features (album art, visualizer, wizard, lyrics, MPRIS, Discord) | Full experience (MPRIS included via `-F mpris` in CI) |
-| `isi-music-<platform>-minimal` | ~9 MB | Spotify streaming, Discord, Last.fm, setup (no album art, visualizer, lyrics, MPRIS) | Headless daemon or minimal TUI |
-
-### Feature Flags
-
-Build with specific features using the `-F` flag:
+The default build enables Spotify, Discord, album art, and palette (reactive theming). MPRIS is optional on Linux.
 
 ```bash
-# Minimal build (streaming + Discord only)
 cargo build --release --no-default-features -F spotify,discord
-
-# Add MPRIS back if needed
 cargo build --release --no-default-features -F spotify,discord,mpris
-
-# Exclude album art (smaller binary, fewer deps)
-cargo build --release --no-default-features -F spotify,discord,mpris,lastfm,wizard,visualizer,lyrics
+cargo build --release --no-default-features -F spotify,album-art
 ```
 
-Available features:
+Available features: `spotify`, `discord`, `album-art`, `palette`, `mpris`.
 
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `spotify` | yes | Spotify streaming via librespot |
-| `discord` | yes | Discord Rich Presence |
-| `mpris` | no | MPRIS2 D-Bus media controls |
-| `lastfm` | yes | Last.fm scrobbling |
-| `wizard` | yes | Interactive setup wizard |
-| `visualizer` | yes | Real-time audio FFT visualizer |
-| `lyrics` | yes | Synced and unsynced lyrics fetching |
-| `album-art` | yes | Album art rendering (Kitty/Sixel/half-block) |
+### Verification
 
-### How It Works
-
-isi-music uses multiple audio backends depending on the source:
-
-- **librespot** -- Spotify authentication and audio streaming via the Spotify Connect protocol
-- **rodio + symphonia** -- Local audio decoding (MP3 and FLAC)
-- **Custom HTTP client** -- Spotify Web API for search, metadata, playlists, and album art
-
-The TUI is built with ratatui. The event loop polls player state, processes keyboard input, and renders at ~60 fps.
-
-Tests live in `tests/` mirroring the `src/` structure, referenced via `#[path]` attributes.
-
-### Versioning
-
-This project follows Semantic Versioning derived from conventional commits:
-
-| Commit type | Version bump |
-|-------------|--------------|
-| `fix:` | Patch (1.0.x) |
-| `feat:` | Minor (1.x.0) |
-| `BREAKING CHANGE` footer | Major (x.0.0) |
+```bash
+cargo fmt --check
+cargo check
+cargo test
+cargo clippy --all-targets --all-features --locked -- -D warnings
+```
 
 ## Troubleshooting
 
-### Local files showing "Unknown Artist"
+### Spotify authentication
 
-Delete the SQLite cache and covers, then restart:
+Run `isi-music setup-spotify` again. Enter your Web API Client ID to authenticate both the Web API and librespot at startup. Leave it blank only for streaming-only mode.
+
+On WSL, run the Linux binary from inside WSL. The browser opens in Windows and the callback is forwarded to the WSL process.
+
+### Local files show unknown metadata
+
+Remove the library cache and scan again:
+
 ```bash
 rm ~/.local/share/isi-music/library.db
 rm -rf ~/.cache/isi-music/covers/
 ```
 
-### Album art not showing
+### Album art is missing
 
-- Ensure your terminal supports true color: `echo $COLORTERM`
-- Verify a Nerd Font is installed and configured
-- Check that embedded artwork exists in your audio files
+Check that the terminal supports true color and that the local audio file contains embedded artwork.
 
-### MPRIS not working (Linux)
+### MPRIS is not working
 
-- Ensure D-Bus is running: `systemctl --user status dbus`
-- Check that `DBUS_SESSION_BUS_ADDRESS` is set: `echo $DBUS_SESSION_BUS_ADDRESS`
+Check that D-Bus is running:
+
+```bash
+systemctl --user status dbus
+printf '%s\n' "$DBUS_SESSION_BUS_ADDRESS"
+```
 
 ## License
 

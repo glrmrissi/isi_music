@@ -7,18 +7,19 @@ pub mod search;
 pub mod state;
 
 pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode};
-pub use options::OptionsPanel;
+pub use options::SettingsPanel;
 pub use playback::PlaybackState;
 pub use search::SearchResults;
 pub use state::{ActiveContent, CompactItem, Focus, SearchPanel, UiState};
 
 use crate::utils::debug_overlay::DebugOverlay;
-use crate::utils::theme::{LayoutNode, SerializableConstraint, Theme, UiWidget};
+use crate::utils::theme::{BorderConfig, LayoutNode, SerializableConstraint, Theme, UiWidget};
 use ratatui::{
     Frame,
-    layout::Rect,
-    style::Style,
-    widgets::{Block, Borders},
+    layout::{Alignment, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
@@ -46,6 +47,50 @@ impl Ui {
             cached_fullscreen_show_lyrics: false,
             cached_fullscreen_show_album_art: false,
         }
+    }
+
+    pub fn theme_snapshot(&self) -> Theme {
+        self.theme.clone()
+    }
+
+    pub fn build_panel_block(&self, widget: UiWidget, focused: bool, title: &str) -> Block<'_> {
+        use crate::utils::theme::BorderStyle as B;
+
+        let cfg: BorderConfig = self.theme.borders.get(&widget).cloned().unwrap_or_default();
+
+        let color = if focused {
+            cfg.color_focused.unwrap_or(self.theme.border_active)
+        } else {
+            cfg.color_unfocused.unwrap_or(self.theme.border_subtle)
+        };
+
+        let mut block = match cfg.style {
+            B::LeftBar => Block::default()
+                .borders(Borders::LEFT)
+                .border_type(BorderType::Thick),
+            B::Rounded => Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+            B::Thick => Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Thick),
+            B::None => Block::default(),
+        };
+
+        block = block
+            .border_style(Style::default().fg(color))
+            .style(Style::default().bg(self.theme.background_panel))
+            .title_top(
+                Line::from(vec![Span::styled(
+                    format!(" {} ", title),
+                    Style::default()
+                        .fg(self.theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                )])
+                .alignment(Alignment::Left),
+            );
+
+        block
     }
 
     fn build_fullscreen_tree(&mut self, state: &UiState) {
@@ -91,7 +136,14 @@ impl Ui {
     }
 
     pub fn render(&mut self, frame: &mut Frame, state: &mut UiState) {
+        state.clear_widget_rects();
         let area = frame.area();
+
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Block::default().style(Style::default().bg(self.theme.background)),
+            area,
+        );
 
         let root_area = Rect {
             x: area.x + 1,
@@ -103,12 +155,18 @@ impl Ui {
         state.compact_effective = state.compact_mode || root_area.width < 100;
 
         if state.fullscreen_player {
-            let accent = self.theme.border_active;
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(accent));
-            let inner = block.inner(root_area);
-            frame.render_widget(block, root_area);
+            let inner = Rect {
+                x: root_area.x + 2,
+                y: root_area.y + 1,
+                width: root_area.width.saturating_sub(4),
+                height: root_area.height.saturating_sub(3),
+            };
+            let footer_area = Rect {
+                x: root_area.x + 2,
+                y: root_area.y + root_area.height.saturating_sub(2),
+                width: root_area.width.saturating_sub(4),
+                height: 1,
+            };
 
             if inner.width >= 10 && inner.height >= 5 {
                 self.build_fullscreen_tree(state);
@@ -116,6 +174,21 @@ impl Ui {
                     self.render_recursive(frame, state, inner, layout_tree);
                 }
             }
+
+            let footer = Line::from(vec![
+                Span::styled(
+                    " isi-music ",
+                    Style::default().fg(self.theme.text_secondary),
+                ),
+                Span::styled(
+                    format!("v{} ", env!("CARGO_PKG_VERSION")),
+                    Style::default().fg(self.theme.border_subtle),
+                ),
+            ]);
+            frame.render_widget(
+                Paragraph::new(footer).alignment(Alignment::Left),
+                footer_area,
+            );
         } else if state.compact_effective {
             let layout_tree = self.build_compact_layout(state);
             self.render_recursive(frame, state, root_area, &layout_tree);

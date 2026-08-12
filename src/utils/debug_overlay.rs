@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -70,9 +72,44 @@ struct OverlayInner {
     metrics: ProcessMetrics,
     last_metric_update: Instant,
     pub visible: bool,
-    prev_utime: u64,
-    prev_stime: u64,
-    prev_wall: Instant,
+    process_system: System,
+    process_pid: Pid,
+}
+
+#[cfg(windows)]
+fn process_thread_count(pid: u32) -> u32 {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return 0;
+        }
+
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut count = 0;
+        if Thread32First(snapshot, &mut entry) != 0 {
+            loop {
+                if entry.th32OwnerProcessID == pid {
+                    count += 1;
+                }
+                if Thread32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+        count
+    }
+}
+
+#[cfg(not(windows))]
+fn process_thread_count(_pid: u32) -> u32 {
+    0
 }
 
 impl Default for DebugOverlay {
@@ -87,9 +124,8 @@ impl Default for DebugOverlay {
                 },
                 visible: false,
                 last_metric_update: now,
-                prev_utime: 0,
-                prev_stime: 0,
-                prev_wall: now,
+                process_system: System::new(),
+                process_pid: Pid::from_u32(std::process::id()),
             })),
             start: now,
         }
@@ -121,48 +157,32 @@ impl DebugOverlay {
         }
         g.last_metric_update = now;
 
-        if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
-            let fields: Vec<&str> = stat.split_whitespace().collect();
-            if fields.len() > 14 {
-                if let (Ok(utime), Ok(stime)) =
-                    (fields[13].parse::<u64>(), fields[14].parse::<u64>())
-                {
-                    let current_total_jiffies = utime + stime;
-                    let delta_jiffies =
-                        current_total_jiffies.saturating_sub(g.prev_utime + g.prev_stime);
-                    let wall_secs = now.duration_since(g.prev_wall).as_secs_f64();
+        let pid = g.process_pid;
+        g.process_system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing()
+                .with_cpu()
+                .with_memory()
+                .with_tasks(),
+        );
 
-                    if wall_secs > 0.0 {
-                        let cpu = (delta_jiffies as f64 / 100.0) / wall_secs * 10.0;
-
-                        g.metrics.cpu_percent = (cpu as f32).clamp(0.0, 999.0);
-                    }
-
-                    g.prev_utime = utime;
-                    g.prev_stime = stime;
-                    g.prev_wall = now;
-                }
-            }
-        }
-
-        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-            for line in status.lines() {
-                if line.starts_with("VmRSS:") {
-                    let kb: f32 = line
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0.0);
-                    g.metrics.rss_mb = kb / 1024.0;
-                }
-                if line.starts_with("Threads:") {
-                    g.metrics.thread_count = line
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
-                }
-            }
+        let process_metrics = g.process_system.process(pid).map(|process| {
+            let cpu_count = std::thread::available_parallelism()
+                .map(|n| n.get() as f32)
+                .unwrap_or(1.0);
+            let cpu_percent = (process.cpu_usage() / cpu_count).clamp(0.0, 999.0);
+            let rss_mb = process.memory() as f32 / (1024.0 * 1024.0);
+            let thread_count = process
+                .tasks()
+                .map(|tasks| tasks.len() as u32)
+                .unwrap_or_else(|| process_thread_count(pid.as_u32()));
+            (cpu_percent, rss_mb, thread_count)
+        });
+        if let Some((cpu_percent, rss_mb, thread_count)) = process_metrics {
+            g.metrics.cpu_percent = cpu_percent;
+            g.metrics.rss_mb = rss_mb;
+            g.metrics.thread_count = thread_count;
         }
     }
 
