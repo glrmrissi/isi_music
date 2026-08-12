@@ -64,7 +64,7 @@ pub trait AudioPlayer: Send {
     fn take_playing_queued(&mut self) -> Option<QueuedTrack>;
     fn play_from_user_queue(&mut self, index: usize) -> bool;
 
-    fn set_queue_tracks(&mut self, tracks: Vec<TrackSummary>, start_index: usize) {
+    fn set_queue_tracks(&mut self, tracks: &[TrackSummary], start_index: usize) {
         let uris = tracks.iter().map(|t| t.uri.clone()).collect();
         self.set_queue(uris, start_index);
     }
@@ -85,6 +85,12 @@ pub trait AudioPlayer: Send {
     fn shuffle(&self) -> bool;
     fn repeat(&self) -> RepeatMode;
     fn current_index(&self) -> Option<usize>;
+
+    /// Remove already-played tracks from the front of the queue.
+    /// Returns true if the queue was actually trimmed.
+    fn trim_played(&mut self, _keep_behind: usize) -> bool {
+        false
+    }
 
     fn volume_up(&mut self);
     fn volume_down(&mut self);
@@ -575,6 +581,21 @@ impl NativePlayer {
         self.current_index
     }
 
+    pub fn trim_played(&mut self, keep_behind: usize) -> bool {
+        let Some(idx) = self.current_index else {
+            return false;
+        };
+        if idx <= keep_behind {
+            return false;
+        }
+        let remove = idx - keep_behind;
+        self.queue.drain(0..remove);
+        if let Some(i) = &mut self.current_index {
+            *i -= remove;
+        }
+        true
+    }
+
     pub fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
         self.apply_volume();
@@ -684,6 +705,10 @@ impl AudioPlayer for NativePlayer {
     }
     fn current_index(&self) -> Option<usize> {
         self.current_index()
+    }
+
+    fn trim_played(&mut self, keep_behind: usize) -> bool {
+        self.trim_played(keep_behind)
     }
 
     fn volume_up(&mut self) {

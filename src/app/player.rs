@@ -16,6 +16,18 @@ impl App {
         self.progress_at_play_start = 0;
         self.state.playback.radio_mode = self.radio_mode;
 
+        const KEEP_BEHIND: usize = 20;
+        if let Some(player) = &mut self.player {
+            let idx = player.current_index().unwrap_or(0);
+            if idx > KEEP_BEHIND {
+                let remove = idx - KEEP_BEHIND;
+                if player.trim_played(KEEP_BEHIND) {
+                    let drain_len = remove.min(self.playing_tracks.len());
+                    self.playing_tracks.drain(0..drain_len);
+                }
+            }
+        }
+
         if self.current_track_uri.starts_with("spotify:track:") {
             self.recent_track_uris
                 .push_back(self.current_track_uri.clone());
@@ -207,10 +219,18 @@ impl App {
                 if let Some(player) = &mut self.player {
                     // Also update playing_tracks so the now-playing display
                     // (title/artist/album) works for autoplay-queued tracks
-                    self.playing_tracks.extend(tracks.clone());
-                    for t in tracks {
-                        player.add_to_queue(t.uri, t.name, t.artist, t.album, t.duration_ms, None);
+                    self.playing_tracks.reserve(tracks.len());
+                    for t in &tracks {
+                        player.add_to_queue(
+                            t.uri.clone(),
+                            t.name.clone(),
+                            t.artist.clone(),
+                            t.album.clone(),
+                            t.duration_ms,
+                            None,
+                        );
                     }
+                    self.playing_tracks.extend(tracks);
                     let label = if self.radio_mode {
                         "Autoplay"
                     } else {
