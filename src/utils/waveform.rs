@@ -43,11 +43,13 @@ pub fn save(uri: &str, data: &[u8]) {
     }
 }
 
-pub fn generate_for_file(path: &Path) -> Option<Vec<u8>> {
+/// Generates the waveform envelope and measures the actual duration of the
+/// file. Returns `(duration_ms, envelope)`. Duration is 0 when served from cache.
+pub fn generate_for_file(path: &Path) -> Option<(u64, Vec<u8>)> {
     // Fast path: use cache if available.
     let uri = format!("file://{}", path.display());
     if let Some(cached) = load(&uri) {
-        return Some(cached);
+        return Some((0, cached));
     }
 
     let file = File::open(path).ok()?;
@@ -65,8 +67,10 @@ pub fn generate_for_file(path: &Path) -> Option<Vec<u8>> {
 
     let mut envelope: Vec<f32> = Vec::new();
     let mut window: Vec<f32> = Vec::with_capacity(window_samples);
+    let mut total_samples: u64 = 0;
 
     for sample in decoder.by_ref() {
+        total_samples += 1;
         window.push(sample);
         if window.len() >= window_samples {
             let rms = (window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32).sqrt();
@@ -83,6 +87,8 @@ pub fn generate_for_file(path: &Path) -> Option<Vec<u8>> {
     if envelope.is_empty() {
         return None;
     }
+
+    let duration_ms = (total_samples / (sample_rate * channels) as u64) * 1000;
 
     let bin_size = (envelope.len() as f32 / N_POINTS as f32).max(1.0);
     let mut points = Vec::with_capacity(N_POINTS);
@@ -110,5 +116,5 @@ pub fn generate_for_file(path: &Path) -> Option<Vec<u8>> {
         .collect();
 
     save(&uri, &quantized);
-    Some(quantized)
+    Some((duration_ms, quantized))
 }

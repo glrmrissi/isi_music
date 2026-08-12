@@ -1,9 +1,9 @@
 // TODO: modularize this file (~530 lines) into smaller modules
-use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStreamBuilder, Sink, Source, decoder::DecoderBuilder};
 use rusqlite::Connection;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
 };
 use std::{fs::File, io::BufReader, path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
@@ -32,7 +32,13 @@ impl LocalDecoder {
             OpusSource::open(path).ok().map(LocalDecoder::Opus)
         } else {
             let file = File::open(path).ok()?;
-            Decoder::new(BufReader::new(file))
+            let len = file.metadata().ok()?.len();
+            DecoderBuilder::new()
+                .with_data(BufReader::new(file))
+                .with_byte_len(len)
+                .with_seekable(true)
+                .with_coarse_seek(true)
+                .build()
                 .ok()
                 .map(LocalDecoder::Symphonia)
         }
@@ -114,8 +120,8 @@ pub struct LocalPlayer {
     pub analyzer: Arc<SharedAnalyzerState>,
     load_guard: Option<Instant>,
     pub is_seeking: Arc<AtomicBool>,
-    seek_generation: Arc<AtomicU64>,
     waveform: Arc<Mutex<Option<Vec<u8>>>>,
+    duration_measured: Arc<Mutex<Option<u64>>>,
 }
 
 impl LocalPlayer {
@@ -177,8 +183,8 @@ impl LocalPlayer {
             analyzer: Arc::new(SharedAnalyzerState::new()),
             load_guard: None,
             is_seeking: Arc::new(AtomicBool::new(false)),
-            seek_generation: Arc::new(AtomicU64::new(0)),
             waveform: Arc::new(Mutex::new(None)),
+            duration_measured: Arc::new(Mutex::new(None)),
         };
 
         if let Err(e) = instance.reload_library_from_db() {
@@ -238,6 +244,12 @@ impl LocalPlayer {
             None => return false,
         };
 
+        if let Some(total) = decoder.total_duration() {
+            if let Some(track) = self.queue.get_mut(idx) {
+                track.duration_ms = total.as_millis() as u64;
+            }
+        }
+
         if self.analyzer.enabled() {
             if let Some(handle) = self.analyzer.handle() {
                 let analyzing = AnalyzingSource::with_handle(decoder, handle);
@@ -256,13 +268,19 @@ impl LocalPlayer {
 
         // Pre-generate waveform in a background thread for local files.
         *self.waveform.lock().unwrap() = None;
+        *self.duration_measured.lock().unwrap() = None;
         let waveform = Arc::clone(&self.waveform);
+        let duration_measured = Arc::clone(&self.duration_measured);
         std::thread::spawn(move || {
-            if let (Some(data), Ok(mut w)) = (
-                crate::utils::waveform::generate_for_file(&path),
-                waveform.lock(),
-            ) {
-                *w = Some(data);
+            if let Some((dur, data)) = crate::utils::waveform::generate_for_file(&path) {
+                if let Ok(mut w) = waveform.lock() {
+                    *w = Some(data);
+                }
+                if dur > 0 {
+                    if let Ok(mut d) = duration_measured.lock() {
+                        *d = Some(dur);
+                    }
+                }
             }
         });
 
@@ -285,65 +303,35 @@ impl LocalPlayer {
     }
 
     fn seek_by_reload(&mut self, position_ms: u32) {
-        if let Some(idx) = self.current_idx {
-            let path = self.queue[idx].path.clone();
-            let sink = Arc::clone(&self.sink);
-            let analyzer = Arc::clone(&self.analyzer);
-            let event_tx = self.event_tx.clone();
-            let is_seeking = Arc::clone(&self.is_seeking);
-            let generation = Arc::clone(&self.seek_generation);
-            let seek_gen = self.seek_generation.fetch_add(1, Ordering::SeqCst);
+        let sink = Arc::clone(&self.sink);
+        let is_seeking = Arc::clone(&self.is_seeking);
 
-            is_seeking.store(true, Ordering::SeqCst);
-            self.load_guard = Some(Instant::now());
-            self.is_playing = false;
-            sink.clear();
-            sink.pause();
+        is_seeking.store(true, Ordering::SeqCst);
+        self.load_guard = Some(Instant::now());
 
-            std::thread::spawn(move || {
-                if seek_gen != generation.load(Ordering::Acquire) {
-                    return;
-                }
-                let decoder = LocalDecoder::open(&path);
-
-                if let Some(d) = decoder {
-                    if seek_gen != generation.load(Ordering::Acquire) {
-                        return;
-                    }
-                    let skipped =
-                        d.skip_duration(std::time::Duration::from_millis(position_ms as u64));
-
-                    if analyzer.enabled() {
-                        if let Some(handle) = analyzer.handle() {
-                            let analyzing = AnalyzingSource::with_handle(skipped, handle);
-                            sink.append(analyzing);
-                        } else {
-                            sink.append(skipped);
-                        }
-                    } else {
-                        sink.append(skipped);
-                    }
-                    sink.play();
-
-                    for _ in 0..200 {
-                        if !sink.empty() {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
-
-                    is_seeking.store(false, Ordering::SeqCst);
-                    let _ = event_tx.send(PlayerNotification::Playing);
-                } else {
-                    is_seeking.store(false, Ordering::SeqCst);
-                }
-            });
-        }
+        std::thread::spawn(move || {
+            let pos = std::time::Duration::from_millis(position_ms as u64);
+            match sink.try_seek(pos) {
+                Ok(()) => info!("Seeked to {}ms", position_ms),
+                Err(e) => warn!("Seek failed: {:?}", e),
+            }
+            is_seeking.store(false, Ordering::SeqCst);
+        });
     }
 
     fn poll_sink(&mut self) {
         if self.is_seeking.load(Ordering::SeqCst) {
             return;
+        }
+
+        if let Ok(mut d) = self.duration_measured.lock() {
+            if let Some(dur) = d.take() {
+                if let Some(idx) = self.current_idx {
+                    if let Some(t) = self.queue.get_mut(idx) {
+                        t.duration_ms = dur;
+                    }
+                }
+            }
         }
 
         if let Some(t) = self.load_guard {
@@ -451,7 +439,7 @@ impl AudioPlayer for LocalPlayer {
         }
     }
 
-    fn set_queue_tracks(&mut self, tracks: Vec<TrackSummary>, start_index: usize) {
+    fn set_queue_tracks(&mut self, tracks: &[TrackSummary], start_index: usize) {
         let target_uri = match tracks.get(start_index) {
             Some(t) => &t.uri,
             None => return,
