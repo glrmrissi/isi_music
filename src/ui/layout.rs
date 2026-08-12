@@ -79,7 +79,7 @@ impl Ui {
         if let Some(widget_type) = &node.widget {
             state.store_widget_rect(*widget_type, area);
             match widget_type {
-                UiWidget::Header => self.render_header(frame, state, area),
+                UiWidget::Header | UiWidget::Search => self.render_search(frame, state, area),
                 UiWidget::Library => self.render_library(frame, state, area),
                 UiWidget::Playlists => self.render_playlists(frame, state, area),
                 UiWidget::AlbumArt =>
@@ -103,12 +103,19 @@ impl Ui {
                 UiWidget::Help => {}
                 UiWidget::AsciiArt => self.render_ascii_art(frame, area),
                 UiWidget::Spacer => {}
-                UiWidget::Lyrics => self.render_lyrics_compact(frame, state, area),
+                UiWidget::Lyrics => {
+                    if state.show_lyrics {
+                        self.render_lyrics_compact(frame, state, area);
+                    }
+                }
                 UiWidget::NowPlaying => self.render_now_playing_widget(frame, state, area),
                 UiWidget::FullscreenLyrics => {
                     if state.show_lyrics {
                         self.render_lyrics(frame, state, area);
                     }
+                }
+                UiWidget::AlbumArtWithInfo => {
+                    self.render_album_art_with_info(frame, state, area);
                 }
             }
             return;

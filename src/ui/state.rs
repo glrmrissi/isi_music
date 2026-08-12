@@ -793,7 +793,8 @@ impl UiState {
         {
             let selectable = self.compact_selectable_positions();
             if !selectable.is_empty() {
-                self.library_list.select(Some(selectable[selectable.len() / 2]));
+                self.library_list
+                    .select(Some(selectable[selectable.len() / 2]));
             }
             return;
         }
