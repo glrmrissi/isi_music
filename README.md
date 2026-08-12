@@ -39,13 +39,13 @@ The installers download the latest release, install Linux audio dependencies whe
 **Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install.sh | bash
 ```
 
 **Windows PowerShell**
 
 ```powershell
-irm https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install.ps1 | iex
 ```
 
 On Windows, the installer adds the program to the user `PATH` and creates a Start Menu shortcut when Windows Terminal is available.

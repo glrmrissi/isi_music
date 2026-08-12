@@ -6,7 +6,7 @@
 # dependencies, and launches the setup wizard.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install.sh | bash
 #
 set -euo pipefail
 

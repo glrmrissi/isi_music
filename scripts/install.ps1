@@ -5,7 +5,7 @@
     Downloads the latest binary from GitHub Releases, adds it to PATH,
     and launches the setup wizard.
 .EXAMPLE
-    irm https://raw.githubusercontent.com/glrmrissi/isi_music/main/scripts/install.ps1 | iex
+    irm https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install.ps1 | iex
 #>
 
 $ErrorActionPreference = "Stop"
