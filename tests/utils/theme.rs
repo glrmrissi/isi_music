@@ -680,6 +680,25 @@ height = 8
 }
 
 #[test]
+fn visualizer_block_bars_roundtrip() {
+    let toml_str = r##"
+border_active = "red"
+border_inactive = "gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+background = "rgb(20,20,20)"
+text_secondary = "gray"
+status_bar = "rgb(30,30,30)"
+
+[visualizer]
+style = "block_bars"
+"##;
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+    assert_eq!(theme.visualizer.style, VisualizerStyle::BlockBars);
+}
+
+#[test]
 fn border_config_roundtrip() {
     let toml_str = r##"
 border_active = "red"
@@ -708,6 +727,115 @@ style = "none"
     let q = theme.borders.get(&UiWidget::Queue).unwrap();
     assert_eq!(q.style, BorderStyle::None);
     assert!(q.color_focused.is_none());
+}
+
+#[test]
+fn focus_layout_toml_roundtrip() {
+    let mut t = Theme::default();
+    t.show_ascii_art = false;
+    t.layout_tree = LayoutNode {
+        direction: Some(SerializableDirection::Vertical),
+        constraints: Some(vec![
+            SerializableConstraint::Fill(1),
+            SerializableConstraint::Length(1),
+        ]),
+        widget: None,
+        children: Some(vec![
+            LayoutNode {
+                direction: Some(SerializableDirection::Horizontal),
+                constraints: Some(vec![
+                    SerializableConstraint::Percentage(30),
+                    SerializableConstraint::Fill(1),
+                ]),
+                widget: None,
+                children: Some(vec![
+                    LayoutNode {
+                        widget: Some(UiWidget::AlbumArt),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                    LayoutNode {
+                        widget: Some(UiWidget::MainContent),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                ]),
+            },
+            LayoutNode {
+                direction: Some(SerializableDirection::Horizontal),
+                constraints: Some(vec![
+                    SerializableConstraint::Percentage(30),
+                    SerializableConstraint::Fill(1),
+                ]),
+                widget: None,
+                children: Some(vec![
+                    LayoutNode {
+                        widget: Some(UiWidget::Marquee),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                    LayoutNode {
+                        widget: Some(UiWidget::Progress),
+                        direction: None,
+                        constraints: None,
+                        children: None,
+                    },
+                ]),
+            },
+        ]),
+    };
+
+    let toml_str = toml::to_string_pretty(&t).unwrap();
+    println!("Serialized Focus layout:\n{}", toml_str);
+
+    let deserialized: Theme = toml::from_str(&toml_str).unwrap();
+
+    // Verify top-level structure
+    assert_eq!(
+        deserialized.layout_tree.direction,
+        Some(SerializableDirection::Vertical)
+    );
+    let constraints = deserialized.layout_tree.constraints.as_ref().unwrap();
+    assert_eq!(constraints.len(), 2);
+    assert_eq!(constraints[0], SerializableConstraint::Fill(1));
+    assert_eq!(constraints[1], SerializableConstraint::Length(1));
+
+    let children = deserialized.layout_tree.children.as_ref().unwrap();
+    assert_eq!(children.len(), 2);
+
+    // First child: horizontal split with AlbumArt + MainContent
+    let top = &children[0];
+    assert_eq!(top.direction, Some(SerializableDirection::Horizontal));
+    let top_children = top.children.as_ref().unwrap();
+    assert_eq!(top_children.len(), 2);
+    assert_eq!(top_children[0].widget, Some(UiWidget::AlbumArt));
+    assert_eq!(top_children[1].widget, Some(UiWidget::MainContent));
+
+    // Second child: horizontal split with Marquee + Progress
+    let bottom = &children[1];
+    assert_eq!(bottom.direction, Some(SerializableDirection::Horizontal));
+    let bottom_children = bottom.children.as_ref().unwrap();
+    assert_eq!(bottom_children.len(), 2);
+    assert_eq!(bottom_children[0].widget, Some(UiWidget::Marquee));
+    assert_eq!(bottom_children[1].widget, Some(UiWidget::Progress));
+
+    // Verify no overlaps in rendered areas
+    let test_area = Rect::new(1, 1, 120, 38);
+    let mut areas: Vec<(Option<UiWidget>, Rect)> = Vec::new();
+    collect_areas(&deserialized.layout_tree, test_area, &mut areas);
+    for i in 0..areas.len() {
+        for j in (i + 1)..areas.len() {
+            if rects_overlap(&areas[i].1, &areas[j].1) {
+                panic!(
+                    "OVERLAP: {:?} at {:?} overlaps with {:?} at {:?}",
+                    areas[i].0, areas[i].1, areas[j].0, areas[j].1
+                );
+            }
+        }
+    }
 }
 
 #[test]
