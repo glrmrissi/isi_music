@@ -398,6 +398,11 @@ fn main() -> Result<()> {
             .block_on(daemon::run(cfg));
     }
 
+    if arg1 == Some("--version") || arg1 == Some("-V") {
+        println!("isi-music v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     if arg1 == Some("--help") || arg1 == Some("-h") {
         print_help();
         return Ok(());
