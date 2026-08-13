@@ -63,19 +63,32 @@ struct SearchCache {
 
 impl SearchCache {
     fn new(ttl_seconds: u64) -> Self {
-        let db_path = crate::config::get_local_db_path();
         let ttl = Duration::from_secs(ttl_seconds);
 
-        let conn = rusqlite::Connection::open(&db_path).expect("failed to open search cache db");
-        conn.execute_batch(
+        let conn = if cfg!(test) {
+            rusqlite::Connection::open_in_memory()
+        } else {
+            let db_path = crate::config::get_local_db_path();
+            rusqlite::Connection::open(&db_path)
+        }
+        .expect("failed to open search cache db");
+
+        let init_sql = if cfg!(test) {
+            "CREATE TABLE IF NOT EXISTS search_cache (
+                 key      TEXT PRIMARY KEY,
+                 data     TEXT NOT NULL,
+                 saved_at INTEGER NOT NULL
+             );"
+        } else {
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS search_cache (
                  key      TEXT PRIMARY KEY,
                  data     TEXT NOT NULL,
                  saved_at INTEGER NOT NULL
-             );",
-        )
-        .expect("failed to init search cache schema");
+             );"
+        };
+        conn.execute_batch(init_sql)
+            .expect("failed to init search cache schema");
 
         let preloaded = Self::load_from_db_sync(&conn, ttl).unwrap_or_else(|e| {
             warn!("Search cache: could not load from disk: {e}");
