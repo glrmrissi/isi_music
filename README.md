@@ -50,6 +50,13 @@ irm https://raw.githubusercontent.com/glrmrissi/isi_music/master/scripts/install
 
 On Windows, the installer adds the program to the user `PATH` and creates a Start Menu shortcut when Windows Terminal is available.
 
+### Homebrew (Linux)
+
+```bash
+brew tap glrmrissi/tap
+brew install isi-music
+```
+
 ### Manual download
 
 **Linux**
