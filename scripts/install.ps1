@@ -83,7 +83,8 @@ if ($WindowsTerminal) {
         $escapedTargetPath = $TargetPath.Replace("'", "''")
         $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)
         $shortcut.TargetPath = $WindowsTerminal.Source
-        $shortcut.Arguments = "new-tab --title `"isi-music`" -- powershell.exe -NoLogo -NoExit -Command `"& '$escapedTargetPath'`"
+        $cmdArg = "& '" + $escapedTargetPath + "'"
+        $shortcut.Arguments = 'new-tab --title "isi-music" -- powershell.exe -NoLogo -NoExit -Command "' + $cmdArg + '"'
         $shortcut.WorkingDirectory = $InstallDir
         $shortcut.IconLocation = "$TargetPath,0"
         $shortcut.Description = "isi-music in Windows Terminal"
