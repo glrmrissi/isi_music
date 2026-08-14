@@ -105,21 +105,18 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: isi-music
             asset_name: isi-music-linux-x86_64
-            use_cross: 'false'
 
           - os: ubuntu-latest
             label: Linux ARM64
             target: aarch64-unknown-linux-gnu
             artifact_name: isi-music
             asset_name: isi-music-linux-arm64
-            use_cross: 'true'
 
           - os: windows-latest
             label: Windows x86_64
             target: x86_64-pc-windows-msvc
             artifact_name: isi-music.exe
             asset_name: isi-music-windows-x86_64.exe
-            use_cross: 'false'
 
     steps:
       - name: Checkout repository
@@ -138,16 +135,21 @@ jobs:
             libdbus-1-dev \
             libssl-dev
 
+      - name: Install ARM64 cross-compile dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libasound2-dev:arm64 \
+            libc6-dev:arm64
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.use_cross == 'true'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -160,17 +162,22 @@ jobs:
           echo "LASTFM_API_SECRET=${{ secrets.LASTFM_API_SECRET }}" >> $GITHUB_ENV
         shell: bash
 
+      - name: Set ARM64 cross-compile environment
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
+
       - name: Build full binary
         shell: bash
         env:
           OPENSSL_STATIC: 1
         run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            BUILD_CMD="cross build"
-          else
-            BUILD_CMD="cargo build"
-          fi
-          $BUILD_CMD \
+          cargo build \
             --release \
             --locked \
             --target ${{ matrix.target }} \
@@ -184,12 +191,7 @@ jobs:
         env:
           OPENSSL_STATIC: 1
         run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            BUILD_CMD="cross build"
-          else
-            BUILD_CMD="cargo build"
-          fi
-          $BUILD_CMD \
+          cargo build \
             --release \
             --locked \
             --target ${{ matrix.target }} \
