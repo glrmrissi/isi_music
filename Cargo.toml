@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [patch.crates-io]
 librespot-core = { path = "patches/librespot-core" }
+hyper-proxy2 = { path = "patches/hyper-proxy2" }
 
 [dependencies]
 # Async runtime
@@ -31,8 +32,8 @@ crossterm = "0.28"
 chrono = "0.4"
 
 # Spotify Connect / native audio
-librespot-core = "0.8"
-librespot-playback = { version = "0.8", features = ["rodio-backend"] }
+librespot-core = { version = "0.8", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend"] }
 
 # Local audio playback (MP3, FLAC)
 rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac"] }

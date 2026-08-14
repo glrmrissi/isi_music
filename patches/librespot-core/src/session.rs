@@ -829,7 +829,7 @@ where
                             if !current_element.is_empty() {
                                 let _ = user_attributes.insert(
                                     current_element.clone(),
-                                    value.xml_content()?.to_string(),
+                                    value.xml_content(quick_xml::XmlVersion::Implicit1_0)?.to_string(),
                                 );
                             }
                         }

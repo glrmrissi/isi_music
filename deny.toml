@@ -11,18 +11,12 @@ no-default-features = false
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Ignore these advisories (with reasons)
 ignore = [
-    # rsa: Marvin Attack timing sidechannel. No safe upgrade available.
-    # Transitive dep of librespot-core. Risk is mitigated in client-side use
-    # (timing observation requires network access; Spotify API is the target).
+    # rsa: Marvin Attack timing sidechannel. No patched version exists (issue still open
+    # upstream, RustCrypto/RSA#626). librespot-core uses RsaPublicKey::verify only (signature
+    # verification of Spotify's server key), never private-key operations or decryption.
+    # The Marvin Attack recovers private keys via timing on decrypt operations not applicable
+    # to signature verification. Risk is effectively zero for this use case.
     "RUSTSEC-2023-0071",
-    # quick-xml: Quadratic run time DoS when checking duplicate attribute names.
-    # Transitive dep of librespot-core (pinned to 0.38 in patches/). Fix requires
-    # 0.41+ which has breaking API changes. Risk is low: XML parsed is Spotify
-    # API responses (trusted), not user-supplied untrusted XML.
-    "RUSTSEC-2026-0194",
-    # quick-xml: Unbounded namespace-declaration allocation (memory-exhaustion DoS).
-    # Same situation as RUSTSEC-2026-0194 above.
-    "RUSTSEC-2026-0195",
 ]
 unmaintained = "workspace"
 
