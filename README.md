@@ -53,7 +53,7 @@ On Windows, the installer adds the program to the user `PATH` and creates a Star
 ### Homebrew (Linux)
 
 ```bash
-brew tap glrmrissi/tap
+brew tap glrmrissi/isi-music
 brew install isi-music
 ```
 
