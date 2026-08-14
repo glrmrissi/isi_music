@@ -357,14 +357,22 @@ pub struct LibraryCache {
 
 impl LibraryCache {
     pub async fn new() -> Self {
-        let db_path = crate::config::get_local_db_path();
         let conn = tokio::task::spawn_blocking(move || {
-            let conn = rusqlite::Connection::open(&db_path)?;
+            #[cfg(test)]
+            let conn = rusqlite::Connection::open_in_memory()?;
+            #[cfg(not(test))]
+            let conn = {
+                let db_path = crate::config::get_local_db_path();
+                let conn = rusqlite::Connection::open(&db_path)?;
+                conn.execute_batch(
+                    "PRAGMA journal_mode=WAL;
+                    PRAGMA synchronous=NORMAL;
+                    PRAGMA busy_timeout=5000;",
+                )?;
+                conn
+            };
             conn.execute_batch(
-                "PRAGMA journal_mode=WAL;
-                PRAGMA synchronous=NORMAL;
-                PRAGMA busy_timeout=5000;
-                CREATE TABLE IF NOT EXISTS library_cache (
+                "CREATE TABLE IF NOT EXISTS library_cache (
                     key      TEXT PRIMARY KEY,
                     data     TEXT NOT NULL,
                     total    INTEGER NOT NULL,
