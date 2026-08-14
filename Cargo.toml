@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [patch.crates-io]
 librespot-core = { path = "patches/librespot-core" }
+hyper-proxy2 = { path = "patches/hyper-proxy2" }
 
 [dependencies]
 # Async runtime
