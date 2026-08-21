@@ -125,9 +125,6 @@ id3 = "1.16.4"
 # Buffer
 ringbuf = "0.5.0"
 
-# Windows path normalization (avoids \\?\ prefix)
-dunce = "1.0"
-
 # Wizard (setup/config prompts)
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
 console   = "0.15"
