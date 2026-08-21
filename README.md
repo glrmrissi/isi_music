@@ -8,8 +8,12 @@
 
 <p align="center">
   <a href="https://github.com/glrmrissi/isi_music/releases/latest"><img src="https://img.shields.io/github/v/release/glrmrissi/isi_music?style=flat-square&color=1DB954&label=version" alt="Release"></a>
+  <a href="https://github.com/glrmrissi/isi_music/releases"><img src="https://img.shields.io/github/downloads/glrmrissi/isi_music/total?style=flat-square&color=1DB954&label=downloads" alt="Downloads"></a>
+  <a href="https://github.com/glrmrissi/isi_music/stargazers"><img src="https://img.shields.io/github/stars/glrmrissi/isi_music?style=flat-square&color=1DB954&label=stars" alt="Stars"></a>
   <a href="https://github.com/glrmrissi/isi_music/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/glrmrissi/isi_music/ci.yml?style=flat-square&label=build" alt="Build"></a>
-  <a href="https://github.com/glrmrissi/isi_music/blob/main/LICENSE"><img src="https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square" alt="License"></a>
+  <a href="https://github.com/glrmrissi/isi_music/blob/master/LICENSE"><img src="https://img.shields.io/github/license/glrmrissi/isi_music?style=flat-square" alt="License"></a>
+  <a href="https://github.com/glrmrissi/isi_music#installation"><img src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square&logo=rust" alt="Rust 1.88+"></a>
+  <a href="https://github.com/glrmrissi/isi_music#installation"><img src="https://img.shields.io/badge/platform-linux%20%7C%20windows-blue?style=flat-square" alt="Linux | Windows"></a>
 </p>
 
 isi-music is a terminal audio player for Spotify and local music, built in Rust with Ratatui. It combines Spotify streaming, local files, album art, a visualizer, lyrics, and desktop integrations in one TUI.
@@ -345,47 +349,8 @@ The daemon communicates with CLI commands via a Unix socket on Linux (`$XDG_RUNT
 
 ## Development
 
-### Build from source
-
-Requires Rust 1.88 or newer.
-
-**Linux dependencies:**
-
-```bash
-sudo apt install libasound2-dev libpulse-dev libdbus-1-dev pkg-config cmake
-```
-
-Then:
-
-```bash
-git clone https://github.com/glrmrissi/isi_music.git
-cd isi_music
-cargo build --release
-cargo test
-```
-
-Windows requires MSVC Build Tools and CMake. The bundled Opus build uses CMake on Linux and Windows.
-
-### Feature flags
-
-The default build enables Spotify, Discord, album art, and palette (reactive theming). MPRIS is optional on Linux.
-
-```bash
-cargo build --release --no-default-features -F spotify,discord
-cargo build --release --no-default-features -F spotify,discord,mpris
-cargo build --release --no-default-features -F spotify,album-art
-```
-
-Available features: `spotify`, `discord`, `album-art`, `palette`, `mpris`.
-
-### Verification
-
-```bash
-cargo fmt --check
-cargo check
-cargo test
-cargo clippy --all-targets --all-features --locked -- -D warnings
-```
+Want to build from source, run tests, or cross-compile for ARM64?
+See [DEVELOPING.md](DEVELOPING.md).
 
 ## Troubleshooting
 
