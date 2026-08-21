@@ -32,7 +32,7 @@ jobs:
       - name: Commit formatting changes
         run: |
           if [ -z "$(git status --porcelain)" ]; then
-            echo "No formatting changes — skipping commit"
+            echo "No formatting changes: skipping commit"
           else
             git add .
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

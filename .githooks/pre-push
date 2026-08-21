@@ -1,0 +1,14 @@
+#!/bin/sh
+# pre-push: cargo test
+# If tests are too slow for your workflow, set HOOK_SKIP_TEST=1
+
+set -e
+
+if [ -z "$HOOK_SKIP_TEST" ]; then
+  echo "[pre-push] cargo test (set HOOK_SKIP_TEST=1 to skip)"
+  cargo test
+else
+  echo "[pre-push] skipping tests (HOOK_SKIP_TEST=1)"
+fi
+
+echo "[pre-push] OK"

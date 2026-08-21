@@ -1,0 +1,17 @@
+#!/bin/sh
+# pre-commit: cargo fmt --check + cargo clippy
+# If clippy is too slow for your workflow, set HOOK_SKIP_CLIPPY=1
+
+set -e
+
+echo "[pre-commit] cargo fmt --check"
+cargo fmt --check
+
+if [ -z "$HOOK_SKIP_CLIPPY" ]; then
+  echo "[pre-commit] cargo clippy (set HOOK_SKIP_CLIPPY=1 to skip)"
+  cargo clippy --all-targets --all-features --locked -- -D warnings
+else
+  echo "[pre-commit] skipping clippy (HOOK_SKIP_CLIPPY=1)"
+fi
+
+echo "[pre-commit] OK"
