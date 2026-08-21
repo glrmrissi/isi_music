@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    isi-music — Windows install script
+    isi-music: Windows install script
 .DESCRIPTION
     Downloads the latest binary from GitHub Releases, adds it to PATH,
     and launches the setup wizard.

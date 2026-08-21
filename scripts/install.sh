@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# isi-music — Linux install script
+# isi-music: Linux install script
 #
 # Downloads the latest binary from GitHub Releases, installs audio
 # dependencies, and launches the setup wizard.
@@ -55,19 +55,19 @@ echo ""
 DISTRO=$(detect_distro)
 case "$DISTRO" in
     debian)
-        info "Detected Debian/Ubuntu — installing libasound2, libpulse0…"
+        info "Detected Debian/Ubuntu: installing libasound2, libpulse0…"
         sudo apt-get update -qq
         sudo apt-get install -y -qq libasound2t64 libpulse0 2>/dev/null || \
         sudo apt-get install -y -qq libasound2 libpulse0
         ok "Audio dependencies installed"
         ;;
     arch)
-        info "Detected Arch Linux — installing alsa-lib, libpulse…"
+        info "Detected Arch Linux: installing alsa-lib, libpulse…"
         sudo pacman -S --noconfirm --needed alsa-lib libpulse
         ok "Audio dependencies installed"
         ;;
     fedora)
-        info "Detected Fedora — installing alsa-lib, pulseaudio-libs…"
+        info "Detected Fedora: installing alsa-lib, pulseaudio-libs…"
         sudo dnf install -y alsa-lib pulseaudio-libs
         ok "Audio dependencies installed"
         ;;
