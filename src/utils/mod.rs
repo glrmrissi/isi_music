@@ -4,6 +4,7 @@ pub mod discord;
 pub mod doctor;
 pub mod ipc;
 pub mod lastfm;
+pub mod lock;
 pub mod lyrics;
 #[cfg(windows)]
 pub mod media_keys;

@@ -6,6 +6,7 @@ pub mod player;
 pub mod ui;
 
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
+use crate::utils::lock::lock_or_recover;
 use crate::utils::theme::ThemeWatcher;
 use anyhow::Result;
 use ratatui::Terminal;
@@ -158,10 +159,7 @@ impl App {
         let settings = Arc::new(Mutex::new(
             crate::settings::Settings::load().unwrap_or_default(),
         ));
-        let cfg = settings
-            .lock()
-            .map(|guard| guard.config.clone())
-            .unwrap_or_default();
+        let cfg = lock_or_recover(&settings).config.clone();
         let autoplay_enabled = cfg.autoplay_enabled();
         let lastfm = match &cfg.lastfm.session_key {
             Some(sk) => {
@@ -194,7 +192,7 @@ impl App {
                         "Spotify 403 — create your own app: isi-music setup-spotify",
                     );
                     startup_warning = Some(
-                        "Spotify 403: seu Client ID atingiu o limite do Development Mode. Crie seu próprio app: isi-music setup-spotify".to_string(),
+                        "Spotify 403: your Client ID hit the Development Mode limit. Create your own app: isi-music setup-spotify".to_string(),
                     );
                 } else {
                     debug_overlay.log(
@@ -203,7 +201,7 @@ impl App {
                     );
                 }
 
-                SpotifyClient::new_unauthenticated().await
+                SpotifyClient::new_unauthenticated().await?
             }
         };
 
@@ -303,7 +301,7 @@ impl App {
             None
         };
 
-        let cache_manager = crate::utils::cache::CacheManager::new();
+        let cache_manager = crate::utils::cache::CacheManager::new()?;
         let settings_panel = crate::ui::SettingsPanel::new(cache_manager, Arc::clone(&settings));
 
         state.lastfm_connected = lastfm.is_some();
@@ -401,13 +399,15 @@ impl App {
     #[cfg(test)]
     pub async fn new_for_test() -> Self {
         let (seek_tx, seek_rx) = mpsc::channel();
-        let spotify = crate::spotify::SpotifyClient::new_unauthenticated().await;
+        let spotify = crate::spotify::SpotifyClient::new_unauthenticated()
+            .await
+            .expect("test client init");
         let debug_overlay = Arc::new(DebugOverlay::new());
-        let cache_manager = crate::utils::cache::CacheManager::new();
+        let cache_manager = crate::utils::cache::CacheManager::new().expect("test cache init");
         let settings = Arc::new(Mutex::new(crate::settings::Settings::default()));
         let mut state = crate::ui::UiState::new();
         {
-            let cfg = settings.lock().unwrap().config.clone();
+            let cfg = lock_or_recover(&*settings).config.clone();
             state.show_album_art = cfg.show_cover_images();
             state.show_visualizer = cfg.show_visualizer();
             state.show_breadcrumb = cfg.show_breadcrumb();
@@ -423,7 +423,7 @@ impl App {
             }
         }
 
-        let autoplay_enabled = settings.lock().unwrap().config.autoplay_enabled();
+        let autoplay_enabled = lock_or_recover(&*settings).config.autoplay_enabled();
         Self {
             seek_tx,
             seek_rx,
@@ -1366,7 +1366,7 @@ impl App {
                     });
                 } else {
                     // Update position without cloning strings
-                    let mut state = mpris.state.lock().unwrap();
+                    let mut state = lock_or_recover(&mpris.state);
                     state.position_us = pb.progress_ms as i64 * 1000;
                     state.volume = pb.volume as f64 / 100.0;
                     state.is_playing = pb.is_playing;

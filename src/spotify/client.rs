@@ -1,5 +1,5 @@
 // TODO: modularize this file (~2300 lines) into smaller modules
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ struct SearchCache {
 }
 
 impl SearchCache {
-    fn new(ttl_seconds: u64) -> Self {
+    fn new(ttl_seconds: u64) -> anyhow::Result<Self> {
         let ttl = Duration::from_secs(ttl_seconds);
 
         let conn = if cfg!(test) {
@@ -71,7 +71,7 @@ impl SearchCache {
             let db_path = crate::config::get_local_db_path();
             rusqlite::Connection::open(&db_path)
         }
-        .expect("failed to open search cache db");
+        .context("failed to open search cache db")?;
 
         let init_sql = if cfg!(test) {
             "CREATE TABLE IF NOT EXISTS search_cache (
@@ -88,18 +88,18 @@ impl SearchCache {
              );"
         };
         conn.execute_batch(init_sql)
-            .expect("failed to init search cache schema");
+            .context("failed to init search cache schema")?;
 
         let preloaded = Self::load_from_db_sync(&conn, ttl).unwrap_or_else(|e| {
             warn!("Search cache: could not load from disk: {e}");
             HashMap::new()
         });
 
-        Self {
+        Ok(Self {
             store: Arc::new(RwLock::new(preloaded)),
             ttl,
             conn: Arc::new(std::sync::Mutex::new(conn)),
-        }
+        })
     }
 
     fn unix_now() -> i64 {
@@ -356,7 +356,7 @@ pub struct LibraryCache {
 }
 
 impl LibraryCache {
-    pub async fn new() -> Self {
+    pub async fn new() -> anyhow::Result<Self> {
         let conn = tokio::task::spawn_blocking(move || {
             #[cfg(test)]
             let conn = rusqlite::Connection::open_in_memory()?;
@@ -392,13 +392,11 @@ impl LibraryCache {
             Ok::<_, rusqlite::Error>(conn)
         })
         .await
-        .expect("failed to spawn blocking task");
+        .context("failed to spawn blocking task")??;
 
-        Self {
-            conn: Arc::new(std::sync::Mutex::new(
-                conn.expect("failed to open library cache db"),
-            )),
-        }
+        Ok(Self {
+            conn: Arc::new(std::sync::Mutex::new(conn)),
+        })
     }
 
     fn unix_now() -> i64 {
@@ -619,10 +617,7 @@ impl LibraryCache {
             if tracks.is_empty() {
                 return None;
             }
-            let next_cursor = {
-                let last = tracks.last().unwrap();
-                Some(format!("{}\t{}", last.0, last.1))
-            };
+            let next_cursor = tracks.last().map(|last| format!("{}\t{}", last.0, last.1));
             let summaries: Vec<TrackSummary> = tracks.into_iter().map(|(_, _, t)| t).collect();
             Some((summaries, total, next_cursor))
         } else {
@@ -658,10 +653,7 @@ impl LibraryCache {
             if tracks.is_empty() {
                 return None;
             }
-            let next_cursor = {
-                let last = tracks.last().unwrap();
-                Some(format!("{}\t{}", last.0, last.1))
-            };
+            let next_cursor = tracks.last().map(|last| format!("{}\t{}", last.0, last.1));
             let summaries: Vec<TrackSummary> = tracks.into_iter().map(|(_, _, t)| t).collect();
             Some((summaries, total, next_cursor))
         }
@@ -810,26 +802,26 @@ pub struct SpotifyClient {
 }
 
 impl SpotifyClient {
-    pub async fn new_unauthenticated() -> Self {
+    pub async fn new_unauthenticated() -> Result<Self> {
         let http = http_client();
         let dummy_token = TokenManager::new(String::new(), http.clone());
-        Self {
+        Ok(Self {
             token_manager: dummy_token,
             http,
             shuffle_state: std::sync::atomic::AtomicBool::new(false),
             is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
             authenticated: false,
-            search_cache: SearchCache::new(600),
-            library_cache: LibraryCache::new().await,
-        }
+            search_cache: SearchCache::new(600)?,
+            library_cache: LibraryCache::new().await?,
+        })
     }
 
     pub async fn new() -> Result<Self> {
         let cfg = config::AppConfig::load()?;
         let Some(client_id) = cfg.get_client_id() else {
             warn!("Spotify Web API Client ID is not configured; starting in local-only mode");
-            return Ok(Self::new_unauthenticated().await);
+            return Self::new_unauthenticated().await;
         };
 
         let http = http_client();
@@ -851,8 +843,8 @@ impl SpotifyClient {
                         is_playing: std::sync::atomic::AtomicBool::new(false),
                         repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
                         authenticated: true,
-                        search_cache: SearchCache::new(600),
-                        library_cache: LibraryCache::new().await,
+                        search_cache: SearchCache::new(600)?,
+                        library_cache: LibraryCache::new().await?,
                     });
                 }
                 Err(e) => {
@@ -874,8 +866,8 @@ impl SpotifyClient {
             is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::RepeatState::Off),
             authenticated: true,
-            search_cache: SearchCache::new(600),
-            library_cache: LibraryCache::new().await,
+            search_cache: SearchCache::new(600)?,
+            library_cache: LibraryCache::new().await?,
         })
     }
 

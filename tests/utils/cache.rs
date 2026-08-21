@@ -4,7 +4,7 @@ use tempfile::NamedTempFile;
 #[tokio::test]
 async fn new_creates_empty_cache() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     let stats = cm.get_stats().await;
     assert_eq!(stats.search_cache_entries, 0);
     assert_eq!(stats.library_cache_entries, 0);
@@ -14,35 +14,35 @@ async fn new_creates_empty_cache() {
 #[tokio::test]
 async fn clear_search_on_empty_is_ok() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     assert!(cm.clear_search().await.is_ok());
 }
 
 #[tokio::test]
 async fn clear_library_on_empty_is_ok() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     assert!(cm.clear_library().await.is_ok());
 }
 
 #[tokio::test]
 async fn clear_lyrics_on_empty_is_ok() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     assert!(cm.clear_lyrics().await.is_ok());
 }
 
 #[tokio::test]
 async fn clear_all_on_empty_is_ok() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     assert!(cm.clear_all().await.is_ok());
 }
 
 #[tokio::test]
 async fn stats_after_clear_is_zero() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     let _ = cm.clear_all().await;
     let stats = cm.get_stats().await;
     assert_eq!(stats.search_cache_entries, 0);
@@ -53,7 +53,7 @@ async fn stats_after_clear_is_zero() {
 #[tokio::test]
 async fn cleanup_expired_on_empty_is_ok() {
     let tmp = NamedTempFile::new().unwrap();
-    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap());
+    let cm = CacheManager::new_with_path(tmp.path().to_str().unwrap()).unwrap();
     assert!(cm.cleanup_expired().await.is_ok());
 }
 
@@ -81,7 +81,7 @@ async fn stats_after_library_update() {
         .unwrap();
     }
 
-    let cm = CacheManager::new_with_path(&path);
+    let cm = CacheManager::new_with_path(&path).unwrap();
     let stats = cm.get_stats().await;
     assert_eq!(stats.library_cache_entries, 1);
 }

@@ -1,5 +1,6 @@
 // TODO: modularize this file (~720 lines) into smaller modules
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
+use crate::utils::lock::lock_or_recover;
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -716,7 +717,7 @@ impl LyricsHandle {
     }
 
     pub fn request(&self, title: &str, artist: &str, uri: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_or_recover(&self.inner);
         if inner.last_uri == uri {
             return;
         }
@@ -796,7 +797,7 @@ impl LyricsHandle {
     }
 
     pub fn poll(&self) -> Option<LyricsData> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = lock_or_recover(&self.inner);
         let rx = inner.pending.as_mut()?;
 
         match rx.try_recv() {
@@ -813,6 +814,6 @@ impl LyricsHandle {
     }
 
     pub fn is_loading(&self) -> bool {
-        self.inner.lock().unwrap().pending.is_some()
+        lock_or_recover(&self.inner).pending.is_some()
     }
 }

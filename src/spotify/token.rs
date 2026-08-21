@@ -35,7 +35,8 @@ impl TokenManager {
             *ea = Some(
                 Utc::now()
                     + Duration::try_seconds(expires_in_secs as i64)
-                        .unwrap_or_else(|| Duration::try_seconds(3600).unwrap()),
+                        .or_else(|| Duration::try_seconds(3600))
+                        .unwrap_or_default(),
             );
         }
     }
@@ -116,7 +117,8 @@ impl TokenManager {
             *ea = Some(
                 Utc::now()
                     + Duration::try_seconds(expires_in as i64)
-                        .unwrap_or_else(|| Duration::try_seconds(3600).unwrap()),
+                        .or_else(|| Duration::try_seconds(3600))
+                        .unwrap_or_default(),
             );
         }
 

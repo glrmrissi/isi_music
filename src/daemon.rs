@@ -38,7 +38,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env().add_directive(
                         "isi_music=debug".parse().unwrap_or_else(|_| {
-                            "isi_music=info".parse().expect("hardcoded valid directive")
+                            "isi_music=info"
+                                .parse()
+                                .unwrap_or_else(|_| tracing::Level::INFO.into())
                         }),
                     ),
                 )

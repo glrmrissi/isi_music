@@ -1980,8 +1980,11 @@ impl App {
                                 .unwrap_or(false);
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             let result = if is_playlist {
-                                let uri = self.state.active_playlist_uri.clone().unwrap();
-                                self.spotify.play_in_context(&uri, &track_uri).await
+                                if let Some(uri) = self.state.active_playlist_uri.clone() {
+                                    self.spotify.play_in_context(&uri, &track_uri).await
+                                } else {
+                                    self.spotify.play_track_uri(&track_uri).await
+                                }
                             } else {
                                 self.spotify.play_track_uri(&track_uri).await
                             };

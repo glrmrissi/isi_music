@@ -1,3 +1,4 @@
+use crate::utils::lock::lock_or_recover;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -170,7 +171,7 @@ impl AnalyzerHandle {
         let bands_clone = Arc::clone(&bands);
         let enabled_clone = Arc::clone(&enabled);
 
-        std::thread::Builder::new()
+        if std::thread::Builder::new()
             .name("band-analyzer".into())
             .spawn(move || {
                 let mut analyzer = AnalyzerThread::new(bands_clone);
@@ -190,7 +191,10 @@ impl AnalyzerHandle {
                     }
                 }
             })
-            .expect("failed to spawn analyzer thread");
+            .is_err()
+        {
+            tracing::warn!("failed to spawn band-analyzer thread, visualizer disabled");
+        }
 
         Self {
             bands,
@@ -232,7 +236,7 @@ impl SharedAnalyzerState {
 
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::Relaxed);
-        let mut handle = self.handle.lock().unwrap();
+        let mut handle = lock_or_recover(&self.handle);
         if on && handle.is_none() {
             self.shutdown.store(false, Ordering::Relaxed);
             *handle = Some(AnalyzerHandle::spawn_with_enabled(
@@ -247,7 +251,7 @@ impl SharedAnalyzerState {
     }
 
     pub fn handle(&self) -> Option<AnalyzerHandle> {
-        self.handle.lock().unwrap().clone()
+        lock_or_recover(&self.handle).clone()
     }
 
     pub fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {

@@ -1,3 +1,4 @@
+use crate::utils::lock::lock_or_recover;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -149,7 +150,7 @@ impl DebugOverlay {
     }
 
     pub fn update_metrics(&self) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = lock_or_recover(&self.inner);
         let now = Instant::now();
 
         if now.duration_since(g.last_metric_update) < Duration::from_millis(800) {
@@ -187,12 +188,12 @@ impl DebugOverlay {
     }
 
     pub fn toggle_visible(&self) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = lock_or_recover(&self.inner);
         g.visible = !g.visible;
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let g = self.inner.lock().unwrap();
+        let g = lock_or_recover(&self.inner);
         if !g.visible {
             return;
         }
@@ -315,7 +316,7 @@ pub struct DebugHandle {
 impl DebugHandle {
     pub fn log(&self, level: LogLevel, msg: impl Into<String>) {
         let elapsed = self.start.elapsed();
-        let mut g = self.inner.lock().unwrap();
+        let mut g = lock_or_recover(&self.inner);
         if g.logs.len() >= LOG_CAPACITY {
             g.logs.pop_front();
         }

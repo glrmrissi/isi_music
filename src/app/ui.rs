@@ -48,30 +48,33 @@ impl App {
                 .flatten();
 
             if let Some((query, offset, stype)) = should_load {
-                self.state.search_results.as_mut().unwrap().loading = true;
+                if let Some(sr) = self.state.search_results.as_mut() {
+                    sr.loading = true;
+                }
                 match self.spotify.search_more(&query, stype, offset).await {
                     Ok(more) => {
-                        let sr = self.state.search_results.as_mut().unwrap();
-                        match stype {
-                            "track" => {
-                                sr.tracks_total = more.tracks_total;
-                                sr.tracks.extend(more.tracks);
+                        if let Some(sr) = self.state.search_results.as_mut() {
+                            match stype {
+                                "track" => {
+                                    sr.tracks_total = more.tracks_total;
+                                    sr.tracks.extend(more.tracks);
+                                }
+                                "artist" => {
+                                    sr.artists_total = more.artists_total;
+                                    sr.artists.extend(more.artists);
+                                }
+                                "album" => {
+                                    sr.albums_total = more.albums_total;
+                                    sr.albums.extend(more.albums);
+                                }
+                                "playlist" => {
+                                    sr.playlists_total = more.playlists_total;
+                                    sr.playlists.extend(more.playlists);
+                                }
+                                _ => {}
                             }
-                            "artist" => {
-                                sr.artists_total = more.artists_total;
-                                sr.artists.extend(more.artists);
-                            }
-                            "album" => {
-                                sr.albums_total = more.albums_total;
-                                sr.albums.extend(more.albums);
-                            }
-                            "playlist" => {
-                                sr.playlists_total = more.playlists_total;
-                                sr.playlists.extend(more.playlists);
-                            }
-                            _ => {}
+                            sr.loading = false;
                         }
-                        sr.loading = false;
                     }
                     Err(e) => {
                         if let Some(sr) = self.state.search_results.as_mut() {

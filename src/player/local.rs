@@ -1,4 +1,5 @@
 // TODO: modularize this file (~530 lines) into smaller modules
+use crate::utils::lock::lock_or_recover;
 use rodio::{Decoder, OutputStreamBuilder, Sink, Source, decoder::DecoderBuilder};
 use rusqlite::Connection;
 use std::sync::{
@@ -267,8 +268,8 @@ impl LocalPlayer {
         self.load_guard = Some(Instant::now());
 
         // Pre-generate waveform in a background thread for local files.
-        *self.waveform.lock().unwrap() = None;
-        *self.duration_measured.lock().unwrap() = None;
+        *lock_or_recover(&self.waveform) = None;
+        *lock_or_recover(&self.duration_measured) = None;
         let waveform = Arc::clone(&self.waveform);
         let duration_measured = Arc::clone(&self.duration_measured);
         std::thread::spawn(move || {

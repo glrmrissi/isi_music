@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::task::spawn_blocking;
@@ -45,23 +45,24 @@ impl Default for CacheOptions {
 }
 
 impl CacheManager {
-    pub fn new() -> Self {
+    pub fn new() -> anyhow::Result<Self> {
         let db_path = config::get_local_db_path();
         Self::new_with_path(&db_path)
     }
 
-    pub fn new_with_path(db_path: &str) -> Self {
+    pub fn new_with_path(db_path: &str) -> anyhow::Result<Self> {
         let options = CacheOptions::default();
-        let conn = rusqlite::Connection::open(db_path).expect("failed to open cache db");
+        let conn = rusqlite::Connection::open(db_path)
+            .with_context(|| format!("failed to open cache db at {}", db_path))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )
-        .expect("failed to set pragmas");
+        .context("failed to set pragmas")?;
 
-        Self {
+        Ok(Self {
             conn: Arc::new(std::sync::Mutex::new(conn)),
             options,
-        }
+        })
     }
 
     pub async fn clear_search(&self) -> Result<()> {

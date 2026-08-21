@@ -4,6 +4,7 @@
 ///   - `Arc<Mutex<MprisState>>` is written by the app each tick and read by D-Bus handlers.
 ///   - `mpsc` channel carries commands from D-Bus clients (media keys) back to the app.
 ///   - A `watch` channel triggers `PropertiesChanged` D-Bus signals when state changes.
+use crate::utils::lock::lock_or_recover;
 use anyhow::Result;
 use mpris_server::{
     LoopStatus, Metadata, PlaybackStatus, PlayerInterface, Property, RootInterface, Server, Time,
@@ -11,6 +12,14 @@ use mpris_server::{
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
+
+fn track_id() -> TrackId {
+    TrackId::try_from("/org/isi_music/CurrentTrack")
+        .or_else(|_| TrackId::try_from("/"))
+        .unwrap_or_else(|_| {
+            TrackId::try_from("/").unwrap_or_else(|_| unreachable!("hardcoded valid D-Bus path"))
+        })
+}
 
 #[derive(Clone, Default)]
 pub struct MprisState {
@@ -94,7 +103,7 @@ impl PlayerInterface for MprisImpl {
         Ok(())
     }
     async fn play_pause(&self) -> zbus::fdo::Result<()> {
-        let is_playing = self.state.lock().unwrap().is_playing;
+        let is_playing = lock_or_recover(&self.state).is_playing;
         let _ = self.cmd_tx.send(if is_playing {
             MprisCmd::Pause
         } else {
@@ -111,7 +120,7 @@ impl PlayerInterface for MprisImpl {
         Ok(())
     }
     async fn seek(&self, offset: Time) -> zbus::fdo::Result<()> {
-        let pos = self.state.lock().unwrap().position_us;
+        let pos = lock_or_recover(&self.state).position_us;
         let new_pos = (pos + offset.as_micros()).max(0);
         let _ = self.cmd_tx.send(MprisCmd::Seek(new_pos));
         Ok(())
@@ -125,7 +134,7 @@ impl PlayerInterface for MprisImpl {
     }
 
     async fn playback_status(&self) -> zbus::fdo::Result<PlaybackStatus> {
-        let s = self.state.lock().unwrap();
+        let s = lock_or_recover(&self.state);
         Ok(if s.title.is_empty() {
             PlaybackStatus::Stopped
         } else if s.is_playing {
@@ -135,7 +144,7 @@ impl PlayerInterface for MprisImpl {
         })
     }
     async fn loop_status(&self) -> zbus::fdo::Result<LoopStatus> {
-        let s = self.state.lock().unwrap();
+        let s = lock_or_recover(&self.state);
         Ok(if s.repeat_track {
             LoopStatus::Track
         } else if s.repeat_queue {
@@ -154,18 +163,17 @@ impl PlayerInterface for MprisImpl {
         Ok(())
     }
     async fn shuffle(&self) -> zbus::fdo::Result<bool> {
-        Ok(self.state.lock().unwrap().shuffle)
+        Ok(lock_or_recover(&self.state).shuffle)
     }
     async fn set_shuffle(&self, _: bool) -> zbus::Result<()> {
         Ok(())
     }
 
     async fn metadata(&self) -> zbus::fdo::Result<Metadata> {
-        let s = self.state.lock().unwrap();
+        let s = lock_or_recover(&self.state);
         let mut meta = Metadata::new();
         if !s.title.is_empty() {
-            let track_id = TrackId::try_from("/org/isi_music/CurrentTrack")
-                .unwrap_or_else(|_| TrackId::try_from("/").unwrap());
+            let track_id = track_id();
             meta.set_trackid(Some(track_id));
             meta.set_title(Some(s.title.clone()));
             meta.set_artist(Some(vec![s.artist.clone()]));
@@ -179,14 +187,14 @@ impl PlayerInterface for MprisImpl {
     }
 
     async fn volume(&self) -> zbus::fdo::Result<Volume> {
-        Ok(self.state.lock().unwrap().volume)
+        Ok(lock_or_recover(&self.state).volume)
     }
     async fn set_volume(&self, v: Volume) -> zbus::Result<()> {
         let _ = self.cmd_tx.send(MprisCmd::SetVolume(v));
         Ok(())
     }
     async fn position(&self) -> zbus::fdo::Result<Time> {
-        Ok(Time::from_micros(self.state.lock().unwrap().position_us))
+        Ok(Time::from_micros(lock_or_recover(&self.state).position_us))
     }
     async fn minimum_rate(&self) -> zbus::fdo::Result<f64> {
         Ok(1.0)
@@ -226,7 +234,7 @@ pub struct MprisHandle {
 impl MprisHandle {
     /// Push a new playback state and notify MPRIS clients.
     pub fn update(&self, new_state: MprisState) {
-        *self.state.lock().unwrap() = new_state;
+        *lock_or_recover(&self.state) = new_state;
         let _ = self.notify_tx.send(());
     }
 }
@@ -252,7 +260,7 @@ pub async fn spawn() -> Result<MprisHandle> {
             if notify_rx.changed().await.is_err() {
                 break;
             }
-            let s = state_for_signals.lock().unwrap().clone();
+            let s = lock_or_recover(&state_for_signals).clone();
 
             let playback_status = if s.title.is_empty() {
                 PlaybackStatus::Stopped
@@ -271,8 +279,7 @@ pub async fn spawn() -> Result<MprisHandle> {
 
             let mut meta = Metadata::new();
             if !s.title.is_empty() {
-                let track_id = TrackId::try_from("/org/isi_music/CurrentTrack")
-                    .unwrap_or_else(|_| TrackId::try_from("/").unwrap());
+                let track_id = track_id();
                 meta.set_trackid(Some(track_id));
                 meta.set_title(Some(s.title.clone()));
                 meta.set_artist(Some(vec![s.artist.clone()]));
