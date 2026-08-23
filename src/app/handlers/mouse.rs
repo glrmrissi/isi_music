@@ -52,9 +52,9 @@ impl App {
                                 let ratio = (click_x - bar_start) as f64 / bar_w as f64;
                                 let new_pos = (duration as f64 * ratio) as u64;
                                 self.state.playback.progress_ms = new_pos;
-                                self.progress_at_play_start = new_pos;
+                                self.player_mgr.progress_at_play_start = new_pos;
                                 if self.state.playback.is_playing {
-                                    self.playing_started_at = Some(Instant::now());
+                                    self.player_mgr.playing_started_at = Some(Instant::now());
                                 }
                                 let _ = self.seek_tx.send(new_pos as u32);
                                 self.state.status_msg =

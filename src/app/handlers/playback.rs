@@ -68,7 +68,7 @@ impl App {
 
         let track_summary = self.spotify.fetch_track_summary(track_id).await.ok();
 
-        if let Some(player) = &mut self.player {
+        if let Some(player) = &mut self.player_mgr.player {
             self.current_track_uri = track_uri.clone();
             player.set_queue(vec![track_uri], 0);
 
@@ -86,7 +86,7 @@ impl App {
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
-            self.playing_started_at = Some(Instant::now());
+            self.player_mgr.playing_started_at = Some(Instant::now());
             self.on_track_started();
         } else {
             warn!("No player available");
@@ -148,7 +148,7 @@ impl App {
             return;
         }
 
-        if let Some(player) = &mut self.player {
+        if let Some(player) = &mut self.player_mgr.player {
             let tracks_len = tracks.len();
             if let Some(first) = tracks.first() {
                 self.state.playback.title = first.name.clone();
@@ -165,7 +165,7 @@ impl App {
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
-            self.playing_started_at = Some(Instant::now());
+            self.player_mgr.playing_started_at = Some(Instant::now());
             self.state.status_msg = Some(format!("Playing playlist ({tracks_len} tracks)"));
             self.on_track_started();
         } else {
@@ -225,7 +225,7 @@ impl App {
             return;
         }
 
-        if let Some(player) = &mut self.player {
+        if let Some(player) = &mut self.player_mgr.player {
             let tracks_len = tracks.len();
             if let Some(first) = tracks.first() {
                 self.state.playback.title = first.name.clone();
@@ -242,7 +242,7 @@ impl App {
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
-            self.playing_started_at = Some(Instant::now());
+            self.player_mgr.playing_started_at = Some(Instant::now());
             self.state.status_msg = Some(format!("Playing album ({tracks_len} tracks)"));
             self.on_track_started();
         } else {
@@ -302,7 +302,7 @@ impl App {
             return;
         }
 
-        if let Some(player) = &mut self.player {
+        if let Some(player) = &mut self.player_mgr.player {
             let tracks_len = tracks.len();
             if let Some(first) = tracks.first() {
                 self.state.playback.title = first.name.clone();
@@ -319,7 +319,7 @@ impl App {
             self.state.playback.progress_ms = 0;
             self.state.playback.is_playing = true;
             self.state.playback.is_local = false;
-            self.playing_started_at = Some(Instant::now());
+            self.player_mgr.playing_started_at = Some(Instant::now());
             self.state.status_msg = Some(format!("Playing artist ({tracks_len} tracks)"));
             self.on_track_started();
         } else {

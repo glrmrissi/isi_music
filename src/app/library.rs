@@ -27,7 +27,7 @@ impl App {
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = oneshot::channel();
-                self.pending_fetch = Some(rx);
+                self.fetcher.pending_fetch = Some(rx);
                 tokio::spawn(async move {
                     let result = spotify.sync_liked_tracks().await.map_err(|e| e.to_string());
                     let _ = tx.send(FetchResult::LikedTracks(result));
@@ -39,7 +39,7 @@ impl App {
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = oneshot::channel();
-                self.pending_fetch = Some(rx);
+                self.fetcher.pending_fetch = Some(rx);
                 tokio::spawn(async move {
                     let result = spotify
                         .fetch_saved_albums(0)
@@ -54,7 +54,7 @@ impl App {
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = oneshot::channel();
-                self.pending_fetch = Some(rx);
+                self.fetcher.pending_fetch = Some(rx);
                 tokio::spawn(async move {
                     let result = spotify
                         .fetch_followed_artists()
@@ -87,7 +87,7 @@ impl App {
         let spotify = Arc::clone(&self.spotify);
         let playlist_id = playlist.id;
         let (tx, rx) = oneshot::channel();
-        self.pending_fetch = Some(rx);
+        self.fetcher.pending_fetch = Some(rx);
         tokio::spawn(async move {
             let result = spotify
                 .fetch_playlist_tracks(&playlist_id, 0)
@@ -130,7 +130,7 @@ impl App {
         self.state.focus = Focus::Tracks;
 
         let (tx, rx) = oneshot::channel();
-        self.local_scan_rx = Some(rx);
+        self.fetcher.local_scan_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
             let extensions = ["mp3", "flac", "ogg", "wav", "aiff", "opus"];
@@ -352,13 +352,13 @@ impl App {
     }
 
     pub fn poll_local_scan(&mut self) {
-        let rx = match &mut self.local_scan_rx {
+        let rx = match &mut self.fetcher.local_scan_rx {
             Some(r) => r,
             None => return,
         };
 
         if let Ok(nodes) = rx.try_recv() {
-            self.local_scan_rx = None;
+            self.fetcher.local_scan_rx = None;
 
             let track_count = nodes.iter().filter(|n| !n.is_folder()).count();
             let tree = crate::ui::LocalFileTree::new(nodes);
@@ -377,7 +377,7 @@ impl App {
 
             self.state.apply_quick_filter();
 
-            self.local_scan_total = track_count;
+            self.fetcher.local_scan_total = track_count;
 
             if track_count == 0 {
                 self.state.status_msg = Some("No audio files found".to_string());

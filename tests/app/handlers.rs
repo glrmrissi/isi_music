@@ -245,26 +245,26 @@ async fn dispatch_play_pause_pauses_playing_track() {
     let mut app = App::new_for_test().await;
     let mut mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
     mock.is_playing = true;
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.playback.is_playing = true;
 
     app.dispatch(Action::PlayPause).await;
 
     assert!(!app.state.playback.is_playing);
-    assert!(!app.player.as_ref().unwrap().is_playing());
+    assert!(!app.player_mgr.player.as_ref().unwrap().is_playing());
 }
 
 #[tokio::test]
 async fn dispatch_play_pause_resumes_paused_track() {
     let mut app = App::new_for_test().await;
     let mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.playback.is_playing = false;
 
     app.dispatch(Action::PlayPause).await;
 
     assert!(app.state.playback.is_playing);
-    assert!(app.player.as_ref().unwrap().is_playing());
+    assert!(app.player_mgr.player.as_ref().unwrap().is_playing());
 }
 
 #[tokio::test]
@@ -272,7 +272,7 @@ async fn dispatch_next_track_calls_player_next() {
     let mut app = App::new_for_test().await;
     let next_flag = Arc::new(AtomicBool::new(false));
     let mock = Box::new(MockPlayer::new(Arc::clone(&next_flag), Arc::default()));
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
 
     app.dispatch(Action::NextTrack).await;
 
@@ -284,7 +284,7 @@ async fn dispatch_prev_track_calls_player_prev() {
     let mut app = App::new_for_test().await;
     let prev_flag = Arc::new(AtomicBool::new(false));
     let mock = Box::new(MockPlayer::new(Arc::default(), Arc::clone(&prev_flag)));
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
 
     app.dispatch(Action::PrevTrack).await;
 
@@ -294,7 +294,7 @@ async fn dispatch_prev_track_calls_player_prev() {
 #[tokio::test]
 async fn dispatch_next_track_without_player_does_not_panic() {
     let mut app = App::new_for_test().await;
-    app.player = None;
+    app.player_mgr.player = None;
 
     app.dispatch(Action::NextTrack).await;
 }
@@ -304,7 +304,7 @@ async fn dispatch_volume_up_increases_volume() {
     let mut app = App::new_for_test().await;
     let mut mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
     mock.volume = 40;
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.playback.volume = 40;
 
     app.dispatch(Action::VolumeUp).await;
@@ -317,7 +317,7 @@ async fn dispatch_volume_down_decreases_volume() {
     let mut app = App::new_for_test().await;
     let mut mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
     mock.volume = 40;
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.playback.volume = 40;
 
     app.dispatch(Action::VolumeDown).await;
@@ -328,7 +328,7 @@ async fn dispatch_volume_down_decreases_volume() {
 #[tokio::test]
 async fn dispatch_volume_no_player_does_not_panic() {
     let mut app = App::new_for_test().await;
-    app.player = None;
+    app.player_mgr.player = None;
 
     app.dispatch(Action::VolumeUp).await;
 }
@@ -338,7 +338,7 @@ async fn dispatch_toggle_shuffle_toggles() {
     let mut app = App::new_for_test().await;
     let mut mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
     mock.shuffle = false;
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.playback.shuffle = false;
 
     app.dispatch(Action::ToggleShuffle).await;
@@ -351,7 +351,7 @@ async fn dispatch_cycle_repeat_cycles_through_modes() {
     let mut app = App::new_for_test().await;
     let mut mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
     mock.repeat = RepeatMode::Off;
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
 
     app.dispatch(Action::CycleRepeat).await;
     assert_eq!(app.state.playback.repeat, RepeatState::Track);
@@ -367,7 +367,7 @@ async fn dispatch_cycle_repeat_cycles_through_modes() {
 async fn dispatch_add_to_queue_appends_to_player_queue() {
     let mut app = App::new_for_test().await;
     let mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.active_content = crate::ui::ActiveContent::Tracks;
     app.state.tracks = vec![TrackSummary {
         uri: "spotify:track:abc".into(),
@@ -383,7 +383,7 @@ async fn dispatch_add_to_queue_appends_to_player_queue() {
 
     app.dispatch(Action::AddToQueue).await;
 
-    let player = app.player.as_ref().unwrap();
+    let player = app.player_mgr.player.as_ref().unwrap();
     assert_eq!(player.user_queue().len(), 1);
     assert_eq!(player.user_queue()[0].name, "Test Track");
 }
@@ -400,21 +400,21 @@ async fn dispatch_remove_from_queue_removes_item() {
         duration_ms: 200_000,
         cover_path: None,
     });
-    app.player = Some(mock);
+    app.player_mgr.player = Some(mock);
     app.state.focus = Focus::Queue;
     app.state.queue_list.select(Some(0));
     app.sync_queue_display();
 
     app.dispatch(Action::RemoveFromQueue).await;
 
-    let player = app.player.as_ref().unwrap();
+    let player = app.player_mgr.player.as_ref().unwrap();
     assert!(player.user_queue().is_empty());
 }
 
 #[tokio::test]
 async fn dispatch_play_pause_without_player_does_not_panic() {
     let mut app = App::new_for_test().await;
-    app.player = None;
+    app.player_mgr.player = None;
     app.state.playback.is_playing = false;
 
     app.dispatch(Action::PlayPause).await;

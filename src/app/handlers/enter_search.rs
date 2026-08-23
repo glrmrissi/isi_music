@@ -16,14 +16,14 @@ impl App {
                     .and_then(|sr| sr.selected_track_uri())
                     .map(|s| s.to_string());
                 if let Some(track_uri) = uri {
-                    if self.spotify_streaming_disabled {
+                    if self.player_mgr.spotify_streaming_disabled {
                         self.state.status_msg =
                             Some("Spotify Premium required for streaming".to_string());
                         return;
                     }
                     self.activate_spotify_player();
                     self.ensure_spotify_player().await;
-                    if let Some(player) = &mut self.player {
+                    if let Some(player) = &mut self.player_mgr.player {
                         self.current_track_uri = track_uri.clone();
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         player.set_queue(vec![track_uri], 0);
@@ -37,15 +37,16 @@ impl App {
                                     self.state.playback.progress_ms = 0;
                                     self.state.playback.is_playing = true;
                                     self.state.playback.is_local = false;
-                                    self.playing_tracks = vec![crate::spotify::TrackSummary {
-                                        uri: t.uri.clone(),
-                                        name: t.name.clone(),
-                                        artist: t.artist.clone(),
-                                        album: t.album.clone(),
-                                        duration_ms: t.duration_ms,
-                                        cover_path: t.cover_path.clone(),
-                                        added_at: None,
-                                    }];
+                                    self.player_mgr.playing_tracks =
+                                        vec![crate::spotify::TrackSummary {
+                                            uri: t.uri.clone(),
+                                            name: t.name.clone(),
+                                            artist: t.artist.clone(),
+                                            album: t.album.clone(),
+                                            duration_ms: t.duration_ms,
+                                            cover_path: t.cover_path.clone(),
+                                            added_at: None,
+                                        }];
                                     self.on_track_started();
                                 }
                             }

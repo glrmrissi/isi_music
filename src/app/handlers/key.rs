@@ -74,7 +74,7 @@ impl App {
                                 self.state.show_visualizer = !self.state.show_visualizer;
                                 panel.config.ui.show_visualizer = Some(self.state.show_visualizer);
                                 panel.save_config();
-                                if let Some(player) = &mut self.player {
+                                if let Some(player) = &mut self.player_mgr.player {
                                     player.set_visualizer_enabled(self.state.show_visualizer);
                                 }
                                 self.state.status_msg = Some(if self.state.show_visualizer {
@@ -110,7 +110,7 @@ impl App {
                             5 => {
                                 let v = !panel.config.autoplay_enabled();
                                 panel.config.ui.autoplay = Some(v);
-                                self.autoplay_enabled = v;
+                                self.player_mgr.autoplay_enabled = v;
                                 panel.save_config();
                                 self.state.status_msg = Some(if v {
                                     "Autoplay enabled".to_string()
@@ -120,35 +120,29 @@ impl App {
                             }
                             #[cfg(all(feature = "album-art", feature = "palette"))]
                             6 => {
-                                let enabled = !self.theme.reactive_theme;
-                                if let Err(e) = self.toggle_reactive_theme(enabled) {
+                                let enabled = !self.theme_mgr.reactive_theme_enabled();
+                                if let Err(e) = self.theme_mgr.toggle_reactive(enabled) {
                                     self.state.status_msg =
                                         Some(format!("Failed to toggle reactive theme: {e}"));
                                 } else {
                                     self.state.reactive_theme_enabled = enabled;
                                     #[cfg(all(feature = "palette", feature = "album-art"))]
                                     if enabled {
-                                        self.theme.reactive_theme = true;
-                                        self.reactive_toggle_pending = true;
-                                        if let Some(swatches) = self.reactive_swatches.clone() {
-                                            self.start_reactive_theme(&swatches);
+                                        self.theme_mgr.set_reactive_toggle_pending(true);
+                                        if let Some(swatches) = self.theme_mgr.swatches_clone() {
+                                            self.theme_mgr.start_reactive(&swatches, &self.ui);
                                         } else {
-                                            self.last_art_uri.clear();
+                                            self.fetcher.last_art_uri.clear();
                                         }
                                     } else {
-                                        self.reactive_toggle_pending = false;
-                                        self.reactive_start = None;
-                                        self.reactive_from = None;
-                                        self.reactive_target = None;
-                                        let restored = crate::utils::theme::Theme::load();
-                                        self.theme = restored.clone();
+                                        let restored = self.theme_mgr.disable_reactive();
                                         self.ui = crate::ui::Ui::new(
                                             restored,
                                             self.debug_overlay.clone(),
                                         );
                                     }
                                     self.state.status_msg = Some(if enabled {
-                                        "Reactive theme enabled — colors will adapt to album art"
+                                        "Reactive theme enabled: colors will adapt to album art"
                                             .to_string()
                                     } else {
                                         "Reactive theme disabled".to_string()
@@ -263,9 +257,9 @@ impl App {
                 };
 
                 self.state.playback.progress_ms = new_pos;
-                self.progress_at_play_start = new_pos;
+                self.player_mgr.progress_at_play_start = new_pos;
                 if self.state.playback.is_playing {
-                    self.playing_started_at = Some(Instant::now());
+                    self.player_mgr.playing_started_at = Some(Instant::now());
                 }
                 let _ = self.seek_tx.send(new_pos as u32);
                 return Ok(());

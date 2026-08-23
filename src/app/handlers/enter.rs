@@ -15,16 +15,16 @@ impl App {
                 match self.state.compact_item_at(pos) {
                     Some(CompactItem::LibraryItem(idx)) => {
                         if self.handle_library_item(idx).await {
-                            if !self.session_reconnecting {
-                                self.session_reconnecting = true;
+                            if !self.player_mgr.session_reconnecting {
+                                self.player_mgr.session_reconnecting = true;
                                 self.reconnect_player().await;
                             }
                         }
                     }
                     Some(CompactItem::PlaylistItem(idx)) => {
                         if self.handle_playlist_item(idx).await {
-                            if !self.session_reconnecting {
-                                self.session_reconnecting = true;
+                            if !self.player_mgr.session_reconnecting {
+                                self.player_mgr.session_reconnecting = true;
                                 self.reconnect_player().await;
                             }
                         }
@@ -69,7 +69,7 @@ impl App {
                             self.state.active_playlist_id = Some(format!("album:{id}"));
                             let spotify = Arc::clone(&self.spotify);
                             let (tx, rx) = tokio::sync::oneshot::channel();
-                            self.pending_fetch = Some(rx);
+                            self.fetcher.pending_fetch = Some(rx);
                             tokio::spawn(async move {
                                 let result = spotify
                                     .fetch_album_tracks(&id, 0)
@@ -93,7 +93,7 @@ impl App {
                             self.state.active_playlist_id = Some(format!("artist:{id}"));
                             let spotify = Arc::clone(&self.spotify);
                             let (tx, rx) = tokio::sync::oneshot::channel();
-                            self.pending_fetch = Some(rx);
+                            self.fetcher.pending_fetch = Some(rx);
                             tokio::spawn(async move {
                                 let result = spotify
                                     .fetch_artist_tracks(&name, 0)
@@ -190,9 +190,9 @@ impl App {
                                 .iter()
                                 .position(|t| t.uri == track.uri)
                                 .unwrap_or(0);
-                            if let Some(player) = &mut self.player {
+                            if let Some(player) = &mut self.player_mgr.player {
                                 player.set_queue_tracks(&all_tracks, start_idx);
-                                self.playing_tracks = all_tracks;
+                                self.player_mgr.playing_tracks = all_tracks;
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                                 self.state.playback.title = track.name.clone();
                                 self.state.playback.artist = track.artist.clone();
@@ -206,8 +206,9 @@ impl App {
                                 self.on_track_started();
 
                                 self.state.playback.progress_ms = 0;
-                                self.scrobble_sent = false;
-                                self.track_start_unix = crate::app::metadata::unix_now();
+                                self.integrations.reset_scrobble();
+                                self.integrations
+                                    .set_track_start(crate::app::metadata::unix_now());
                             }
                         }
                     }
@@ -219,7 +220,7 @@ impl App {
                             None => return,
                         };
 
-                        if self.spotify_streaming_disabled {
+                        if self.player_mgr.spotify_streaming_disabled {
                             self.state.status_msg =
                                 Some("Spotify Premium required for streaming".to_string());
                             return;
@@ -236,7 +237,7 @@ impl App {
                         {
                             self.state.status_msg =
                                 Some("Podcast playback not supported".to_string());
-                        } else if let Some(player) = &mut self.player {
+                        } else if let Some(player) = &mut self.player_mgr.player {
                             let uris: Vec<String> = self
                                 .state
                                 .tracks
@@ -252,7 +253,7 @@ impl App {
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                             }
                             player.set_queue(uris, adjusted_idx);
-                            self.playing_tracks = self.state.tracks.clone();
+                            self.player_mgr.playing_tracks = self.state.tracks.clone();
                             if let Some(track) = self.state.tracks.get(actual_idx) {
                                 self.state.playback.title = track.name.clone();
                                 self.state.playback.artist = track.artist.clone();
@@ -307,6 +308,7 @@ impl App {
             Focus::Queue => {
                 if let Some(idx) = self.state.queue_list.selected() {
                     let active_len = self
+                        .player_mgr
                         .player
                         .as_ref()
                         .map(|p| p.user_queue().len())
@@ -315,19 +317,21 @@ impl App {
                     let queue_idx = if is_active { idx } else { idx - active_len };
 
                     let played = if is_active {
-                        self.player
+                        self.player_mgr
+                            .player
                             .as_mut()
                             .map(|p| p.play_from_user_queue(queue_idx))
                             .unwrap_or(false)
                     } else {
-                        self.parked_player
+                        self.player_mgr
+                            .parked_player
                             .as_mut()
                             .map(|p| p.play_from_user_queue(queue_idx))
                             .unwrap_or(false)
                     };
 
                     if played {
-                        self.playing_tracks = vec![];
+                        self.player_mgr.playing_tracks = vec![];
                         self.sync_track_selection();
                         self.sync_queue_display();
                     }
@@ -335,9 +339,9 @@ impl App {
             }
         }
 
-        if needs_reconnect && !self.session_reconnecting {
+        if needs_reconnect && !self.player_mgr.session_reconnecting {
             warn!("Triggering reconnect due to 401");
-            self.session_reconnecting = true;
+            self.player_mgr.session_reconnecting = true;
             self.reconnect_player().await;
         }
     }

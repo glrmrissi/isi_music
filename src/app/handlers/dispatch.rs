@@ -10,18 +10,18 @@ impl App {
         match action {
             A::PlayPause => {
                 if self.state.playback.is_playing {
-                    if let Some(player) = &mut self.player {
+                    if let Some(player) = &mut self.player_mgr.player {
                         player.pause();
                     }
                     self.state.playback.is_playing = false;
-                } else if let Some(player) = &mut self.player {
+                } else if let Some(player) = &mut self.player_mgr.player {
                     player.play();
                     self.state.playback.is_playing = true;
                 } else {
                     if !self.ensure_spotify_player().await {
                         self.ensure_local_player().await;
                     }
-                    if let Some(player) = &mut self.player {
+                    if let Some(player) = &mut self.player_mgr.player {
                         if !player.is_playing() {
                             player.play();
                         }
@@ -32,10 +32,10 @@ impl App {
                 }
             }
             A::NextTrack => {
-                if self.player.is_none() {
+                if self.player_mgr.player.is_none() {
                     self.ensure_spotify_player().await;
                 }
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     if player.next() {
                         self.sync_track_selection();
                         self.sync_queue_display();
@@ -45,10 +45,10 @@ impl App {
                 }
             }
             A::PrevTrack => {
-                if self.player.is_none() {
+                if self.player_mgr.player.is_none() {
                     self.ensure_spotify_player().await;
                 }
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     if player.prev() {
                         self.sync_track_selection();
                         self.sync_queue_display();
@@ -58,44 +58,44 @@ impl App {
                 }
             }
             A::VolumeUp => {
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     player.volume_up();
                     self.state.playback.volume = player.volume();
                 }
-                self.saved_volume = self.state.playback.volume;
+                self.player_mgr.saved_volume = self.state.playback.volume;
             }
             A::VolumeDown => {
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     player.volume_down();
                     self.state.playback.volume = player.volume();
                 }
-                self.saved_volume = self.state.playback.volume;
+                self.player_mgr.saved_volume = self.state.playback.volume;
             }
             A::SeekForward => {}
             A::SeekBackward => {}
             A::SeekMiddle => {
                 let new_pos = self.state.playback.duration_ms / 2;
                 self.state.playback.progress_ms = new_pos;
-                self.progress_at_play_start = new_pos;
+                self.player_mgr.progress_at_play_start = new_pos;
                 if self.state.playback.is_playing {
-                    self.playing_started_at = Some(Instant::now());
+                    self.player_mgr.playing_started_at = Some(Instant::now());
                 }
                 let _ = self.seek_tx.send(new_pos as u32);
             }
             A::ToggleShuffle => {
-                if self.player.is_none() {
+                if self.player_mgr.player.is_none() {
                     self.ensure_spotify_player().await;
                 }
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     player.toggle_shuffle();
                     self.state.playback.shuffle = player.shuffle();
                 }
             }
             A::CycleRepeat => {
-                if self.player.is_none() {
+                if self.player_mgr.player.is_none() {
                     self.ensure_spotify_player().await;
                 }
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     player.cycle_repeat();
                     self.state.playback.repeat = match player.repeat() {
                         RepeatMode::Off => crate::spotify::RepeatState::Off,
@@ -154,10 +154,10 @@ impl App {
                 };
                 if let Some((uri, name, artist, album, duration_ms, cover_path)) = track {
                     let is_local = uri.starts_with("file://");
-                    let target = if is_local == self.local_active {
-                        self.player.as_mut()
+                    let target = if is_local == self.player_mgr.local_active {
+                        self.player_mgr.player.as_mut()
                     } else {
-                        self.parked_player.as_mut()
+                        self.player_mgr.parked_player.as_mut()
                     };
                     if let Some(player) = target {
                         player.add_to_queue(
@@ -177,17 +177,18 @@ impl App {
                 if self.state.focus == Focus::Queue {
                     if let Some(idx) = self.state.queue_list.selected() {
                         let active_len = self
+                            .player_mgr
                             .player
                             .as_ref()
                             .map(|p| p.user_queue().len())
                             .unwrap_or(0);
                         if idx < active_len {
-                            if let Some(player) = &mut self.player {
+                            if let Some(player) = &mut self.player_mgr.player {
                                 player.remove_from_user_queue(idx);
                             }
                         } else {
                             let parked_idx = idx - active_len;
-                            if let Some(player) = &mut self.parked_player {
+                            if let Some(player) = &mut self.player_mgr.parked_player {
                                 if parked_idx < player.user_queue().len() {
                                     player.remove_from_user_queue(parked_idx);
                                 }
@@ -226,8 +227,8 @@ impl App {
                             return;
                         }
                         self.maybe_load_more().await;
-                        if self.pending_pagination.is_some() {
-                            self.pending_nav_down = true;
+                        if self.fetcher.pending_pagination.is_some() {
+                            self.fetcher.pending_nav_down = true;
                             return;
                         }
                     }
@@ -346,14 +347,14 @@ impl App {
             }
             A::ToggleVisualizer => {
                 self.state.show_visualizer = !self.state.show_visualizer;
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     player.set_visualizer_enabled(self.state.show_visualizer);
                 }
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
                 if self.state.show_lyrics {
-                    self.ensure_lyrics();
+                    self.fetcher.ensure_lyrics(&self.debug_overlay);
                 }
                 self.state.status_msg = Some(if self.state.show_lyrics {
                     "Lyrics panel on".to_string()
