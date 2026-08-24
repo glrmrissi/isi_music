@@ -391,7 +391,7 @@ impl App {
     where
         B::Error: Send + Sync + 'static,
     {
-        let tick_rate = Duration::from_millis(16);
+        let tick_rate = Duration::from_millis(33);
         self.last_tick = Instant::now();
 
         loop {

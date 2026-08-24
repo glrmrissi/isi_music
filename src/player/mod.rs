@@ -177,7 +177,13 @@ async fn obtain_streaming_token() -> Result<String> {
 }
 
 async fn refresh_streaming_token(refresh_token: &str) -> Result<String> {
-    let resp = reqwest::Client::new()
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(1)
+        .pool_idle_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = http
         .post("https://accounts.spotify.com/api/token")
         .form(&[
             ("grant_type", "refresh_token"),
@@ -272,7 +278,7 @@ impl NativePlayer {
 
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
-        let analyzer_enabled = Arc::new(AtomicBool::new(true));
+        let analyzer_enabled = Arc::new(AtomicBool::new(false));
         let analyzer_enabled_for_sink = Arc::clone(&analyzer_enabled);
 
         let session_for_player = session.clone();

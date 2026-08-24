@@ -22,7 +22,7 @@ hyper-proxy2 = { path = "patches/hyper-proxy2" }
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net", "io-util", "signal"] }
 
 # TUI
 ratatui = { version = "0.30.2", features = ["crossterm_0_28", "unstable-backend-writer"] }
