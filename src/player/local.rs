@@ -123,6 +123,7 @@ pub struct LocalPlayer {
     pub is_seeking: Arc<AtomicBool>,
     waveform: Arc<Mutex<Option<Vec<u8>>>>,
     duration_measured: Arc<Mutex<Option<u64>>>,
+    play_history: Vec<usize>,
 }
 
 impl LocalPlayer {
@@ -188,6 +189,7 @@ impl LocalPlayer {
             is_seeking: Arc::new(AtomicBool::new(false)),
             waveform: Arc::new(Mutex::new(None)),
             duration_measured: Arc::new(Mutex::new(None)),
+            play_history: Vec::new(),
         };
 
         if let Err(e) = instance.reload_library_from_db() {
@@ -265,11 +267,77 @@ impl LocalPlayer {
         }
         self.sink.play();
 
+        if let Some(prev) = self.current_idx
+            && prev != idx
+        {
+            self.play_history.push(prev);
+        }
         self.current_idx = Some(idx);
         self.is_playing = true;
         self.load_guard = Some(Instant::now());
 
         // Pre-generate waveform in a background thread for local files.
+        *lock_or_recover(&self.waveform) = None;
+        *lock_or_recover(&self.duration_measured) = None;
+        let waveform = Arc::clone(&self.waveform);
+        let duration_measured = Arc::clone(&self.duration_measured);
+        std::thread::spawn(move || {
+            if let Some((dur, data)) = crate::utils::waveform::generate_for_file(&path) {
+                if let Ok(mut w) = waveform.lock() {
+                    *w = Some(data);
+                }
+                if dur > 0 {
+                    if let Ok(mut d) = duration_measured.lock() {
+                        *d = Some(dur);
+                    }
+                }
+            }
+        });
+
+        let _ = self.event_tx.send(PlayerNotification::Playing);
+        true
+    }
+
+    fn load_index_priv(&mut self, idx: usize) -> bool {
+        let Some(track) = self.queue.get(idx) else {
+            return false;
+        };
+        let path = track.path.clone();
+
+        if !path.exists() {
+            return false;
+        }
+
+        self.sink.clear();
+        self.sink.stop();
+
+        let decoder = match LocalDecoder::open(&path) {
+            Some(d) => d,
+            None => return false,
+        };
+
+        if let Some(total) = decoder.total_duration() {
+            if let Some(track) = self.queue.get_mut(idx) {
+                track.duration_ms = total.as_millis() as u64;
+            }
+        }
+
+        if self.analyzer.enabled() {
+            if let Some(handle) = self.analyzer.handle() {
+                let analyzing = AnalyzingSource::with_handle(decoder, handle);
+                self.sink.append(analyzing);
+            } else {
+                self.sink.append(decoder);
+            }
+        } else {
+            self.sink.append(decoder);
+        }
+        self.sink.play();
+
+        self.current_idx = Some(idx);
+        self.is_playing = true;
+        self.load_guard = Some(Instant::now());
+
         *lock_or_recover(&self.waveform) = None;
         *lock_or_recover(&self.duration_measured) = None;
         let waveform = Arc::clone(&self.waveform);
@@ -409,6 +477,12 @@ impl LocalPlayer {
     }
 
     pub fn prev_inner(&mut self) -> bool {
+        if self.shuffle {
+            if let Some(prev_idx) = self.play_history.pop() {
+                return self.load_index_priv(prev_idx);
+            }
+            return false;
+        }
         if let Some(idx) = self.current_idx {
             let target = if idx > 0 { idx - 1 } else { 0 };
             return self.try_load_track(target);
@@ -579,6 +653,7 @@ impl AudioPlayer for LocalPlayer {
 
     fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
+        self.play_history.clear();
     }
 
     fn cycle_repeat(&mut self) {
