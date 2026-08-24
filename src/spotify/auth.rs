@@ -315,4 +315,27 @@ impl SpotifyAuth {
             }
         }
     }
+
+    /// Authenticates both Web API (custom client_id) and streaming (official client_id)
+    /// in a single chained flow. The second browser window opens automatically after
+    /// the first authorization completes.
+    ///
+    /// The Web API refresh token is persisted immediately after Step 1 so that a
+    /// failure or cancellation in Step 2 does not lose the Web API credential.
+    ///
+    /// Returns (web_api_refresh_token, streaming_refresh_token).
+    pub async fn authenticate_both(custom_client_id: &str) -> Result<(String, String)> {
+        println!();
+        println!("  Step 1/2: Web API authorization (playlists, library, search)");
+        let (_, web_api_refresh, _) = Self::authenticate_with_client_id(custom_client_id).await?;
+        config::save_refresh_token(&web_api_refresh);
+
+        println!();
+        println!("  Step 2/2: Streaming authorization (audio playback)");
+        println!("  Opening browser for streaming authorization...");
+        let (_, streaming_refresh, _) =
+            Self::authenticate_with_client_id(config::OFFICIAL_CLIENT_ID).await?;
+
+        Ok((web_api_refresh, streaming_refresh))
+    }
 }

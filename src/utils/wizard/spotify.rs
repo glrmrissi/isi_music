@@ -117,42 +117,54 @@ pub(super) async fn configure_spotify(cfg: &mut AppConfig) -> anyhow::Result<()>
         .default(true)
         .interact()?;
     if do_auth {
-        println!();
-        println!(
-            "  {}  {}",
-            style("[..]").cyan(),
-            style("Opening Spotify authorization in your browser...").dim()
-        );
         let has_web_api_client = cfg.get_client_id().is_some();
-        let result = if has_web_api_client {
-            crate::spotify::auth::SpotifyAuth::authenticate().await
+
+        if has_web_api_client {
+            if let Some(cid) = cfg.get_client_id() {
+                println!();
+                println!(
+                    "  {}  {}",
+                    style("[..]").cyan(),
+                    style("Starting authorization (2 steps: Web API + streaming)").dim()
+                );
+                match crate::spotify::auth::SpotifyAuth::authenticate_both(&cid).await {
+                    Ok((web_api_refresh, streaming_refresh)) => {
+                        crate::config::save_refresh_token(&web_api_refresh);
+                        crate::config::save_streaming_refresh_token(&streaming_refresh);
+                        println!();
+                        println!(
+                            "  {}  {}",
+                            style("[OK]").green(),
+                            style("Web API + Streaming authenticated.").bold()
+                        );
+                    }
+                    Err(e) => {
+                        if e.to_string().contains("Authentication cancelled") {
+                            return Err(e);
+                        }
+                        println!("  {}  Authentication failed: {e}", style("[ERROR]").red());
+                        println!(
+                            "  {}",
+                            style("You can authenticate later by launching isi-music normally.")
+                                .dim()
+                        );
+                    }
+                }
+            }
         } else {
-            crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
+            println!();
+            println!(
+                "  {}  {}",
+                style("[..]").cyan(),
+                style("Opening Spotify authorization in your browser...").dim()
+            );
+            let result = crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
                 crate::config::OFFICIAL_CLIENT_ID,
             )
-            .await
-        };
+            .await;
 
-        match result {
-            Ok((_access_token, refresh_token, _expires_in)) => {
-                if has_web_api_client {
-                    crate::config::save_refresh_token(&refresh_token);
-                    println!(
-                        "  {}  {}",
-                        style("[OK]").green(),
-                        style("Web API authenticated.").bold()
-                    );
-                    println!(
-                        "  {}",
-                        style("Authenticating streaming with librespot...").dim()
-                    );
-                    crate::player::ensure_streaming_auth().await?;
-                    println!(
-                        "  {}  {}",
-                        style("[OK]").green(),
-                        style("Streaming authenticated.").bold()
-                    );
-                } else {
+            match result {
+                Ok((_access_token, refresh_token, _expires_in)) => {
                     crate::config::save_streaming_refresh_token(&refresh_token);
                     println!(
                         "  {}  {}",
@@ -160,16 +172,16 @@ pub(super) async fn configure_spotify(cfg: &mut AppConfig) -> anyhow::Result<()>
                         style("Streaming authenticated.").bold()
                     );
                 }
-            }
-            Err(e) => {
-                if e.to_string().contains("Authentication cancelled") {
-                    return Err(e);
+                Err(e) => {
+                    if e.to_string().contains("Authentication cancelled") {
+                        return Err(e);
+                    }
+                    println!("  {}  Authentication failed: {e}", style("[ERROR]").red());
+                    println!(
+                        "  {}",
+                        style("You can authenticate later by launching isi-music normally.").dim()
+                    );
                 }
-                println!("  {}  Authentication failed: {e}", style("[ERROR]").red());
-                println!(
-                    "  {}",
-                    style("You can authenticate later by launching isi-music normally.").dim()
-                );
             }
         }
     }

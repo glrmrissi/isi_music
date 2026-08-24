@@ -182,34 +182,43 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
 
     if authenticate {
         let has_web_api_client = cfg.get_client_id().is_some();
-        let result = if has_web_api_client {
-            crate::spotify::auth::SpotifyAuth::authenticate().await
+
+        if has_web_api_client {
+            if let Some(cid) = cfg.get_client_id() {
+                println!("  Starting authorization (2 steps: Web API + streaming)\n");
+                match crate::spotify::auth::SpotifyAuth::authenticate_both(&cid).await {
+                    Ok((web_api_refresh, streaming_refresh)) => {
+                        crate::config::save_refresh_token(&web_api_refresh);
+                        crate::config::save_streaming_refresh_token(&streaming_refresh);
+                        println!("\n  {GREEN}[OK]{RESET}  Web API + Streaming authenticated.\n");
+                    }
+                    Err(e) => {
+                        if e.to_string().contains("Authentication cancelled") {
+                            return Err(e);
+                        }
+                        println!("  {YELLOW}Authentication failed: {e}{RESET}");
+                        println!("  You can authenticate later by launching isi-music normally.\n");
+                    }
+                }
+            }
         } else {
-            crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
+            let result = crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
                 config::OFFICIAL_CLIENT_ID,
             )
-            .await
-        };
+            .await;
 
-        match result {
-            Ok((_access_token, refresh_token, _expires_in)) => {
-                if has_web_api_client {
-                    crate::config::save_refresh_token(&refresh_token);
-                    println!("  {GREEN}[OK]{RESET}  Web API authenticated.\n");
-                    println!("  Authenticating streaming with librespot...");
-                    crate::player::ensure_streaming_auth().await?;
-                    println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
-                } else {
+            match result {
+                Ok((_access_token, refresh_token, _expires_in)) => {
                     crate::config::save_streaming_refresh_token(&refresh_token);
                     println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
                 }
-            }
-            Err(e) => {
-                if e.to_string().contains("Authentication cancelled") {
-                    return Err(e);
+                Err(e) => {
+                    if e.to_string().contains("Authentication cancelled") {
+                        return Err(e);
+                    }
+                    println!("  {YELLOW}Authentication failed: {e}{RESET}");
+                    println!("  You can authenticate later by launching isi-music normally.\n");
                 }
-                println!("  {YELLOW}Authentication failed: {e}{RESET}");
-                println!("  You can authenticate later by launching isi-music normally.\n");
             }
         }
     } else {
