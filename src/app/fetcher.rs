@@ -56,6 +56,8 @@ impl FetchCoordinator {
                 crate::config::get_local_db_path().into(),
                 reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(8))
+                    .pool_max_idle_per_host(2)
+                    .pool_idle_timeout(std::time::Duration::from_secs(30))
                     .build()
                     .unwrap_or_default(),
                 debug_overlay.clone(),

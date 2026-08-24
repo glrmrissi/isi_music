@@ -57,6 +57,8 @@ async fn exchange_code(
 ) -> Result<(String, String, u64)> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(1)
+        .pool_idle_timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let resp = http
