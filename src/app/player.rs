@@ -19,8 +19,9 @@ impl App {
 
         const KEEP_BEHIND: usize = 20;
         if let Some(player) = &mut self.player_mgr.player {
+            let is_shuffling = player.shuffle();
             let idx = player.current_index().unwrap_or(0);
-            if idx > KEEP_BEHIND {
+            if !is_shuffling && idx > KEEP_BEHIND {
                 let remove = idx - KEEP_BEHIND;
                 if player.trim_played(KEEP_BEHIND) {
                     let drain_len = remove.min(self.player_mgr.playing_tracks.len());
