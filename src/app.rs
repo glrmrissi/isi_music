@@ -847,26 +847,30 @@ impl App {
                         self.state.playback.cover_path = Some(s.to_string());
                     }
 
+                    let reactive_enabled = self.theme_mgr.reactive_theme_enabled();
                     let decoded = tokio::task::spawn_blocking(move || {
                         let img = image::load_from_memory(&bytes)?;
-                        Ok::<_, anyhow::Error>(img.thumbnail(256, 256))
+                        let img = if img.width() <= 256 && img.height() <= 256 {
+                            img
+                        } else {
+                            img.thumbnail(256, 256)
+                        };
+                        Ok::<_, anyhow::Error>(img)
                     })
                     .await;
                     match decoded {
                         Ok(Ok(img)) => {
                             #[cfg(all(feature = "palette", feature = "album-art"))]
-                            {
+                            if reactive_enabled {
                                 let swatches = crate::utils::palette::extract_palette(&img, 5);
                                 tracing::debug!(
                                     "reactive: swatches={} theme.reactive_theme={}",
                                     swatches.len(),
-                                    self.theme_mgr.reactive_theme_enabled()
+                                    reactive_enabled
                                 );
                                 self.theme_mgr.store_swatches(swatches.clone());
-                                if self.theme_mgr.reactive_theme_enabled() {
-                                    self.theme_mgr.start_reactive(&swatches, &self.ui);
-                                    tracing::debug!("reactive: start_reactive_theme called");
-                                }
+                                self.theme_mgr.start_reactive(&swatches, &self.ui);
+                                tracing::debug!("reactive: start_reactive_theme called");
                             }
 
                             let image_state = self.picker.new_resize_protocol(img);
@@ -892,8 +896,7 @@ impl App {
             #[cfg(feature = "album-art")]
             self.maybe_fetch_album_art().await;
 
-            let active = self.state.playback.is_playing
-                || self.state.loading
+            let visual_active = self.state.loading
                 || self.state.search_active
                 || self.state.quick_search_active
                 || self.state.command_mode
@@ -911,7 +914,9 @@ impl App {
                     .map_or(false, |l| l.is_loading())
                 || self.state.status_msg.is_some();
 
-            if self.needs_redraw || active {
+            let active = self.state.playback.is_playing || visual_active;
+
+            if self.needs_redraw || visual_active {
                 terminal.draw(|f| {
                     self.ui.render(f, &mut self.state);
                     if let Some(ref panel) = self.settings_panel {
@@ -971,6 +976,7 @@ impl App {
                 }
 
                 self.integrations.maybe_scrobble(&self.state);
+                self.needs_redraw = true;
             }
 
             #[cfg(target_os = "linux")]
