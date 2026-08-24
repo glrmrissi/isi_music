@@ -350,6 +350,11 @@ impl App {
                 if let Some(player) = &mut self.player_mgr.player {
                     player.set_visualizer_enabled(self.state.show_visualizer);
                 }
+                self.player_mgr.band_energies = self
+                    .player_mgr
+                    .player
+                    .as_ref()
+                    .and_then(|p| p.band_energies());
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
