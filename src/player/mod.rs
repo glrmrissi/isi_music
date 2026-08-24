@@ -139,6 +139,7 @@ pub struct NativePlayer {
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     server_position: Arc<Mutex<(u64, Instant)>>,
     analyzer_enabled: Arc<AtomicBool>,
+    play_history: Vec<usize>,
 }
 
 pub async fn ensure_streaming_auth() -> Result<()> {
@@ -398,6 +399,7 @@ impl NativePlayer {
             band_energies: bands,
             server_position,
             analyzer_enabled,
+            play_history: Vec::new(),
         };
         instance.apply_volume();
         Ok(instance)
@@ -443,6 +445,29 @@ impl NativePlayer {
         match SpotifyUri::from_uri(uri) {
             Ok(spotify_uri) => {
                 info!("Loading URI: {uri}");
+                self.player.stop();
+                self.player.load(spotify_uri, true, 0);
+                if let Some(prev) = self.current_index
+                    && prev != index
+                {
+                    self.play_history.push(prev);
+                }
+                self.current_index = Some(index);
+                self.is_playing = true;
+                self.playing_queued = None;
+                self.preload_next();
+            }
+            Err(e) => error!("Invalid URI '{uri}': {e}"),
+        }
+    }
+
+    fn load_index(&mut self, index: usize) {
+        let Some(uri) = self.queue.get(index) else {
+            warn!("Index {index} out of queue bounds");
+            return;
+        };
+        match SpotifyUri::from_uri(uri) {
+            Ok(spotify_uri) => {
                 self.player.stop();
                 self.player.load(spotify_uri, true, 0);
                 self.current_index = Some(index);
@@ -562,6 +587,13 @@ impl NativePlayer {
     }
 
     pub fn prev(&mut self) -> bool {
+        if self.shuffle {
+            if let Some(prev_idx) = self.play_history.pop() {
+                self.load_index(prev_idx);
+                return true;
+            }
+            return false;
+        }
         if let Some(idx) = self.current_index
             && idx > 0
         {
@@ -573,6 +605,7 @@ impl NativePlayer {
 
     pub fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
+        self.play_history.clear();
     }
 
     pub fn cycle_repeat(&mut self) {
