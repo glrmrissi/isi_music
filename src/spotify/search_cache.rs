@@ -37,6 +37,7 @@ impl SearchCache {
              );"
         } else {
             "PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=1000;
              CREATE TABLE IF NOT EXISTS search_cache (
                  key      TEXT PRIMARY KEY,
                  data     TEXT NOT NULL,

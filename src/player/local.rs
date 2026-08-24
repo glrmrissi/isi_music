@@ -128,7 +128,9 @@ pub struct LocalPlayer {
 impl LocalPlayer {
     pub fn new(volume: u8, db_path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=1000;",
+        )?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tracks (

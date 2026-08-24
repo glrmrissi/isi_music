@@ -22,6 +22,15 @@ pub struct CacheManager {
     options: CacheOptions,
 }
 
+impl Clone for CacheManager {
+    fn clone(&self) -> Self {
+        Self {
+            conn: Arc::clone(&self.conn),
+            options: self.options.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct CacheOptions {
@@ -55,7 +64,7 @@ impl CacheManager {
         let conn = rusqlite::Connection::open(db_path)
             .with_context(|| format!("failed to open cache db at {}", db_path))?;
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=1000;",
         )
         .context("failed to set pragmas")?;
 
@@ -177,6 +186,7 @@ impl CacheManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        let max_bytes = self.options.max_size_mb * 1024 * 1024;
 
         let conn = self.conn.clone();
         spawn_blocking(move || {
@@ -189,6 +199,25 @@ impl CacheManager {
                 "DELETE FROM lyrics_cache WHERE (?1 - saved_at) >= ?2",
                 rusqlite::params![now as i64, keep_seconds as i64],
             );
+
+            let db_size: i64 = conn
+                .query_row(
+                    "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if db_size as u64 > max_bytes {
+                let _ = conn.execute(
+                    "DELETE FROM search_cache WHERE rowid IN (SELECT rowid FROM search_cache ORDER BY saved_at ASC LIMIT (SELECT COUNT(*) / 4 FROM search_cache))",
+                    [],
+                );
+                let _ = conn.execute(
+                    "DELETE FROM lyrics_cache WHERE rowid IN (SELECT rowid FROM lyrics_cache ORDER BY saved_at ASC LIMIT (SELECT COUNT(*) / 4 FROM lyrics_cache))",
+                    [],
+                );
+                let _ = conn.execute("VACUUM", []);
+            }
         });
 
         info!("Cache cleanup completed");

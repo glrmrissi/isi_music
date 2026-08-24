@@ -66,6 +66,7 @@ async fn stats_after_library_update() {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=1000;
              CREATE TABLE IF NOT EXISTS library_cache (
                  key      TEXT PRIMARY KEY,
                  data     TEXT NOT NULL,

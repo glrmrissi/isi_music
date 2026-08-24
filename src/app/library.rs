@@ -140,7 +140,7 @@ impl App {
             let conn = match rusqlite::Connection::open(&db_path) {
                 Ok(c) => {
                     let _ = c.execute_batch(
-                        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+                        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=1000;",
                     );
                     Some(c)
                 }

@@ -224,6 +224,12 @@ impl App {
         };
 
         let cache_manager = crate::utils::cache::CacheManager::new()?;
+        {
+            let cm = cache_manager.clone();
+            tokio::spawn(async move {
+                let _ = cm.cleanup_expired().await;
+            });
+        }
         let settings_panel = crate::ui::SettingsPanel::new(cache_manager, Arc::clone(&settings));
 
         state.lastfm_connected = lastfm.is_some();
