@@ -143,6 +143,27 @@ pub fn cache_cover_bytes(bytes: &[u8]) -> Option<PathBuf> {
     Some(path)
 }
 
+pub fn cleanup_cover_cache() {
+    let temp = std::env::temp_dir();
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(86400 * 7);
+    if let Ok(entries) = std::fs::read_dir(&temp) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("isi-music-cover-") {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(modified) = meta.modified() {
+                    if modified < cutoff {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn resolve_cover_path(
     art_url: Option<&str>,
     cover_path: Option<&str>,

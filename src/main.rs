@@ -634,6 +634,7 @@ fn main() -> Result<()> {
                     return Err(err);
                 }
             };
+
             let res = app.run(&mut terminal).await;
 
             disable_raw_mode()?;

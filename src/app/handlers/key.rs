@@ -4,6 +4,42 @@ use std::time::{Duration, Instant};
 
 use crate::App;
 
+fn smtc_toggle_index() -> usize {
+    let base = {
+        #[cfg(all(feature = "album-art", feature = "palette"))]
+        {
+            7
+        }
+        #[cfg(all(feature = "album-art", not(feature = "palette")))]
+        {
+            6
+        }
+        #[cfg(not(feature = "album-art"))]
+        {
+            5
+        }
+    };
+    #[cfg(windows)]
+    {
+        base
+    }
+    #[cfg(not(windows))]
+    {
+        usize::MAX
+    }
+}
+
+fn media_keys_toggle_index() -> usize {
+    #[cfg(windows)]
+    {
+        smtc_toggle_index() + 1
+    }
+    #[cfg(not(windows))]
+    {
+        usize::MAX
+    }
+}
+
 impl App {
     pub async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.state.status_msg = None;
@@ -147,6 +183,40 @@ impl App {
                                     } else {
                                         "Reactive theme disabled".to_string()
                                     });
+                                }
+                            }
+                            n if n == smtc_toggle_index() => {
+                                #[cfg(windows)]
+                                {
+                                    let v = !panel.config.smtc_enabled();
+                                    panel.config.options.smtc_enabled = Some(v);
+                                    panel.save_config();
+                                    self.state.status_msg = Some(if v {
+                                        "SMTC enabled (restart to apply)".to_string()
+                                    } else {
+                                        "SMTC disabled (restart to apply)".to_string()
+                                    });
+                                }
+                                #[cfg(not(windows))]
+                                {
+                                    let _ = n;
+                                }
+                            }
+                            n if n == media_keys_toggle_index() => {
+                                #[cfg(windows)]
+                                {
+                                    let v = !panel.config.media_keys_enabled();
+                                    panel.config.options.media_keys_enabled = Some(v);
+                                    panel.save_config();
+                                    self.state.status_msg = Some(if v {
+                                        "Media hotkeys enabled (restart to apply)".to_string()
+                                    } else {
+                                        "Media hotkeys disabled (restart to apply)".to_string()
+                                    });
+                                }
+                                #[cfg(not(windows))]
+                                {
+                                    let _ = n;
                                 }
                             }
                             _ => {}

@@ -189,27 +189,42 @@ impl App {
         };
 
         #[cfg(windows)]
-        let media_keys = match crate::utils::media_keys::spawn() {
-            Ok(h) => {
-                debug_overlay.log(LogLevel::Info, format!("Global media hotkeys registered"));
-                Some(h)
+        let media_keys = if cfg.media_keys_enabled() {
+            match crate::utils::media_keys::spawn() {
+                Ok(h) => {
+                    debug_overlay.log(LogLevel::Info, format!("Global media hotkeys registered"));
+                    Some(h)
+                }
+                Err(e) => {
+                    debug_overlay.log(LogLevel::Warn, format!("Media hotkeys unavailable: {e}"));
+                    None
+                }
             }
-            Err(e) => {
-                debug_overlay.log(LogLevel::Warn, format!("Media hotkeys unavailable: {e}"));
-                None
-            }
+        } else {
+            None
         };
 
         #[cfg(windows)]
-        let smtc = match crate::utils::smtc::spawn() {
-            Ok(h) => {
-                debug_overlay.log(LogLevel::Info, format!("SMTC integration enabled"));
-                Some(h)
+        {
+            if cfg.smtc_enabled() {
+                crate::utils::smtc::cleanup_cover_cache();
             }
-            Err(e) => {
-                debug_overlay.log(LogLevel::Warn, format!("SMTC unavailable: {e}"));
-                None
+        }
+        #[cfg(windows)]
+        let smtc = if cfg.smtc_enabled() {
+            match crate::utils::smtc::spawn() {
+                Ok(h) => {
+                    debug_overlay.log(LogLevel::Info, format!("SMTC integration enabled"));
+                    Some(h)
+                }
+                Err(e) => {
+                    debug_overlay.log(LogLevel::Warn, format!("SMTC unavailable: {e}"));
+                    None
+                }
             }
+        } else {
+            debug_overlay.log(LogLevel::Info, format!("SMTC disabled by config"));
+            None
         };
 
         let discord = if cfg.discord.enabled == Some(true) {
@@ -646,6 +661,9 @@ impl App {
             if let Some(ref arc) = self.player_mgr.band_energies {
                 if let Ok(bands) = arc.lock() {
                     self.state.viz_bands.clone_from(&*bands);
+                    if self.state.show_visualizer {
+                        self.needs_redraw = true;
+                    }
                 }
             }
 

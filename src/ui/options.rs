@@ -132,17 +132,27 @@ impl SettingsPanel {
     fn items_in_section(&self) -> usize {
         match self.focused_section {
             SettingsSection::General => {
-                #[cfg(all(feature = "album-art", feature = "palette"))]
+                let count = {
+                    #[cfg(all(feature = "album-art", feature = "palette"))]
+                    {
+                        8
+                    }
+                    #[cfg(all(feature = "album-art", not(feature = "palette")))]
+                    {
+                        7
+                    }
+                    #[cfg(not(feature = "album-art"))]
+                    {
+                        6
+                    }
+                };
+                #[cfg(windows)]
                 {
-                    8
+                    count + 2
                 }
-                #[cfg(all(feature = "album-art", not(feature = "palette")))]
+                #[cfg(not(windows))]
                 {
-                    7
-                }
-                #[cfg(not(feature = "album-art"))]
-                {
-                    6
+                    count
                 }
             }
             SettingsSection::Account => 4,
@@ -533,6 +543,16 @@ impl SettingsPanel {
             "",
             state.reactive_theme_enabled,
         ));
+
+        #[cfg(windows)]
+        items.push((
+            "Windows Media Overlay (SMTC)",
+            "",
+            self.config.smtc_enabled(),
+        ));
+
+        #[cfg(windows)]
+        items.push(("Global Media Hotkeys", "", self.config.media_keys_enabled()));
 
         self.render_item_list(frame, area, "General", &items, theme);
     }
