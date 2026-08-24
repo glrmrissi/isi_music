@@ -73,6 +73,14 @@ pub struct AppOptionsConfig {
     pub compact_mode_default: Option<bool>,
     /// When the queue ends, automatically fetch and queue recommended tracks (default: true)
     pub autoplay: Option<bool>,
+    /// Hot-reload theme.toml and keybinds.toml on file change (default: true)
+    pub hot_reload: Option<bool>,
+    /// Windows System Media Transport Controls overlay (default: true)
+    #[serde(default)]
+    pub smtc_enabled: Option<bool>,
+    /// Windows global media hotkeys (default: true)
+    #[serde(default)]
+    pub media_keys_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -204,6 +212,18 @@ impl AppConfig {
     /// Autoplay is enabled by default; only disabled if explicitly set to false.
     pub fn autoplay_enabled(&self) -> bool {
         self.ui.autoplay.or(self.options.autoplay).unwrap_or(true)
+    }
+
+    pub fn hot_reload(&self) -> bool {
+        self.options.hot_reload.unwrap_or(true)
+    }
+
+    pub fn smtc_enabled(&self) -> bool {
+        self.options.smtc_enabled.unwrap_or(true)
+    }
+
+    pub fn media_keys_enabled(&self) -> bool {
+        self.options.media_keys_enabled.unwrap_or(true)
     }
 
     /// Copies values from the legacy `[options]` section into `[ui]` when `[ui]`

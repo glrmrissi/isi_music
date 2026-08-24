@@ -12,13 +12,22 @@ use super::Theme;
 pub struct ThemeWatcher {
     rx: Receiver<Theme>,
     #[allow(dead_code)]
-    _watcher: RecommendedWatcher,
+    _watcher: Option<RecommendedWatcher>,
     stop: Arc<AtomicBool>,
 }
 
 impl ThemeWatcher {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn disabled() -> Self {
+        let (_, rx) = channel();
+        Self {
+            rx,
+            _watcher: None,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -39,20 +48,18 @@ impl std::ops::Deref for ThemeWatcher {
 impl ThemeWatcher {
     pub fn noop() -> Self {
         let (_, rx) = std::sync::mpsc::channel();
-        let watcher = notify::recommended_watcher(|_| {}).unwrap();
         Self {
             rx,
-            _watcher: watcher,
+            _watcher: None,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     pub fn with_sender() -> (Self, std::sync::mpsc::Sender<Theme>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        let watcher = notify::recommended_watcher(|_| {}).unwrap();
         let w = Self {
             rx,
-            _watcher: watcher,
+            _watcher: None,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         (w, tx)
@@ -108,7 +115,7 @@ pub fn watch_theme() -> std::io::Result<ThemeWatcher> {
 
     Ok(ThemeWatcher {
         rx,
-        _watcher: watcher,
+        _watcher: Some(watcher),
         stop,
     })
 }

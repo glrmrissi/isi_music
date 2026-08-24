@@ -591,9 +591,17 @@ fn main() -> Result<()> {
                 .init();
 
             let theme = utils::theme::Theme::load();
-            let theme_rx = utils::theme::Theme::watch()?;
+            let theme_rx = if cfg.hot_reload() {
+                utils::theme::Theme::watch()?
+            } else {
+                utils::theme::ThemeWatcher::disabled()
+            };
             let keybinds = keybinds::Keybinds::load();
-            let keybinds_rx = keybinds::KeybindsWatcher::watch()?;
+            let keybinds_rx = if cfg.hot_reload() {
+                keybinds::KeybindsWatcher::watch()?
+            } else {
+                keybinds::KeybindsWatcher::disabled()
+            };
             #[cfg(feature = "album-art")]
             let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
