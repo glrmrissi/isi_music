@@ -1,10 +1,10 @@
 use crate::utils::theme::UiWidget;
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 #[cfg(feature = "album-art")]
 use ratatui_image::protocol::StatefulProtocol;
@@ -127,11 +127,7 @@ impl Ui {
     }
 
     pub fn render_add_to_playlist(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(Line::from(vec![Span::raw(" Add to Playlist ")]).alignment(Alignment::Left))
-            .border_style(Style::default().fg(self.theme.border_active));
+        let block = self.build_panel_block(UiWidget::MainContent, true, "Add to Playlist");
 
         let mut items: Vec<ListItem> = state
             .playlists
@@ -177,13 +173,9 @@ impl Ui {
             .delete_playlist_target
             .as_deref()
             .unwrap_or("this playlist");
-        let title = format!(" Delete Playlist — {name}? ");
+        let title = format!("Delete Playlist: {name}?");
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(Line::from(Span::raw(title)).alignment(Alignment::Left))
-            .border_style(Style::default().fg(self.theme.border_active));
+        let block = self.build_panel_block(UiWidget::MainContent, true, &title);
 
         let items = vec![
             ListItem::new(Line::from(Span::styled(
