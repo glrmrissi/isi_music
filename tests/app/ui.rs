@@ -1,4 +1,5 @@
 #[cfg(feature = "album-art")]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::super::App;
 
@@ -6,12 +7,12 @@ mod tests {
     async fn maybe_fetch_album_art_returns_early_when_disabled() {
         let mut app = App::new_for_test().await;
         app.state.show_album_art = false;
-        app.discord = None;
+        app.integrations.discord = None;
         app.current_track_uri = "spotify:track:abc".into();
 
         app.maybe_fetch_album_art().await;
 
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
@@ -22,7 +23,7 @@ mod tests {
 
         app.maybe_fetch_album_art().await;
 
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
@@ -30,11 +31,11 @@ mod tests {
         let mut app = App::new_for_test().await;
         app.state.show_album_art = true;
         app.current_track_uri = "spotify:track:abc".into();
-        app.last_art_uri = "spotify:track:abc".into();
+        app.fetcher.last_art_uri = "spotify:track:abc".into();
 
         app.maybe_fetch_album_art().await;
 
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
@@ -43,11 +44,11 @@ mod tests {
         app.state.show_album_art = true;
         app.current_track_uri = "spotify:track:abc".into();
         let (_, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
-        app.album_art_pending = Some(rx);
+        app.fetcher.album_art_pending = Some(rx);
 
         app.maybe_fetch_album_art().await;
 
-        assert!(app.album_art_pending.is_some());
+        assert!(app.fetcher.album_art_pending.is_some());
     }
 
     #[tokio::test]
@@ -55,12 +56,12 @@ mod tests {
         let mut app = App::new_for_test().await;
         app.state.show_album_art = true;
         app.current_track_uri = "file:///music/test.mp3".into();
-        app.last_art_uri.clear();
+        app.fetcher.last_art_uri.clear();
         app.state.playback.cover_path = None;
 
         app.maybe_fetch_album_art().await;
 
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
@@ -68,24 +69,24 @@ mod tests {
         let mut app = App::new_for_test().await;
         app.state.show_album_art = true;
         app.current_track_uri = "spotify:track:abc".into();
-        app.last_art_uri.clear();
+        app.fetcher.last_art_uri.clear();
         app.state.playback.cover_path = None;
 
         app.maybe_fetch_album_art().await;
 
         // With unauthenticated spotify, should return early after the authenticated check
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
     async fn fetch_local_album_art_returns_early_when_already_fetched() {
         let mut app = App::new_for_test().await;
         app.current_track_uri = "file:///music/test.mp3".into();
-        app.last_art_uri = "file:///music/test.mp3".into();
+        app.fetcher.last_art_uri = "file:///music/test.mp3".into();
 
         app.fetch_local_album_art();
 
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
@@ -93,23 +94,23 @@ mod tests {
         let mut app = App::new_for_test().await;
         app.current_track_uri = "file:///music/test.mp3".into();
         let (_, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
-        app.album_art_pending = Some(rx);
+        app.fetcher.album_art_pending = Some(rx);
 
         app.fetch_local_album_art();
 
-        assert!(app.album_art_pending.is_some());
+        assert!(app.fetcher.album_art_pending.is_some());
     }
 
     #[tokio::test]
     async fn fetch_local_album_art_returns_early_when_cover_path_missing() {
         let mut app = App::new_for_test().await;
         app.current_track_uri = "file:///music/test.mp3".into();
-        app.last_art_uri.clear();
+        app.fetcher.last_art_uri.clear();
         app.state.playback.cover_path = None;
 
         app.fetch_local_album_art();
 
-        assert!(app.album_art_pending.is_none());
+        assert!(app.fetcher.album_art_pending.is_none());
     }
 
     #[tokio::test]
@@ -121,12 +122,12 @@ mod tests {
 
         let mut app = App::new_for_test().await;
         app.current_track_uri = "file:///music/test.mp3".into();
-        app.last_art_uri.clear();
+        app.fetcher.last_art_uri.clear();
         app.state.playback.cover_path = Some(art_path.to_string_lossy().to_string());
 
         app.fetch_local_album_art();
 
-        assert!(app.album_art_pending.is_some());
+        assert!(app.fetcher.album_art_pending.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

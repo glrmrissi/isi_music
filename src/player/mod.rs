@@ -139,6 +139,7 @@ pub struct NativePlayer {
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     server_position: Arc<Mutex<(u64, Instant)>>,
     analyzer_enabled: Arc<AtomicBool>,
+    play_history: Vec<usize>,
 }
 
 pub async fn ensure_streaming_auth() -> Result<()> {
@@ -177,7 +178,13 @@ async fn obtain_streaming_token() -> Result<String> {
 }
 
 async fn refresh_streaming_token(refresh_token: &str) -> Result<String> {
-    let resp = reqwest::Client::new()
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(1)
+        .pool_idle_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = http
         .post("https://accounts.spotify.com/api/token")
         .form(&[
             ("grant_type", "refresh_token"),
@@ -214,13 +221,11 @@ impl NativePlayer {
         bitrate: librespot_playback::config::Bitrate,
         gapless: bool,
     ) -> Result<Self> {
-        let cache_dir = dirs::cache_dir()
-            .or_else(|| dirs::config_dir())
-            .map(|mut p| {
-                p.push("isi-music");
-                p.push("audio-cache");
-                p
-            });
+        let cache_dir = dirs::cache_dir().or_else(dirs::config_dir).map(|mut p| {
+            p.push("isi-music");
+            p.push("audio-cache");
+            p
+        });
 
         let cache = cache_dir.and_then(|dir| {
             match Cache::new::<std::path::PathBuf>(
@@ -272,7 +277,7 @@ impl NativePlayer {
 
         let bands = Arc::new(Mutex::new(vec![0.0f32; N_BANDS]));
         let bands_for_sink = Arc::clone(&bands);
-        let analyzer_enabled = Arc::new(AtomicBool::new(true));
+        let analyzer_enabled = Arc::new(AtomicBool::new(false));
         let analyzer_enabled_for_sink = Arc::clone(&analyzer_enabled);
 
         let session_for_player = session.clone();
@@ -392,6 +397,7 @@ impl NativePlayer {
             band_energies: bands,
             server_position,
             analyzer_enabled,
+            play_history: Vec::new(),
         };
         instance.apply_volume();
         Ok(instance)
@@ -439,6 +445,29 @@ impl NativePlayer {
                 info!("Loading URI: {uri}");
                 self.player.stop();
                 self.player.load(spotify_uri, true, 0);
+                if let Some(prev) = self.current_index
+                    && prev != index
+                {
+                    self.play_history.push(prev);
+                }
+                self.current_index = Some(index);
+                self.is_playing = true;
+                self.playing_queued = None;
+                self.preload_next();
+            }
+            Err(e) => error!("Invalid URI '{uri}': {e}"),
+        }
+    }
+
+    fn load_index(&mut self, index: usize) {
+        let Some(uri) = self.queue.get(index) else {
+            warn!("Index {index} out of queue bounds");
+            return;
+        };
+        match SpotifyUri::from_uri(uri) {
+            Ok(spotify_uri) => {
+                self.player.stop();
+                self.player.load(spotify_uri, true, 0);
                 self.current_index = Some(index);
                 self.is_playing = true;
                 self.playing_queued = None;
@@ -465,13 +494,12 @@ impl NativePlayer {
 
         let next_idx = self.next_index();
 
-        if let Some(idx) = next_idx {
-            if let Some(uri) = self.queue.get(idx) {
-                if let Ok(spotify_uri) = SpotifyUri::from_uri(uri) {
-                    debug!("Preloading next track at index {idx}: {uri}");
-                    self.player.preload(spotify_uri);
-                }
-            }
+        if let Some(idx) = next_idx
+            && let Some(uri) = self.queue.get(idx)
+            && let Ok(spotify_uri) = SpotifyUri::from_uri(uri)
+        {
+            debug!("Preloading next track at index {idx}: {uri}");
+            self.player.preload(spotify_uri);
         }
     }
 
@@ -556,6 +584,13 @@ impl NativePlayer {
     }
 
     pub fn prev(&mut self) -> bool {
+        if self.shuffle {
+            if let Some(prev_idx) = self.play_history.pop() {
+                self.load_index(prev_idx);
+                return true;
+            }
+            return false;
+        }
         if let Some(idx) = self.current_index
             && idx > 0
         {
@@ -567,6 +602,7 @@ impl NativePlayer {
 
     pub fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
+        self.play_history.clear();
     }
 
     pub fn cycle_repeat(&mut self) {
@@ -591,6 +627,10 @@ impl NativePlayer {
         let remove = idx - keep_behind;
         self.queue.drain(0..remove);
         if let Some(i) = &mut self.current_index {
+            *i -= remove;
+        }
+        self.play_history.retain(|&i| i >= remove);
+        for i in &mut self.play_history {
             *i -= remove;
         }
         true

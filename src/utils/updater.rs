@@ -63,6 +63,8 @@ async fn fetch_latest_release() -> Result<Release> {
     let client = reqwest::Client::builder()
         .user_agent("isi-music-updater")
         .timeout(std::time::Duration::from_secs(15))
+        .pool_max_idle_per_host(1)
+        .pool_idle_timeout(std::time::Duration::from_secs(10))
         .build()?;
     let resp = client.get(&url).send().await?;
     if !resp.status().is_success() {
@@ -79,6 +81,8 @@ async fn download_asset(url: &str, dest: &std::path::Path) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("isi-music-updater")
         .timeout(std::time::Duration::from_secs(60))
+        .pool_max_idle_per_host(1)
+        .pool_idle_timeout(std::time::Duration::from_secs(10))
         .build()?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {

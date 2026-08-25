@@ -35,6 +35,7 @@ impl MockPlayer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_queue(queue: Vec<QueuedTrack>) -> Self {
         Self {
             is_playing: false,

@@ -10,12 +10,21 @@ use std::time::Duration;
 pub struct KeybindsWatcher {
     pub rx: mpsc::Receiver<Keybinds>,
     #[allow(dead_code)]
-    _watcher: RecommendedWatcher,
+    _watcher: Option<RecommendedWatcher>,
     #[allow(dead_code)]
     stop: Arc<AtomicBool>,
 }
 
 impl KeybindsWatcher {
+    pub fn disabled() -> Self {
+        let (_, rx) = mpsc::channel();
+        Self {
+            rx,
+            _watcher: None,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn watch() -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let path = keybinds_path();
@@ -45,17 +54,17 @@ impl KeybindsWatcher {
             let new = Keybinds::load();
             let _ = tx.send(new);
         })
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
         if let Some(parent) = path.parent() {
             watcher
                 .watch(parent.as_ref(), RecursiveMode::NonRecursive)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
         }
 
         Ok(KeybindsWatcher {
             rx,
-            _watcher: watcher,
+            _watcher: Some(watcher),
             stop,
         })
     }
@@ -70,10 +79,9 @@ impl KeybindsWatcher {
 impl KeybindsWatcher {
     pub fn noop() -> Self {
         let (_, rx) = std::sync::mpsc::channel();
-        let watcher = notify::recommended_watcher(|_| {}).unwrap();
         KeybindsWatcher {
             rx,
-            _watcher: watcher,
+            _watcher: None,
             stop: Arc::new(AtomicBool::new(false)),
         }
     }

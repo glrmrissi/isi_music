@@ -7,7 +7,7 @@ Thanks for wanting to contribute. Here's everything you need to know.
 ## Getting started
 
 1. Fork the repository and clone your fork
-2. Install dependencies (see [README](README.md))
+2. Install dependencies (see [DEVELOPING.md](DEVELOPING.md))
 3. Create a branch from `master`:
    ```bash
    git checkout -b feat/my-feature
@@ -16,7 +16,7 @@ Thanks for wanting to contribute. Here's everything you need to know.
 
 ---
 
-## Commit messages — Conventional Commits
+## Commit messages (Conventional Commits)
 
 All commits **must** follow the [Conventional Commits](https://www.conventionalcommits.org/) spec. This keeps the changelog clean and makes releases predictable.
 
@@ -38,7 +38,7 @@ All commits **must** follow the [Conventional Commits](https://www.conventionalc
 | `fix` | Bug fix |
 | `perf` | Performance improvement |
 | `refactor` | Code change that is neither a fix nor a feature |
-| `style` | Formatting, whitespace — no logic change |
+| `style` | Formatting, whitespace, no logic change |
 | `test` | Adding or fixing tests |
 | `docs` | Documentation only |
 | `chore` | Build process, dependency updates, tooling |
@@ -56,11 +56,7 @@ chore: bump ratatui to 0.30
 
 ### Rules
 
-- Use the **imperative mood** in the description ("add", "fix", "remove" — not "added", "fixes")
-- Keep the first line under **72 characters**
-- Don't end the description with a period
-- Reference issues in the footer: `Closes #42`
-- Breaking changes go in the footer: `BREAKING CHANGE: config format changed`
+Use the **imperative mood** in the description ("add", "fix", "remove", not "added", "fixes"), keep the first line under **72 characters**, and don't end the description with a period. Reference issues in the footer (`Closes #42`). Breaking changes go in the footer (`BREAKING CHANGE: config format changed`).
 
 ### Versioning
 
@@ -90,10 +86,7 @@ docs/short-description
 
 ## Pull Requests
 
-- One concern per PR — don't mix unrelated fixes
-- Make sure `cargo build --release` passes before opening
-- Write a clear description of **what** changed and **why**
-- Link the related issue if there is one
+Keep one concern per PR, don't mix unrelated fixes. Make sure `cargo build --release` passes before opening. Write a clear description of **what** changed and **why**. Link the related issue if there is one.
 
 ---
 
@@ -101,8 +94,4 @@ docs/short-description
 
 ## Reporting issues
 
-Open an issue with:
-- What you expected to happen
-- What actually happened
-- Steps to reproduce
-- OS and terminal emulator
+Open an issue with what you expected to happen, what actually happened, steps to reproduce, and your OS and terminal emulator.

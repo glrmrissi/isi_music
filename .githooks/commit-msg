@@ -1,0 +1,53 @@
+#!/bin/sh
+# commit-msg: validate conventional commits
+# Format: <type>: <description>
+# Types: feat, fix, chore, perf, docs, refactor, style, test, build, ci, revert
+
+set -e
+
+commit_msg_file="$1"
+commit_msg=$(cat "$commit_msg_file")
+first_line=$(echo "$commit_msg" | head -1)
+
+# Skip merge commits
+if echo "$first_line" | grep -qE "^Merge "; then
+  exit 0
+fi
+
+# Skip revert commits (git auto-generated)
+if echo "$first_line" | grep -qE "^Revert "; then
+  exit 0
+fi
+
+# Valid conventional commit types
+valid_types="feat|fix|chore|perf|docs|refactor|style|test|build|ci|revert"
+
+# Check format: type: description (one line, no body, no footer)
+if ! echo "$first_line" | grep -qE "^(${valid_types}): .+"; then
+  echo "[commit-msg] ERROR: commit message must follow conventional commits format"
+  echo "[commit-msg] Expected: <type>: <description>"
+  echo "[commit-msg] Valid types: feat, fix, chore, perf, docs, refactor, style, test, build, ci, revert"
+  echo "[commit-msg] Got: $first_line"
+  exit 1
+fi
+
+# Deny "Generated with Devin" / "Co-Authored-By: Devin"
+if echo "$commit_msg" | grep -qiE "Generated with Devin|Co-Authored-By:.*Devin|Co-Authored-By:.*devin-ai-integration"; then
+  echo "[commit-msg] ERROR: commit message must NOT contain 'Generated with Devin' or 'Co-Authored-By: Devin'"
+  echo "[commit-msg] Remove these lines and re-commit"
+  exit 1
+fi
+
+# Check single line (no body, no footer per project rules)
+line_count=$(echo "$commit_msg" | wc -l)
+if [ "$line_count" -gt 1 ]; then
+  # Allow one trailing newline
+  non_empty=$(echo "$commit_msg" | grep -c . || true)
+  if [ "$non_empty" -gt 1 ]; then
+    echo "[commit-msg] ERROR: commit message must be a single line (no body, no footer)"
+    echo "[commit-msg] Got $non_empty non-empty lines"
+    exit 1
+  fi
+fi
+
+echo "[commit-msg] OK: $first_line"

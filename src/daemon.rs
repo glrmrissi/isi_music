@@ -26,24 +26,25 @@ struct TrackInfo {
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
     // stdout/stderr are redirected to /dev/null after fork — log to file instead
-    if let Ok(log_path) = crate::config::log_path() {
-        if let Ok(log_file) = std::fs::OpenOptions::new()
+    if let Ok(log_path) = crate::config::log_path()
+        && let Ok(log_file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_path)
-        {
-            let _ = tracing_subscriber::fmt()
-                .with_writer(std::sync::Mutex::new(log_file))
-                .with_ansi(false)
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env().add_directive(
-                        "isi_music=debug".parse().unwrap_or_else(|_| {
-                            "isi_music=info".parse().expect("hardcoded valid directive")
-                        }),
-                    ),
-                )
-                .try_init();
-        }
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::sync::Mutex::new(log_file))
+            .with_ansi(false)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env().add_directive(
+                    "isi_music=debug".parse().unwrap_or_else(|_| {
+                        "isi_music=info"
+                            .parse()
+                            .unwrap_or_else(|_| tracing::Level::INFO.into())
+                    }),
+                ),
+            )
+            .try_init();
     }
     info!("daemon starting");
 
@@ -366,14 +367,13 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                     match notif {
                         PlayerNotification::TrackEnded | PlayerNotification::TrackUnavailable => {
                             // Track recent URIs for autoplay seeding
-                            if let Some(idx) = player.current_index() {
-                                if let Some(t) = track_list.get(idx) {
-                                    if t.uri.starts_with("spotify:track:") {
-                                        recent_track_uris.push_back(t.uri.clone());
-                                        if recent_track_uris.len() > 5 {
-                                            recent_track_uris.pop_front();
-                                        }
-                                    }
+                            if let Some(idx) = player.current_index()
+                                && let Some(t) = track_list.get(idx)
+                                && t.uri.starts_with("spotify:track:")
+                            {
+                                recent_track_uris.push_back(t.uri.clone());
+                                if recent_track_uris.len() > 5 {
+                                    recent_track_uris.pop_front();
                                 }
                             }
 
@@ -434,31 +434,29 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                         progress_ms += delta;
                     }
 
-                    if !scrobble_sent {
-                        if let Some(idx) = player.current_index() {
-                            if let Some(t) = track_list.get(idx) {
-                                if t.duration_ms >= 30_000 {
-                                    let threshold = (t.duration_ms / 2).min(4 * 60 * 1000);
-                                    if progress_ms >= threshold {
-                                        if let Some(lfm) = lastfm.clone() {
-                                            let artist = t.artist.clone();
-                                            let title  = t.name.clone();
-                                            let album  = t.album.clone();
-                                            let now = unix_now();
-                                            let ts = if track_start_unix > 0 {
-                                                track_start_unix
-                                            } else {
-                                                now.saturating_sub((progress_ms / 1000) as u64)
-                                            };
-                                            let dur = t.duration_ms;
-                                            tokio::spawn(async move {
-                                                lfm.scrobble(&artist, &title, &album, ts, dur).await;
-                                            });
-                                        }
-                                        scrobble_sent = true;
-                                    }
-                                }
+                    if !scrobble_sent
+                        && let Some(idx) = player.current_index()
+                        && let Some(t) = track_list.get(idx)
+                        && t.duration_ms >= 30_000
+                    {
+                        let threshold = (t.duration_ms / 2).min(4 * 60 * 1000);
+                        if progress_ms >= threshold {
+                            if let Some(lfm) = lastfm.clone() {
+                                let artist = t.artist.clone();
+                                let title  = t.name.clone();
+                                let album  = t.album.clone();
+                                let now = unix_now();
+                                let ts = if track_start_unix > 0 {
+                                    track_start_unix
+                                } else {
+                                    now.saturating_sub(progress_ms / 1000)
+                                };
+                                let dur = t.duration_ms;
+                                tokio::spawn(async move {
+                                    lfm.scrobble(&artist, &title, &album, ts, dur).await;
+                                });
                             }
+                            scrobble_sent = true;
                         }
                     }
                 }

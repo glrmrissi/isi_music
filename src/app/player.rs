@@ -7,41 +7,44 @@ use crate::ui::{Focus, SearchPanel};
 
 impl App {
     pub fn on_track_started(&mut self) {
-        self.scrobble_sent = false;
+        self.integrations.reset_scrobble();
 
-        self.track_start_unix = crate::app::metadata::unix_now();
+        self.integrations
+            .set_track_start(crate::app::metadata::unix_now());
 
         self.state.playback.progress_ms = 0;
-        self.playing_started_at = None;
-        self.progress_at_play_start = 0;
-        self.state.playback.radio_mode = self.radio_mode;
+        self.player_mgr.playing_started_at = None;
+        self.player_mgr.progress_at_play_start = 0;
+        self.state.playback.radio_mode = self.player_mgr.radio_mode;
 
         const KEEP_BEHIND: usize = 20;
-        if let Some(player) = &mut self.player {
+        if let Some(player) = &mut self.player_mgr.player {
+            let is_shuffling = player.shuffle();
             let idx = player.current_index().unwrap_or(0);
-            if idx > KEEP_BEHIND {
+            if !is_shuffling && idx > KEEP_BEHIND {
                 let remove = idx - KEEP_BEHIND;
                 if player.trim_played(KEEP_BEHIND) {
-                    let drain_len = remove.min(self.playing_tracks.len());
-                    self.playing_tracks.drain(0..drain_len);
+                    let drain_len = remove.min(self.player_mgr.playing_tracks.len());
+                    self.player_mgr.playing_tracks.drain(0..drain_len);
                 }
             }
         }
 
         if self.current_track_uri.starts_with("spotify:track:") {
-            self.recent_track_uris
+            self.player_mgr
+                .recent_track_uris
                 .push_back(self.current_track_uri.clone());
-            if self.recent_track_uris.len() > 5 {
-                self.recent_track_uris.pop_front();
+            if self.player_mgr.recent_track_uris.len() > 5 {
+                self.player_mgr.recent_track_uris.pop_front();
             }
         }
 
         #[cfg(feature = "album-art")]
         let _ = self.state.album_art.take();
-        self.album_art_pending = None;
-        self.last_art_uri.clear();
+        self.fetcher.album_art_pending = None;
+        self.fetcher.last_art_uri.clear();
 
-        if let Some(lfm) = self.lastfm.clone() {
+        if let Some(lfm) = self.integrations.lastfm.clone() {
             let artist = self.state.playback.artist.clone();
             let track = self.state.playback.title.clone();
             let album = self.state.playback.album.clone();
@@ -64,16 +67,20 @@ impl App {
         let uri = self.current_track_uri.clone();
 
         if !title.is_empty() && !artist.is_empty() {
-            self.ensure_lyrics();
+            self.fetcher.ensure_lyrics(&self.debug_overlay);
             self.state.playback.lyrics_loading = true;
-            if let Some(ref lyrics) = self.lyrics {
+            if let Some(lyrics) = &self.fetcher.lyrics {
                 lyrics.request(&title, &artist, &uri);
             }
         }
     }
 
     pub fn sync_track_selection(&mut self) {
-        let queued = self.player.as_mut().and_then(|p| p.take_playing_queued());
+        let queued = self
+            .player_mgr
+            .player
+            .as_mut()
+            .and_then(|p| p.take_playing_queued());
 
         if let Some(qt) = queued {
             self.state.playback.title = qt.name;
@@ -94,98 +101,116 @@ impl App {
             return;
         }
 
-        if let Some(player) = &self.player {
-            if let Some(idx) = player.current_index() {
-                if let Some(track) = self.playing_tracks.get(idx) {
-                    self.state.playback.title = track.name.clone();
-                    self.state.playback.artist = track.artist.clone();
-                    self.state.playback.album = track.album.clone();
+        if let Some(player) = &self.player_mgr.player
+            && let Some(idx) = player.current_index()
+        {
+            if let Some(track) = self.player_mgr.playing_tracks.get(idx) {
+                self.state.playback.title = track.name.clone();
+                self.state.playback.artist = track.artist.clone();
+                self.state.playback.album = track.album.clone();
 
-                    if self.local_active {
-                        self.state.playback.cover_path = track.cover_path.clone();
-                    } else {
-                        self.state.playback.art_url = track.cover_path.clone();
-                        // Spotify tracks don't carry a local cover path; clear
-                        // the previous track's cached cover so the SMTC/MPRIS
-                        // thumbnail doesn't show a stale image until the new
-                        // cover is fetched.
-                        self.state.playback.cover_path = None;
-                    }
-                    self.debug_overlay.log(
-                        crate::utils::debug_overlay::LogLevel::Info,
-                        format!("Loading cover from: {:?}", self.state.playback.cover_path),
-                    );
-
-                    self.state.playback.duration_ms = track.duration_ms;
-                    self.state.playback.progress_ms = 0;
-
-                    self.current_track_uri = track.uri.clone();
-
-                    self.on_track_started();
+                if self.player_mgr.local_active {
+                    self.state.playback.cover_path = track.cover_path.clone();
+                } else {
+                    self.state.playback.art_url = track.cover_path.clone();
+                    // Spotify tracks don't carry a local cover path; clear
+                    // the previous track's cached cover so the SMTC/MPRIS
+                    // thumbnail doesn't show a stale image until the new
+                    // cover is fetched.
+                    self.state.playback.cover_path = None;
                 }
+                self.debug_overlay.log(
+                    crate::utils::debug_overlay::LogLevel::Info,
+                    format!("Loading cover from: {:?}", self.state.playback.cover_path),
+                );
 
-                if self.playing_tracks.len() == self.state.tracks.len()
-                    && self.playing_tracks.get(idx).map(|t| &t.uri)
-                        == self.state.tracks.get(idx).map(|t| &t.uri)
-                {
-                    self.state.track_list.select(Some(idx));
-                }
+                self.state.playback.duration_ms = track.duration_ms;
+                self.state.playback.progress_ms = 0;
+
+                self.current_track_uri = track.uri.clone();
+
+                self.on_track_started();
+            }
+
+            if self.player_mgr.playing_tracks.len() == self.state.tracks.len()
+                && self.player_mgr.playing_tracks.get(idx).map(|t| &t.uri)
+                    == self.state.tracks.get(idx).map(|t| &t.uri)
+            {
+                self.state.track_list.select(Some(idx));
             }
         }
     }
 
     pub fn activate_local_player(&mut self) {
-        if self.local_active {
+        if self.player_mgr.local_active {
             return;
         }
-        if let Some(ref mut p) = self.player {
-            if p.is_playing() {
-                p.pause();
-            }
+        if let Some(ref mut p) = self.player_mgr.player
+            && p.is_playing()
+        {
+            p.pause();
         }
-        self.player = None;
-        self.band_energies = None;
-        if self.parked_player.is_some() {
-            std::mem::swap(&mut self.player, &mut self.parked_player);
-            self.local_active = true;
-            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        self.player_mgr.player = None;
+        self.player_mgr.band_energies = None;
+        if self.player_mgr.parked_player.is_some() {
+            std::mem::swap(
+                &mut self.player_mgr.player,
+                &mut self.player_mgr.parked_player,
+            );
+            self.player_mgr.local_active = true;
+            self.player_mgr.band_energies = self
+                .player_mgr
+                .player
+                .as_ref()
+                .and_then(|p| p.band_energies());
         } else {
-            self.local_active = true;
+            self.player_mgr.local_active = true;
         }
     }
 
     pub fn activate_spotify_player(&mut self) {
-        if !self.local_active {
+        if !self.player_mgr.local_active {
             return;
         }
-        if let Some(ref mut p) = self.player {
-            if p.is_playing() {
-                p.pause();
-            }
+        if let Some(ref mut p) = self.player_mgr.player
+            && p.is_playing()
+        {
+            p.pause();
         }
-        self.player = None;
-        self.band_energies = None;
-        if self.parked_player.is_some() {
-            std::mem::swap(&mut self.player, &mut self.parked_player);
-            self.local_active = false;
-            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        self.player_mgr.player = None;
+        self.player_mgr.band_energies = None;
+        if self.player_mgr.parked_player.is_some() {
+            std::mem::swap(
+                &mut self.player_mgr.player,
+                &mut self.player_mgr.parked_player,
+            );
+            self.player_mgr.local_active = false;
+            self.player_mgr.band_energies = self
+                .player_mgr
+                .player
+                .as_ref()
+                .and_then(|p| p.band_energies());
         } else {
-            self.local_active = false;
+            self.player_mgr.local_active = false;
         }
     }
 
     pub fn sync_queue_display(&mut self) {
         let mut items: Vec<(String, String)> = Vec::new();
 
-        if let Some(p) = &self.player {
+        if let Some(p) = &self.player_mgr.player {
             items.extend(
                 p.user_queue()
                     .iter()
                     .map(|t| (t.name.clone(), t.artist.clone())),
             );
         }
-        if let Some(p) = &self.parked_player {
-            let prefix = if self.local_active { " " } else { "* " };
+        if let Some(p) = &self.player_mgr.parked_player {
+            let prefix = if self.player_mgr.local_active {
+                " "
+            } else {
+                "* "
+            };
             items.extend(
                 p.user_queue()
                     .iter()
@@ -202,7 +227,7 @@ impl App {
         if self.current_track_uri.starts_with("spotify:track:") {
             seeds.push(self.current_track_uri.clone());
         }
-        for uri in self.recent_track_uris.iter().rev() {
+        for uri in self.player_mgr.recent_track_uris.iter().rev() {
             if !seeds.contains(uri) && seeds.len() < 5 {
                 seeds.push(uri.clone());
             }
@@ -216,10 +241,10 @@ impl App {
         match self.spotify.fetch_recommendations(&seeds, 20).await {
             Ok(tracks) if !tracks.is_empty() => {
                 let count = tracks.len();
-                if let Some(player) = &mut self.player {
+                if let Some(player) = &mut self.player_mgr.player {
                     // Also update playing_tracks so the now-playing display
                     // (title/artist/album) works for autoplay-queued tracks
-                    self.playing_tracks.reserve(tracks.len());
+                    self.player_mgr.playing_tracks.reserve(tracks.len());
                     for t in &tracks {
                         player.add_to_queue(
                             t.uri.clone(),
@@ -230,20 +255,16 @@ impl App {
                             None,
                         );
                     }
-                    self.playing_tracks.extend(tracks);
-                    let label = if self.radio_mode {
-                        "Autoplay"
-                    } else {
-                        "Autoplay"
-                    };
+                    self.player_mgr.playing_tracks.extend(tracks);
+                    let label = "Autoplay";
                     self.state.status_msg = Some(format!("{label}: queued {count} tracks"));
                     self.sync_queue_display();
                 }
             }
             Ok(_) | Err(_) => {
                 // Only disable radio_mode if it was manually toggled, not autoplay
-                if self.radio_mode {
-                    self.radio_mode = false;
+                if self.player_mgr.radio_mode {
+                    self.player_mgr.radio_mode = false;
                     self.state.playback.radio_mode = false;
                     self.state.status_msg =
                         Some("Autoplay: could not find tracks, autoplay off".to_string());
@@ -320,9 +341,9 @@ impl App {
     pub async fn reconnect_player(&mut self) {
         const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 
-        if self.session_reconnecting {
-            if let Some(last_attempt) = self.last_reconnect_attempt {
-                let attempts_so_far = self.reconnect_attempts.min(5);
+        if self.player_mgr.session_reconnecting {
+            if let Some(last_attempt) = self.player_mgr.last_reconnect_attempt {
+                let attempts_so_far = self.player_mgr.reconnect_attempts.min(5);
                 let delay_secs = 2u64.pow(attempts_so_far);
                 let max_delay = std::time::Duration::from_secs(60);
                 let delay = std::time::Duration::from_secs(delay_secs).min(max_delay);
@@ -332,7 +353,7 @@ impl App {
                 }
             }
 
-            if self.reconnect_attempts >= MAX_RECONNECT_ATTEMPTS {
+            if self.player_mgr.reconnect_attempts >= MAX_RECONNECT_ATTEMPTS {
                 warn!(
                     "Max reconnect attempts ({}) reached",
                     MAX_RECONNECT_ATTEMPTS
@@ -346,46 +367,52 @@ impl App {
                 );
                 self.state.status_msg =
                     Some("Connection lost - max retry attempts reached.".to_string());
-                self.session_reconnecting = false;
+                self.player_mgr.session_reconnecting = false;
                 return;
             }
         }
 
-        self.reconnect_attempts += 1;
-        self.last_reconnect_attempt = Some(Instant::now());
-        self.session_reconnecting = true;
+        self.player_mgr.reconnect_attempts += 1;
+        self.player_mgr.last_reconnect_attempt = Some(Instant::now());
+        self.player_mgr.session_reconnecting = true;
 
         warn!(
             "Attempting librespot reconnection ({}/{})",
-            self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+            self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
         );
 
         self.debug_overlay.log(
             crate::utils::debug_overlay::LogLevel::Warn,
             format!(
                 "Attempting librespot reconnection ({}/{})",
-                self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+                self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
             ),
         );
         self.state.status_msg = Some(format!(
             "Reconnecting ({}/{})...",
-            self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+            self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
         ));
 
-        if self.spotify_streaming_disabled {
-            self.session_reconnecting = false;
+        if self.player_mgr.spotify_streaming_disabled {
+            self.player_mgr.session_reconnecting = false;
             return;
         }
 
         let (saved_queue, saved_index) = self
+            .player_mgr
             .player
             .as_ref()
             .map(|p| p.snapshot_queue())
             .unwrap_or_default();
-        let saved_volume = self.player.as_ref().map(|p| p.volume()).unwrap_or(50);
+        let saved_volume = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.volume())
+            .unwrap_or(50);
 
-        self.player = None;
-        self.band_energies = None;
+        self.player_mgr.player = None;
+        self.player_mgr.band_energies = None;
 
         let token = self.spotify.get_access_token().await;
 
@@ -403,17 +430,17 @@ impl App {
                     let start = saved_index.unwrap_or(0);
                     p.set_queue(saved_queue, start);
                 }
-                self.band_energies = p.band_energies();
-                self.player = Some(Box::new(p));
+                self.player_mgr.band_energies = p.band_energies();
+                self.player_mgr.player = Some(Box::new(p));
                 self.state.status_msg = Some("Reconnected!".to_string());
                 info!("Librespot session reconnected successfully");
                 self.debug_overlay.log(
                     crate::utils::debug_overlay::LogLevel::Info,
-                    format!("Librespot session reconnected successfully"),
+                    "Librespot session reconnected successfully".to_string(),
                 );
-                self.reconnect_attempts = 0;
-                self.last_reconnect_attempt = None;
-                self.session_reconnecting = false;
+                self.player_mgr.reconnect_attempts = 0;
+                self.player_mgr.last_reconnect_attempt = None;
+                self.player_mgr.session_reconnecting = false;
             }
             Err(e) => {
                 let msg = e.to_string().to_lowercase();
@@ -421,25 +448,32 @@ impl App {
                     warn!("Spotify free account — disabling streaming permanently");
                     self.debug_overlay.log(
                         crate::utils::debug_overlay::LogLevel::Warn,
-                        format!("Spotify free account — disabling streaming permanently"),
+                        "Spotify free account — disabling streaming permanently".to_string(),
                     );
-                    self.spotify_streaming_disabled = true;
+                    self.player_mgr.spotify_streaming_disabled = true;
                     self.state.status_msg =
                         Some("Spotify Premium required. Switched to local-only mode.".to_string());
-                    if self.parked_player.is_some() {
-                        std::mem::swap(&mut self.player, &mut self.parked_player);
-                        self.local_active = true;
-                        self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+                    if self.player_mgr.parked_player.is_some() {
+                        std::mem::swap(
+                            &mut self.player_mgr.player,
+                            &mut self.player_mgr.parked_player,
+                        );
+                        self.player_mgr.local_active = true;
+                        self.player_mgr.band_energies = self
+                            .player_mgr
+                            .player
+                            .as_ref()
+                            .and_then(|p| p.band_energies());
                     }
-                    self.session_reconnecting = false;
+                    self.player_mgr.session_reconnecting = false;
                 } else if msg.contains("401") || msg.contains("unauthorized") {
                     warn!(
                         "Reconnect failed with 401 - will retry ({}/{})",
-                        self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+                        self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
                     );
                     self.state.status_msg = Some(format!(
                         "Authorization expired, retrying ({}/{})",
-                        self.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+                        self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
                     ));
                 } else {
                     warn!("Reconnect failed: {e:#}");

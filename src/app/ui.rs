@@ -6,72 +6,70 @@ use std::sync::Arc;
 impl App {
     pub async fn maybe_load_more(&mut self) {
         if self.state.focus == Focus::Search {
-            let should_load = self
-                .state
-                .search_results
-                .as_ref()
-                .map(|sr| {
-                    if sr.loading {
-                        return None;
-                    }
-                    let (selected, len, total, stype) = match sr.panel {
-                        SearchPanel::Tracks => (
-                            sr.track_list.selected().unwrap_or(0),
-                            sr.tracks.len(),
-                            sr.tracks_total,
-                            "track",
-                        ),
-                        SearchPanel::Artists => (
-                            sr.artist_list.selected().unwrap_or(0),
-                            sr.artists.len(),
-                            sr.artists_total,
-                            "artist",
-                        ),
-                        SearchPanel::Albums => (
-                            sr.album_list.selected().unwrap_or(0),
-                            sr.albums.len(),
-                            sr.albums_total,
-                            "album",
-                        ),
-                        SearchPanel::Playlists => (
-                            sr.playlist_list.selected().unwrap_or(0),
-                            sr.playlists.len(),
-                            sr.playlists_total,
-                            "playlist",
-                        ),
-                    };
-                    if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
-                        return None;
-                    }
-                    Some((sr.query.clone(), len as u32, stype))
-                })
-                .flatten();
+            let should_load = self.state.search_results.as_ref().and_then(|sr| {
+                if sr.loading {
+                    return None;
+                }
+                let (selected, len, total, stype) = match sr.panel {
+                    SearchPanel::Tracks => (
+                        sr.track_list.selected().unwrap_or(0),
+                        sr.tracks.len(),
+                        sr.tracks_total,
+                        "track",
+                    ),
+                    SearchPanel::Artists => (
+                        sr.artist_list.selected().unwrap_or(0),
+                        sr.artists.len(),
+                        sr.artists_total,
+                        "artist",
+                    ),
+                    SearchPanel::Albums => (
+                        sr.album_list.selected().unwrap_or(0),
+                        sr.albums.len(),
+                        sr.albums_total,
+                        "album",
+                    ),
+                    SearchPanel::Playlists => (
+                        sr.playlist_list.selected().unwrap_or(0),
+                        sr.playlists.len(),
+                        sr.playlists_total,
+                        "playlist",
+                    ),
+                };
+                if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
+                    return None;
+                }
+                Some((sr.query.clone(), len as u32, stype))
+            });
 
             if let Some((query, offset, stype)) = should_load {
-                self.state.search_results.as_mut().unwrap().loading = true;
+                if let Some(sr) = self.state.search_results.as_mut() {
+                    sr.loading = true;
+                }
                 match self.spotify.search_more(&query, stype, offset).await {
                     Ok(more) => {
-                        let sr = self.state.search_results.as_mut().unwrap();
-                        match stype {
-                            "track" => {
-                                sr.tracks_total = more.tracks_total;
-                                sr.tracks.extend(more.tracks);
+                        if let Some(sr) = self.state.search_results.as_mut() {
+                            match stype {
+                                "track" => {
+                                    sr.tracks_total = more.tracks_total;
+                                    sr.tracks.extend(more.tracks);
+                                }
+                                "artist" => {
+                                    sr.artists_total = more.artists_total;
+                                    sr.artists.extend(more.artists);
+                                }
+                                "album" => {
+                                    sr.albums_total = more.albums_total;
+                                    sr.albums.extend(more.albums);
+                                }
+                                "playlist" => {
+                                    sr.playlists_total = more.playlists_total;
+                                    sr.playlists.extend(more.playlists);
+                                }
+                                _ => {}
                             }
-                            "artist" => {
-                                sr.artists_total = more.artists_total;
-                                sr.artists.extend(more.artists);
-                            }
-                            "album" => {
-                                sr.albums_total = more.albums_total;
-                                sr.albums.extend(more.albums);
-                            }
-                            "playlist" => {
-                                sr.playlists_total = more.playlists_total;
-                                sr.playlists.extend(more.playlists);
-                            }
-                            _ => {}
+                            sr.loading = false;
                         }
-                        sr.loading = false;
                     }
                     Err(e) => {
                         if let Some(sr) = self.state.search_results.as_mut() {
@@ -141,7 +139,7 @@ impl App {
         if (self.state.tracks_offset as usize) >= track_len
             && track_len < self.state.tracks_total as usize
         {
-            if self.pending_pagination.is_some() {
+            if self.fetcher.pending_pagination.is_some() {
                 return;
             }
 
@@ -160,7 +158,7 @@ impl App {
 
             let spotify = Arc::clone(&self.spotify);
             let (tx, rx) = tokio::sync::oneshot::channel();
-            self.pending_pagination = Some(rx);
+            self.fetcher.pending_pagination = Some(rx);
 
             match id.as_deref() {
                 Some("liked_songs") => {
@@ -207,7 +205,7 @@ impl App {
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
                 }
-                None => return,
+                None => (),
             }
         }
     }
@@ -261,7 +259,7 @@ impl App {
                 .as_ref()
                 .map(|sr| sr.loading)
                 .unwrap_or(false),
-            Focus::Tracks => self.state.tracks_loading || self.pending_pagination.is_some(),
+            Focus::Tracks => self.state.tracks_loading || self.fetcher.pending_pagination.is_some(),
             Focus::Library | Focus::Playlists | Focus::Queue => false,
         }
     }
@@ -269,17 +267,17 @@ impl App {
     #[cfg(feature = "album-art")]
     pub async fn maybe_fetch_album_art(&mut self) {
         #[cfg(windows)]
-        let smtc_needs_art = self.smtc.is_some();
+        let smtc_needs_art = self.integrations.smtc.is_some();
         #[cfg(not(windows))]
         let smtc_needs_art = false;
 
-        if !self.state.show_album_art && self.discord.is_none() && !smtc_needs_art {
+        if !self.state.show_album_art && self.integrations.discord.is_none() && !smtc_needs_art {
             return;
         }
 
         if self.current_track_uri.is_empty()
-            || self.current_track_uri == self.last_art_uri
-            || self.album_art_pending.is_some()
+            || self.current_track_uri == self.fetcher.last_art_uri
+            || self.fetcher.album_art_pending.is_some()
         {
             return;
         }
@@ -298,10 +296,10 @@ impl App {
             return;
         };
         let http = self.spotify.http_client();
-        self.last_art_uri = uri.clone();
+        self.fetcher.last_art_uri = uri.clone();
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.album_art_pending = Some(rx);
+        self.fetcher.album_art_pending = Some(rx);
 
         tokio::spawn(async move {
             let Some(track_id) = uri.strip_prefix("spotify:track:").map(|s| s.to_string()) else {
@@ -326,33 +324,34 @@ impl App {
             else {
                 return;
             };
-            if let Ok(resp) = http.get(&url).send().await {
-                if let Ok(bytes) = resp.bytes().await {
-                    let _ = tx.send(bytes.to_vec());
-                }
+            if let Ok(resp) = http.get(&url).send().await
+                && let Ok(bytes) = resp.bytes().await
+            {
+                let _ = tx.send(bytes.to_vec());
             }
         });
     }
 
     #[cfg(feature = "album-art")]
     pub fn fetch_local_album_art(&mut self) {
-        if self.current_track_uri == self.last_art_uri || self.album_art_pending.is_some() {
+        if self.current_track_uri == self.fetcher.last_art_uri
+            || self.fetcher.album_art_pending.is_some()
+        {
             return;
         }
-        self.last_art_uri = self.current_track_uri.clone();
+        self.fetcher.last_art_uri = self.current_track_uri.clone();
 
         if let Some(cover_str) = &self.state.playback.cover_path {
             let path = std::path::PathBuf::from(cover_str);
             if path.exists() {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                self.album_art_pending = Some(rx);
+                self.fetcher.album_art_pending = Some(rx);
 
                 tokio::spawn(async move {
                     if let Ok(bytes) = tokio::fs::read(&path).await {
                         let _ = tx.send(bytes);
                     }
                 });
-                return;
             }
         }
     }

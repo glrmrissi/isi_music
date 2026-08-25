@@ -4,7 +4,6 @@ pub const DEFAULT_APP_ID: &str = "1489692487541850324";
 ///
 /// Runs in a dedicated std::thread (discord-rich-presence is blocking).
 /// The app sends updates via an mpsc channel; the thread applies them.
-
 #[cfg(feature = "discord")]
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use std::sync::mpsc;

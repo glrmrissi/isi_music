@@ -88,6 +88,7 @@ fn main() {
             let mask = masks[i];
             format!(
                 r#"#[inline(never)]
+#[allow(clippy::identity_op)]
 fn key_part_{i}() -> [u8; 8] {{
     [
         0x{:02x} ^ 0x{:02x}, 0x{:02x} ^ 0x{:02x},

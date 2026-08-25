@@ -74,16 +74,13 @@ pub async fn run() -> anyhow::Result<()> {
     println!("  {}", "-".repeat(50));
     println!();
 
-    let mut results = Vec::new();
-
-    results.push(check_config());
-
-    results.push(check_spotify_client_id());
-    results.push(check_spotify_refresh_token());
-
-    results.push(check_local_music_dir());
-
-    results.push(check_lastfm());
+    let mut results = vec![
+        check_config(),
+        check_spotify_client_id(),
+        check_spotify_refresh_token(),
+        check_local_music_dir(),
+        check_lastfm(),
+    ];
 
     #[cfg(target_os = "linux")]
     {

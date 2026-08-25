@@ -35,7 +35,8 @@ impl TokenManager {
             *ea = Some(
                 Utc::now()
                     + Duration::try_seconds(expires_in_secs as i64)
-                        .unwrap_or_else(|| Duration::try_seconds(3600).unwrap()),
+                        .or_else(|| Duration::try_seconds(3600))
+                        .unwrap_or_default(),
             );
         }
     }
@@ -46,7 +47,7 @@ impl TokenManager {
             return None;
         }
 
-        let expires_at = self.expires_at.read().ok()?.clone();
+        let expires_at = *self.expires_at.read().ok()?;
         let needs_refresh = expires_at.map(|e| e <= Utc::now()).unwrap_or(true);
 
         if needs_refresh {
@@ -116,7 +117,8 @@ impl TokenManager {
             *ea = Some(
                 Utc::now()
                     + Duration::try_seconds(expires_in as i64)
-                        .unwrap_or_else(|| Duration::try_seconds(3600).unwrap()),
+                        .or_else(|| Duration::try_seconds(3600))
+                        .unwrap_or_default(),
             );
         }
 

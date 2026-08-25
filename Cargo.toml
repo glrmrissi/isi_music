@@ -1,6 +1,6 @@
 [package]
 name = "isi-music"
-version = "1.4.1"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Guilherme Rissi <guilhermerissi04112006@gmail.com>"]
@@ -22,11 +22,11 @@ hyper-proxy2 = { path = "patches/hyper-proxy2" }
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net", "io-util", "signal"] }
 
 # TUI
-ratatui = { version = "0.30.2", features = ["crossterm_0_28", "unstable-backend-writer"] }
-crossterm = "0.28"
+ratatui = { version = "0.30.2", features = ["crossterm_0_29", "unstable-backend-writer"] }
+crossterm = "0.29"
 
 # Spotify API
 chrono = "0.4"
@@ -57,7 +57,7 @@ url = "2"
 dirs = "5"
 
 # Config file
-toml = "0.8"
+toml = "1"
 
 # HTTP client (used for Spotify search API directly)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
@@ -124,9 +124,6 @@ id3 = "1.16.4"
 
 # Buffer
 ringbuf = "0.5.0"
-
-# Windows path normalization (avoids \\?\ prefix)
-dunce = "1.0"
 
 # Wizard (setup/config prompts)
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }
