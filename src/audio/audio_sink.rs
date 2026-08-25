@@ -186,7 +186,7 @@ impl AnalyzerHandle {
                         analyzer.tick();
                         std::thread::sleep(Duration::from_millis(30));
                     } else {
-                        while let Some(_) = cons.try_pop() {}
+                        while cons.try_pop().is_some() {}
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 }

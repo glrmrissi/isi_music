@@ -174,13 +174,11 @@ impl PlayerManager {
                 .map(|t| t.elapsed().as_millis() as u64)
                 .unwrap_or(0);
             state.playback.progress_ms = self.progress_at_play_start + elapsed;
-            if state.playback.progress_ms >= state.playback.duration_ms {
-                if self.player.is_none() {
-                    state.playback.is_playing = false;
-                    state.playback.progress_ms = state.playback.duration_ms;
-                    self.playing_started_at = None;
-                    self.progress_at_play_start = state.playback.duration_ms;
-                }
+            if state.playback.progress_ms >= state.playback.duration_ms && self.player.is_none() {
+                state.playback.is_playing = false;
+                state.playback.progress_ms = state.playback.duration_ms;
+                self.playing_started_at = None;
+                self.progress_at_play_start = state.playback.duration_ms;
             }
         } else if self.playing_started_at.is_some() {
             let elapsed = self
@@ -260,7 +258,7 @@ impl PlayerManager {
 
                             debug_overlay.log(
                                 LogLevel::Warn,
-                                format!("Free account detected - switching to local-only mode"),
+                                "Free account detected - switching to local-only mode".to_string(),
                             );
                             state.status_msg = Some(
                                 "Spotify Premium required. Switched to local-only mode."

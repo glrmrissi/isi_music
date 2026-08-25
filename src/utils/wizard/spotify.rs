@@ -80,7 +80,7 @@ pub(super) async fn configure_spotify(cfg: &mut AppConfig) -> anyhow::Result<()>
             style("Add this Redirect URI:").dim(),
             style(clipboard_msg).yellow()
         );
-        println!("  {}       {}", "", style(redirect_uri).yellow().bold());
+        println!("         {}", style(redirect_uri).yellow().bold());
         println!(
             "  {}  {}",
             style("4.").cyan(),

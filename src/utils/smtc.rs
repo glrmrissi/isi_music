@@ -153,12 +153,11 @@ pub fn cleanup_cover_cache() {
             if !name.starts_with("isi-music-cover-") {
                 continue;
             }
-            if let Ok(meta) = entry.metadata() {
-                if let Ok(modified) = meta.modified() {
-                    if modified < cutoff {
-                        let _ = std::fs::remove_file(entry.path());
-                    }
-                }
+            if let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && modified < cutoff
+            {
+                let _ = std::fs::remove_file(entry.path());
             }
         }
     }

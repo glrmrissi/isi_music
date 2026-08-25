@@ -49,7 +49,7 @@ fn visible_len(s: &str) -> usize {
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if c.is_ascii_alphabetic() {
                     break;
                 }

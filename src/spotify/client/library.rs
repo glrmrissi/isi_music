@@ -14,11 +14,11 @@ impl SpotifyClient {
             return Ok((Vec::new(), 0));
         }
         let key = format!("album:{album_id}:{offset}");
-        if let Some(cached) = self.library_cache.get_tracks(&key) {
-            if !cached.0.is_empty() {
-                info!("Library cache hit: album {album_id} offset={offset}");
-                return Ok(cached);
-            }
+        if let Some(cached) = self.library_cache.get_tracks(&key)
+            && !cached.0.is_empty()
+        {
+            info!("Library cache hit: album {album_id} offset={offset}");
+            return Ok(cached);
         }
         let token = self
             .get_access_token()
@@ -106,11 +106,11 @@ impl SpotifyClient {
         if !self.authenticated {
             return Ok((Vec::new(), 0));
         }
-        if offset == 0 {
-            if let Some(cached) = self.library_cache.get_albums() {
-                info!("Library cache hit: saved albums");
-                return Ok(cached);
-            }
+        if offset == 0
+            && let Some(cached) = self.library_cache.get_albums()
+        {
+            info!("Library cache hit: saved albums");
+            return Ok(cached);
         }
         let token = self
             .get_access_token()
@@ -239,29 +239,29 @@ impl SpotifyClient {
         let json: serde_json::Value = response.json().await?;
         let mut artists = Vec::with_capacity(50);
 
-        if let Some(artists_obj) = json["artists"].as_object() {
-            if let Some(items) = artists_obj.get("items").and_then(|v| v.as_array()) {
-                for artist in items {
-                    let id = artist["id"].as_str().unwrap_or("").to_string();
-                    let name = artist["name"].as_str().unwrap_or("Unknown").to_string();
-                    let uri = artist["uri"].as_str().unwrap_or("").to_string();
-                    let genres = artist["genres"]
-                        .as_array()
-                        .map(|g| {
-                            g.iter()
-                                .filter_map(|x| x.as_str())
-                                .take(2)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        })
-                        .unwrap_or_default();
-                    artists.push(ArtistSummary {
-                        id,
-                        name,
-                        uri,
-                        genres,
-                    });
-                }
+        if let Some(artists_obj) = json["artists"].as_object()
+            && let Some(items) = artists_obj.get("items").and_then(|v| v.as_array())
+        {
+            for artist in items {
+                let id = artist["id"].as_str().unwrap_or("").to_string();
+                let name = artist["name"].as_str().unwrap_or("Unknown").to_string();
+                let uri = artist["uri"].as_str().unwrap_or("").to_string();
+                let genres = artist["genres"]
+                    .as_array()
+                    .map(|g| {
+                        g.iter()
+                            .filter_map(|x| x.as_str())
+                            .take(2)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                artists.push(ArtistSummary {
+                    id,
+                    name,
+                    uri,
+                    genres,
+                });
             }
         }
 
@@ -278,11 +278,11 @@ impl SpotifyClient {
             return Ok((Vec::new(), 0));
         }
         let key = format!("artist:{artist_name}:{offset}");
-        if let Some(cached) = self.library_cache.get_tracks(&key) {
-            if !cached.0.is_empty() {
-                info!("Library cache hit: artist {artist_name} offset={offset}");
-                return Ok(cached);
-            }
+        if let Some(cached) = self.library_cache.get_tracks(&key)
+            && !cached.0.is_empty()
+        {
+            info!("Library cache hit: artist {artist_name} offset={offset}");
+            return Ok(cached);
         }
         let token = self
             .get_access_token()

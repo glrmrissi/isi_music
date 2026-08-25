@@ -1,4 +1,5 @@
 #[cfg(feature = "album-art")]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::super::App;
 

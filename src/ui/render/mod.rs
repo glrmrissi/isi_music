@@ -68,7 +68,7 @@ pub(super) fn build_list_window<'a, F>(
     total: usize,
     height: usize,
     list_state: &ListState,
-    mut item_fn: F,
+    item_fn: F,
 ) -> ListWindow<'a>
 where
     F: FnMut(usize) -> ListItem<'a>,
@@ -82,7 +82,7 @@ where
         .saturating_sub(visible / 2)
         .min(total.saturating_sub(visible));
     let end = (start + visible).min(total);
-    let items = (start..end).map(|index| item_fn(index)).collect();
+    let items = (start..end).map(item_fn).collect();
     let local_selected =
         selected.and_then(|index| (index >= start && index < end).then_some(index - start));
 

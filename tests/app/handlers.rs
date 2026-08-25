@@ -10,6 +10,7 @@ use crate::spotify::RepeatState;
 use crate::spotify::TrackSummary;
 use crate::ui::Focus;
 
+#[allow(clippy::duplicate_mod)]
 #[path = "mock_player.rs"]
 mod mock_player;
 use mock_player::MockPlayer;

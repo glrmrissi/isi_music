@@ -1,4 +1,5 @@
 #[cfg(all(feature = "palette", feature = "album-art"))]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::app::App;
     use std::time::{Duration, Instant};
@@ -10,9 +11,11 @@ mod tests {
     use crate::utils::theme::{Theme, ThemeWatcher};
 
     fn make_reactive_theme_mgr() -> ThemeManager {
-        let mut theme = Theme::default();
-        theme.reactive_theme = true;
-        theme.reactive_cross_fade_ms = 100;
+        let theme = Theme {
+            reactive_theme: true,
+            reactive_cross_fade_ms: 100,
+            ..Default::default()
+        };
         let watcher = ThemeWatcher::noop();
         ThemeManager::new(theme, watcher)
     }
@@ -175,9 +178,11 @@ mod tests {
     #[test]
     fn reactive_theme_toggle_pending_preserves_transition() {
         let (watcher, tx) = ThemeWatcher::with_sender();
-        let mut theme = Theme::default();
-        theme.reactive_theme = true;
-        theme.reactive_cross_fade_ms = 100;
+        let theme = Theme {
+            reactive_theme: true,
+            reactive_cross_fade_ms: 100,
+            ..Default::default()
+        };
         let mut mgr = ThemeManager::new(theme, watcher);
 
         let debug = std::sync::Arc::new(DebugOverlay::new());
@@ -310,7 +315,6 @@ mod tests {
             let now = Instant::now() + Duration::from_millis(200 + i * 20);
             if let Some(blended) = mgr.lerp_reactive(now) {
                 last_bg = blended.background;
-                ui = Ui::new(blended, debug.clone());
             }
         }
 

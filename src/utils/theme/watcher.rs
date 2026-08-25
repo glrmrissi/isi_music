@@ -105,12 +105,12 @@ pub fn watch_theme() -> std::io::Result<ThemeWatcher> {
             }
         }
     })
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    .map_err(std::io::Error::other)?;
 
     if let Some(parent) = path.parent() {
         watcher
             .watch(parent.as_ref(), RecursiveMode::NonRecursive)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
     }
 
     Ok(ThemeWatcher {

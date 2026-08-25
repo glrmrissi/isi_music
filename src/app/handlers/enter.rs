@@ -13,23 +13,22 @@ impl App {
         if self.state.compact_effective && self.state.active_content == ActiveContent::None {
             if let Some(pos) = self.state.library_list.selected() {
                 match self.state.compact_item_at(pos) {
-                    Some(CompactItem::LibraryItem(idx)) => {
-                        if self.handle_library_item(idx).await {
-                            if !self.player_mgr.session_reconnecting {
-                                self.player_mgr.session_reconnecting = true;
-                                self.reconnect_player().await;
-                            }
-                        }
+                    Some(CompactItem::LibraryItem(idx))
+                        if self.handle_library_item(idx).await
+                            && !self.player_mgr.session_reconnecting =>
+                    {
+                        self.player_mgr.session_reconnecting = true;
+                        self.reconnect_player().await;
                     }
-                    Some(CompactItem::PlaylistItem(idx)) => {
-                        if self.handle_playlist_item(idx).await {
-                            if !self.player_mgr.session_reconnecting {
-                                self.player_mgr.session_reconnecting = true;
-                                self.reconnect_player().await;
-                            }
-                        }
+                    Some(CompactItem::PlaylistItem(idx))
+                        if self.handle_playlist_item(idx).await
+                            && !self.player_mgr.session_reconnecting =>
+                    {
+                        self.player_mgr.session_reconnecting = true;
+                        self.reconnect_player().await;
                     }
                     None => {}
+                    _ => {}
                 }
             }
             return;
@@ -47,103 +46,101 @@ impl App {
             }
 
             Focus::Playlists => {
-                if let Some(idx) = self.state.playlist_list.selected() {
-                    if idx < self.state.playlists.len() {
-                        if self.handle_playlist_item(idx).await {
-                            needs_reconnect = true;
-                        }
-                    }
+                if let Some(idx) = self.state.playlist_list.selected()
+                    && idx < self.state.playlists.len()
+                    && self.handle_playlist_item(idx).await
+                {
+                    needs_reconnect = true;
                 }
             }
 
             Focus::Tracks => match &self.state.active_content {
                 ActiveContent::Albums => {
-                    if let Some(idx) = self.state.selected_album_index() {
-                        if let Some(album) = self.state.albums.get(idx) {
-                            let id = album.id.clone();
-                            let name = album.name.clone();
-                            self.state.push_nav();
-                            self.state.status_msg = Some(format!("Loading {name}…"));
-                            self.state.loading = true;
-                            self.state.active_playlist_uri = Some(format!("album:{id}"));
-                            self.state.active_playlist_id = Some(format!("album:{id}"));
-                            let spotify = Arc::clone(&self.spotify);
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            self.fetcher.pending_fetch = Some(rx);
-                            tokio::spawn(async move {
-                                let result = spotify
-                                    .fetch_album_tracks(&id, 0)
-                                    .await
-                                    .map_err(|e| e.to_string());
-                                let _ = tx.send(FetchResult::AlbumTracks(result));
-                            });
-                        }
+                    if let Some(idx) = self.state.selected_album_index()
+                        && let Some(album) = self.state.albums.get(idx)
+                    {
+                        let id = album.id.clone();
+                        let name = album.name.clone();
+                        self.state.push_nav();
+                        self.state.status_msg = Some(format!("Loading {name}…"));
+                        self.state.loading = true;
+                        self.state.active_playlist_uri = Some(format!("album:{id}"));
+                        self.state.active_playlist_id = Some(format!("album:{id}"));
+                        let spotify = Arc::clone(&self.spotify);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        self.fetcher.pending_fetch = Some(rx);
+                        tokio::spawn(async move {
+                            let result = spotify
+                                .fetch_album_tracks(&id, 0)
+                                .await
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(FetchResult::AlbumTracks(result));
+                        });
                     }
                 }
                 ActiveContent::Artists => {
-                    if let Some(idx) = self.state.selected_artist_index() {
-                        if let Some(artist) = self.state.artists.get(idx) {
-                            let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
-                            let name = artist.name.clone();
-                            self.state.push_nav();
-                            self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
-                            self.state.loading = true;
-                            self.state.active_artist_name = Some(name.clone());
-                            self.state.active_playlist_uri = Some(format!("artist:{id}"));
-                            self.state.active_playlist_id = Some(format!("artist:{id}"));
-                            let spotify = Arc::clone(&self.spotify);
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            self.fetcher.pending_fetch = Some(rx);
-                            tokio::spawn(async move {
-                                let result = spotify
-                                    .fetch_artist_tracks(&name, 0)
-                                    .await
-                                    .map_err(|e| e.to_string());
-                                let _ = tx.send(FetchResult::ArtistTracks(result));
-                            });
-                        }
+                    if let Some(idx) = self.state.selected_artist_index()
+                        && let Some(artist) = self.state.artists.get(idx)
+                    {
+                        let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
+                        let name = artist.name.clone();
+                        self.state.push_nav();
+                        self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
+                        self.state.loading = true;
+                        self.state.active_artist_name = Some(name.clone());
+                        self.state.active_playlist_uri = Some(format!("artist:{id}"));
+                        self.state.active_playlist_id = Some(format!("artist:{id}"));
+                        let spotify = Arc::clone(&self.spotify);
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        self.fetcher.pending_fetch = Some(rx);
+                        tokio::spawn(async move {
+                            let result = spotify
+                                .fetch_artist_tracks(&name, 0)
+                                .await
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(FetchResult::ArtistTracks(result));
+                        });
                     }
                 }
                 ActiveContent::Shows => {
-                    if let Some(idx) = self.state.selected_show_index() {
-                        if let Some(show) = self.state.shows.get(idx) {
-                            let id = show.id.clone();
-                            let name = show.name.clone();
-                            self.state.push_nav();
-                            self.state.status_msg = Some(format!("Loading {name}…"));
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            match self.spotify.fetch_show_episodes(&id, 0).await {
-                                Ok((tracks, total)) => {
-                                    self.state.tracks = tracks;
-                                    self.state.tracks_total = total;
-                                    self.state.tracks_offset = self.state.tracks.len() as u32;
-                                    self.state.tracks_api_offset = self.state.tracks.len() as u32;
-                                    self.state.active_playlist_uri = Some(format!("show:{id}"));
-                                    self.state.active_playlist_id = Some(format!("show:{id}"));
-                                    self.state
-                                        .track_list
-                                        .select(if self.state.tracks.is_empty() {
-                                            None
-                                        } else {
-                                            Some(0)
-                                        });
-                                    self.state.active_content = ActiveContent::Tracks;
-                                    self.state.rebuild_sort_indices();
-                                    self.state.status_msg = None;
-                                }
-                                Err(e) => {
-                                    let err_str = e.to_string();
-                                    if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                        || err_str.contains("401")
-                                    {
-                                        warn!("Got 401 - triggering reconnect");
-                                        needs_reconnect = true;
-                                        self.state.status_msg = Some(
-                                            "Authorization expired, reconnecting...".to_string(),
-                                        );
+                    if let Some(idx) = self.state.selected_show_index()
+                        && let Some(show) = self.state.shows.get(idx)
+                    {
+                        let id = show.id.clone();
+                        let name = show.name.clone();
+                        self.state.push_nav();
+                        self.state.status_msg = Some(format!("Loading {name}…"));
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        match self.spotify.fetch_show_episodes(&id, 0).await {
+                            Ok((tracks, total)) => {
+                                self.state.tracks = tracks;
+                                self.state.tracks_total = total;
+                                self.state.tracks_offset = self.state.tracks.len() as u32;
+                                self.state.tracks_api_offset = self.state.tracks.len() as u32;
+                                self.state.active_playlist_uri = Some(format!("show:{id}"));
+                                self.state.active_playlist_id = Some(format!("show:{id}"));
+                                self.state
+                                    .track_list
+                                    .select(if self.state.tracks.is_empty() {
+                                        None
                                     } else {
-                                        self.state.status_msg = Some(format!("Error: {e}"));
-                                    }
+                                        Some(0)
+                                    });
+                                self.state.active_content = ActiveContent::Tracks;
+                                self.state.rebuild_sort_indices();
+                                self.state.status_msg = None;
+                            }
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                if err_str.contains("SPOTIFY_UNAUTHORIZED")
+                                    || err_str.contains("401")
+                                {
+                                    warn!("Got 401 - triggering reconnect");
+                                    needs_reconnect = true;
+                                    self.state.status_msg =
+                                        Some("Authorization expired, reconnecting...".to_string());
+                                } else {
+                                    self.state.status_msg = Some(format!("Error: {e}"));
                                 }
                             }
                         }

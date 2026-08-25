@@ -342,18 +342,19 @@ impl Theme {
     }
 
     fn migrate_from_legacy(legacy: &Theme) -> Theme {
-        let mut migrated = Theme::default();
-        migrated.layout_tree = legacy.layout_tree.clone();
-        migrated.compact_layout = legacy.compact_layout.clone();
-        migrated.fullscreen_layout = legacy.fullscreen_layout.clone();
-        migrated.widget_styles = legacy.widget_styles.clone();
-        migrated.ascii_art = legacy.ascii_art.clone();
-        migrated.ascii_art_inline = legacy.ascii_art_inline.clone();
-        migrated.ascii_art_path = legacy.ascii_art_path.clone();
-        migrated.show_ascii_art = legacy.show_ascii_art;
-        migrated.highlight_symbol = legacy.highlight_symbol.clone();
-        migrated.options_panel_symbol = legacy.options_panel_symbol.clone();
-        migrated
+        Theme {
+            layout_tree: legacy.layout_tree.clone(),
+            compact_layout: legacy.compact_layout.clone(),
+            fullscreen_layout: legacy.fullscreen_layout.clone(),
+            widget_styles: legacy.widget_styles.clone(),
+            ascii_art: legacy.ascii_art.clone(),
+            ascii_art_inline: legacy.ascii_art_inline.clone(),
+            ascii_art_path: legacy.ascii_art_path.clone(),
+            show_ascii_art: legacy.show_ascii_art,
+            highlight_symbol: legacy.highlight_symbol.clone(),
+            options_panel_symbol: legacy.options_panel_symbol.clone(),
+            ..Default::default()
+        }
     }
 
     pub fn watch() -> std::io::Result<ThemeWatcher> {
@@ -361,16 +362,16 @@ impl Theme {
     }
 
     pub fn load_ascii_art(&self) -> Option<Vec<String>> {
-        if let Some(ref lines) = self.ascii_art_inline {
-            if !lines.is_empty() {
-                return Some(lines.clone());
-            }
+        if let Some(ref lines) = self.ascii_art_inline
+            && !lines.is_empty()
+        {
+            return Some(lines.clone());
         }
 
-        if let Some(ref path) = self.ascii_art_path {
-            if let Ok(content) = fs::read_to_string(path) {
-                return Some(content.lines().map(|s| s.to_string()).collect());
-            }
+        if let Some(ref path) = self.ascii_art_path
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            return Some(content.lines().map(|s| s.to_string()).collect());
         }
         None
     }

@@ -265,14 +265,14 @@ fn template_gallery(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
 
 pub(super) fn parse_hex(hex: &str) -> ratatui::style::Color {
     let h = hex.trim_start_matches('#');
-    if h.len() == 6 {
-        if let (Ok(r), Ok(g), Ok(b)) = (
+    if h.len() == 6
+        && let (Ok(r), Ok(g), Ok(b)) = (
             u8::from_str_radix(&h[0..2], 16),
             u8::from_str_radix(&h[2..4], 16),
             u8::from_str_radix(&h[4..6], 16),
-        ) {
-            return ratatui::style::Color::Rgb(r, g, b);
-        }
+        )
+    {
+        return ratatui::style::Color::Rgb(r, g, b);
     }
     ratatui::style::Color::White
 }

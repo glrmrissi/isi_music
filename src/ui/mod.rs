@@ -103,32 +103,25 @@ impl Ui {
         }
 
         let mut tree = self.theme.fullscreen_layout.clone();
-        if !state.show_lyrics {
-            if let Some(children) = &mut tree.children {
-                if let Some(constraints) = &mut tree.constraints {
-                    if let Some(idx) = children.iter().position(|c| {
-                        c.widget == Some(UiWidget::FullscreenLyrics)
-                            || c.widget == Some(UiWidget::Lyrics)
-                    }) {
-                        children.remove(idx);
-                        constraints.remove(idx);
-                    }
-                }
-            }
+        if !state.show_lyrics
+            && let Some(children) = &mut tree.children
+            && let Some(constraints) = &mut tree.constraints
+            && let Some(idx) = children.iter().position(|c| {
+                c.widget == Some(UiWidget::FullscreenLyrics) || c.widget == Some(UiWidget::Lyrics)
+            })
+        {
+            children.remove(idx);
+            constraints.remove(idx);
         }
-        if !state.show_album_art {
-            if let Some(constraints) = &mut tree.constraints {
-                if let Some(children) = &tree.children {
-                    if let Some(idx) = children
-                        .iter()
-                        .position(|c| c.widget == Some(UiWidget::NowPlaying))
-                    {
-                        if idx < constraints.len() {
-                            constraints[idx] = SerializableConstraint::Length(8);
-                        }
-                    }
-                }
-            }
+        if !state.show_album_art
+            && let Some(constraints) = &mut tree.constraints
+            && let Some(children) = &tree.children
+            && let Some(idx) = children
+                .iter()
+                .position(|c| c.widget == Some(UiWidget::NowPlaying))
+            && idx < constraints.len()
+        {
+            constraints[idx] = SerializableConstraint::Length(8);
         }
         self.cached_fullscreen = Some(tree);
         self.cached_fullscreen_show_lyrics = state.show_lyrics;

@@ -281,7 +281,7 @@ impl DebugOverlay {
         frame.render_widget(Paragraph::new(proc_lines), cols[0]);
     }
 
-    fn render_logs<'a>(&self, frame: &mut Frame, logs: &VecDeque<LogEntry>, area: Rect) {
+    fn render_logs(&self, frame: &mut Frame, logs: &VecDeque<LogEntry>, area: Rect) {
         let visible = area.height as usize;
         let skip = logs.len().saturating_sub(visible);
 

@@ -101,42 +101,42 @@ impl App {
             return;
         }
 
-        if let Some(player) = &self.player_mgr.player {
-            if let Some(idx) = player.current_index() {
-                if let Some(track) = self.player_mgr.playing_tracks.get(idx) {
-                    self.state.playback.title = track.name.clone();
-                    self.state.playback.artist = track.artist.clone();
-                    self.state.playback.album = track.album.clone();
+        if let Some(player) = &self.player_mgr.player
+            && let Some(idx) = player.current_index()
+        {
+            if let Some(track) = self.player_mgr.playing_tracks.get(idx) {
+                self.state.playback.title = track.name.clone();
+                self.state.playback.artist = track.artist.clone();
+                self.state.playback.album = track.album.clone();
 
-                    if self.player_mgr.local_active {
-                        self.state.playback.cover_path = track.cover_path.clone();
-                    } else {
-                        self.state.playback.art_url = track.cover_path.clone();
-                        // Spotify tracks don't carry a local cover path; clear
-                        // the previous track's cached cover so the SMTC/MPRIS
-                        // thumbnail doesn't show a stale image until the new
-                        // cover is fetched.
-                        self.state.playback.cover_path = None;
-                    }
-                    self.debug_overlay.log(
-                        crate::utils::debug_overlay::LogLevel::Info,
-                        format!("Loading cover from: {:?}", self.state.playback.cover_path),
-                    );
-
-                    self.state.playback.duration_ms = track.duration_ms;
-                    self.state.playback.progress_ms = 0;
-
-                    self.current_track_uri = track.uri.clone();
-
-                    self.on_track_started();
+                if self.player_mgr.local_active {
+                    self.state.playback.cover_path = track.cover_path.clone();
+                } else {
+                    self.state.playback.art_url = track.cover_path.clone();
+                    // Spotify tracks don't carry a local cover path; clear
+                    // the previous track's cached cover so the SMTC/MPRIS
+                    // thumbnail doesn't show a stale image until the new
+                    // cover is fetched.
+                    self.state.playback.cover_path = None;
                 }
+                self.debug_overlay.log(
+                    crate::utils::debug_overlay::LogLevel::Info,
+                    format!("Loading cover from: {:?}", self.state.playback.cover_path),
+                );
 
-                if self.player_mgr.playing_tracks.len() == self.state.tracks.len()
-                    && self.player_mgr.playing_tracks.get(idx).map(|t| &t.uri)
-                        == self.state.tracks.get(idx).map(|t| &t.uri)
-                {
-                    self.state.track_list.select(Some(idx));
-                }
+                self.state.playback.duration_ms = track.duration_ms;
+                self.state.playback.progress_ms = 0;
+
+                self.current_track_uri = track.uri.clone();
+
+                self.on_track_started();
+            }
+
+            if self.player_mgr.playing_tracks.len() == self.state.tracks.len()
+                && self.player_mgr.playing_tracks.get(idx).map(|t| &t.uri)
+                    == self.state.tracks.get(idx).map(|t| &t.uri)
+            {
+                self.state.track_list.select(Some(idx));
             }
         }
     }
@@ -145,10 +145,10 @@ impl App {
         if self.player_mgr.local_active {
             return;
         }
-        if let Some(ref mut p) = self.player_mgr.player {
-            if p.is_playing() {
-                p.pause();
-            }
+        if let Some(ref mut p) = self.player_mgr.player
+            && p.is_playing()
+        {
+            p.pause();
         }
         self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
@@ -172,10 +172,10 @@ impl App {
         if !self.player_mgr.local_active {
             return;
         }
-        if let Some(ref mut p) = self.player_mgr.player {
-            if p.is_playing() {
-                p.pause();
-            }
+        if let Some(ref mut p) = self.player_mgr.player
+            && p.is_playing()
+        {
+            p.pause();
         }
         self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
@@ -256,11 +256,7 @@ impl App {
                         );
                     }
                     self.player_mgr.playing_tracks.extend(tracks);
-                    let label = if self.player_mgr.radio_mode {
-                        "Autoplay"
-                    } else {
-                        "Autoplay"
-                    };
+                    let label = "Autoplay";
                     self.state.status_msg = Some(format!("{label}: queued {count} tracks"));
                     self.sync_queue_display();
                 }
@@ -440,7 +436,7 @@ impl App {
                 info!("Librespot session reconnected successfully");
                 self.debug_overlay.log(
                     crate::utils::debug_overlay::LogLevel::Info,
-                    format!("Librespot session reconnected successfully"),
+                    "Librespot session reconnected successfully".to_string(),
                 );
                 self.player_mgr.reconnect_attempts = 0;
                 self.player_mgr.last_reconnect_attempt = None;
@@ -452,7 +448,7 @@ impl App {
                     warn!("Spotify free account — disabling streaming permanently");
                     self.debug_overlay.log(
                         crate::utils::debug_overlay::LogLevel::Warn,
-                        format!("Spotify free account — disabling streaming permanently"),
+                        "Spotify free account — disabling streaming permanently".to_string(),
                     );
                     self.player_mgr.spotify_streaming_disabled = true;
                     self.state.status_msg =

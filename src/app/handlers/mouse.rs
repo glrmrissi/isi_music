@@ -24,7 +24,7 @@ impl App {
                 let (cx, cy) = (event.column, event.row);
 
                 // Don't process clicks when settings panel is open
-                if self.settings_panel.as_ref().map_or(false, |p| p.visible) {
+                if self.settings_panel.as_ref().is_some_and(|p| p.visible) {
                     return Ok(());
                 }
 

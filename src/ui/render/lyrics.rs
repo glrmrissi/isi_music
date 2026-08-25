@@ -62,7 +62,7 @@ impl Ui {
                     if abs == active {
                         ListItem::new(
                             Line::from(Span::styled(
-                                format!("{}", line.text),
+                                line.text.to_string(),
                                 Style::default()
                                     .fg(self.theme.primary)
                                     .add_modifier(Modifier::BOLD),
@@ -79,7 +79,7 @@ impl Ui {
                                 .add_modifier(Modifier::DIM)
                         };
                         ListItem::new(
-                            Line::from(Span::styled(format!("{}", line.text), style))
+                            Line::from(Span::styled(line.text.to_string(), style))
                                 .alignment(Alignment::Center),
                         )
                     }
@@ -98,7 +98,7 @@ impl Ui {
                 .take(visible_rows)
                 .map(|l| {
                     Line::from(Span::styled(
-                        format!("{}", l.text),
+                        l.text.to_string(),
                         Style::default().fg(self.theme.text_primary),
                     ))
                     .alignment(Alignment::Center)
@@ -131,31 +131,24 @@ impl Ui {
         let next = lyrics.lines.get(active + 1).map(|l| l.text.as_str());
 
         let lines: Vec<Line> = std::iter::once(Line::from(""))
-            .chain(
-                current
-                    .map(|t| {
-                        Line::from(Span::styled(
-                            t,
-                            Style::default()
-                                .fg(self.theme.primary)
-                                .add_modifier(Modifier::BOLD),
-                        ))
-                        .alignment(Alignment::Center)
-                    })
-                    .into_iter(),
-            )
-            .chain(
-                next.map(|t| {
-                    Line::from(Span::styled(
-                        t,
-                        Style::default()
-                            .fg(self.theme.text_secondary)
-                            .add_modifier(Modifier::DIM),
-                    ))
-                    .alignment(Alignment::Center)
-                })
-                .into_iter(),
-            )
+            .chain(current.map(|t| {
+                Line::from(Span::styled(
+                    t,
+                    Style::default()
+                        .fg(self.theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .alignment(Alignment::Center)
+            }))
+            .chain(next.map(|t| {
+                Line::from(Span::styled(
+                    t,
+                    Style::default()
+                        .fg(self.theme.text_secondary)
+                        .add_modifier(Modifier::DIM),
+                ))
+                .alignment(Alignment::Center)
+            }))
             .collect();
 
         if lines.len() <= 1 {

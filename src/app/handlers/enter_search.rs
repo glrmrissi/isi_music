@@ -27,29 +27,27 @@ impl App {
                         self.current_track_uri = track_uri.clone();
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         player.set_queue(vec![track_uri], 0);
-                        if let Some(sr) = &self.state.search_results {
-                            if let Some(idx) = sr.track_list.selected() {
-                                if let Some(t) = sr.tracks.get(idx) {
-                                    self.state.playback.title = t.name.clone();
-                                    self.state.playback.artist = t.artist.clone();
-                                    self.state.playback.album = t.album.clone();
-                                    self.state.playback.duration_ms = t.duration_ms;
-                                    self.state.playback.progress_ms = 0;
-                                    self.state.playback.is_playing = true;
-                                    self.state.playback.is_local = false;
-                                    self.player_mgr.playing_tracks =
-                                        vec![crate::spotify::TrackSummary {
-                                            uri: t.uri.clone(),
-                                            name: t.name.clone(),
-                                            artist: t.artist.clone(),
-                                            album: t.album.clone(),
-                                            duration_ms: t.duration_ms,
-                                            cover_path: t.cover_path.clone(),
-                                            added_at: None,
-                                        }];
-                                    self.on_track_started();
-                                }
-                            }
+                        if let Some(sr) = &self.state.search_results
+                            && let Some(idx) = sr.track_list.selected()
+                            && let Some(t) = sr.tracks.get(idx)
+                        {
+                            self.state.playback.title = t.name.clone();
+                            self.state.playback.artist = t.artist.clone();
+                            self.state.playback.album = t.album.clone();
+                            self.state.playback.duration_ms = t.duration_ms;
+                            self.state.playback.progress_ms = 0;
+                            self.state.playback.is_playing = true;
+                            self.state.playback.is_local = false;
+                            self.player_mgr.playing_tracks = vec![crate::spotify::TrackSummary {
+                                uri: t.uri.clone(),
+                                name: t.name.clone(),
+                                artist: t.artist.clone(),
+                                album: t.album.clone(),
+                                duration_ms: t.duration_ms,
+                                cover_path: t.cover_path.clone(),
+                                added_at: None,
+                            }];
+                            self.on_track_started();
                         }
                     } else if self.spotify.authenticated {
                         let _ = self.spotify.play_track_uri(&track_uri).await;

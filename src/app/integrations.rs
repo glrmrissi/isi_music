@@ -27,14 +27,19 @@ pub struct IntegrationManager {
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     pub mpris: Option<MprisHandle>,
     #[cfg(feature = "mpris")]
+    #[allow(dead_code)]
     mpris_last_title: String,
     #[cfg(feature = "mpris")]
+    #[allow(dead_code)]
     mpris_last_artist: String,
     #[cfg(feature = "mpris")]
+    #[allow(dead_code)]
     mpris_last_album: String,
     #[cfg(feature = "mpris")]
+    #[allow(dead_code)]
     mpris_last_playing: bool,
     #[cfg(feature = "mpris")]
+    #[allow(dead_code)]
     mpris_last_art: Option<String>,
     #[cfg(windows)]
     pub media_keys: Option<MediaKeysHandle>,

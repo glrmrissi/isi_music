@@ -151,7 +151,7 @@ impl LocalPlayer {
 
         std::thread::spawn(move || match OutputStreamBuilder::open_default_stream() {
             Ok(stream) => {
-                let sink = Sink::connect_new(&stream.mixer());
+                let sink = Sink::connect_new(stream.mixer());
                 if sync_tx.send(Ok(sink)).is_ok() {
                     let _keep_alive = stream;
                     loop {
@@ -249,10 +249,10 @@ impl LocalPlayer {
             None => return false,
         };
 
-        if let Some(total) = decoder.total_duration() {
-            if let Some(track) = self.queue.get_mut(idx) {
-                track.duration_ms = total.as_millis() as u64;
-            }
+        if let Some(total) = decoder.total_duration()
+            && let Some(track) = self.queue.get_mut(idx)
+        {
+            track.duration_ms = total.as_millis() as u64;
         }
 
         if self.analyzer.enabled() {
@@ -286,10 +286,10 @@ impl LocalPlayer {
                 if let Ok(mut w) = waveform.lock() {
                     *w = Some(data);
                 }
-                if dur > 0 {
-                    if let Ok(mut d) = duration_measured.lock() {
-                        *d = Some(dur);
-                    }
+                if dur > 0
+                    && let Ok(mut d) = duration_measured.lock()
+                {
+                    *d = Some(dur);
                 }
             }
         });
@@ -316,10 +316,10 @@ impl LocalPlayer {
             None => return false,
         };
 
-        if let Some(total) = decoder.total_duration() {
-            if let Some(track) = self.queue.get_mut(idx) {
-                track.duration_ms = total.as_millis() as u64;
-            }
+        if let Some(total) = decoder.total_duration()
+            && let Some(track) = self.queue.get_mut(idx)
+        {
+            track.duration_ms = total.as_millis() as u64;
         }
 
         if self.analyzer.enabled() {
@@ -347,10 +347,10 @@ impl LocalPlayer {
                 if let Ok(mut w) = waveform.lock() {
                     *w = Some(data);
                 }
-                if dur > 0 {
-                    if let Ok(mut d) = duration_measured.lock() {
-                        *d = Some(dur);
-                    }
+                if dur > 0
+                    && let Ok(mut d) = duration_measured.lock()
+                {
+                    *d = Some(dur);
                 }
             }
         });
@@ -395,14 +395,12 @@ impl LocalPlayer {
             return;
         }
 
-        if let Ok(mut d) = self.duration_measured.lock() {
-            if let Some(dur) = d.take() {
-                if let Some(idx) = self.current_idx {
-                    if let Some(t) = self.queue.get_mut(idx) {
-                        t.duration_ms = dur;
-                    }
-                }
-            }
+        if let Ok(mut d) = self.duration_measured.lock()
+            && let Some(dur) = d.take()
+            && let Some(idx) = self.current_idx
+            && let Some(t) = self.queue.get_mut(idx)
+        {
+            t.duration_ms = dur;
         }
 
         if let Some(t) = self.load_guard {

@@ -6,46 +6,41 @@ use std::sync::Arc;
 impl App {
     pub async fn maybe_load_more(&mut self) {
         if self.state.focus == Focus::Search {
-            let should_load = self
-                .state
-                .search_results
-                .as_ref()
-                .map(|sr| {
-                    if sr.loading {
-                        return None;
-                    }
-                    let (selected, len, total, stype) = match sr.panel {
-                        SearchPanel::Tracks => (
-                            sr.track_list.selected().unwrap_or(0),
-                            sr.tracks.len(),
-                            sr.tracks_total,
-                            "track",
-                        ),
-                        SearchPanel::Artists => (
-                            sr.artist_list.selected().unwrap_or(0),
-                            sr.artists.len(),
-                            sr.artists_total,
-                            "artist",
-                        ),
-                        SearchPanel::Albums => (
-                            sr.album_list.selected().unwrap_or(0),
-                            sr.albums.len(),
-                            sr.albums_total,
-                            "album",
-                        ),
-                        SearchPanel::Playlists => (
-                            sr.playlist_list.selected().unwrap_or(0),
-                            sr.playlists.len(),
-                            sr.playlists_total,
-                            "playlist",
-                        ),
-                    };
-                    if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
-                        return None;
-                    }
-                    Some((sr.query.clone(), len as u32, stype))
-                })
-                .flatten();
+            let should_load = self.state.search_results.as_ref().and_then(|sr| {
+                if sr.loading {
+                    return None;
+                }
+                let (selected, len, total, stype) = match sr.panel {
+                    SearchPanel::Tracks => (
+                        sr.track_list.selected().unwrap_or(0),
+                        sr.tracks.len(),
+                        sr.tracks_total,
+                        "track",
+                    ),
+                    SearchPanel::Artists => (
+                        sr.artist_list.selected().unwrap_or(0),
+                        sr.artists.len(),
+                        sr.artists_total,
+                        "artist",
+                    ),
+                    SearchPanel::Albums => (
+                        sr.album_list.selected().unwrap_or(0),
+                        sr.albums.len(),
+                        sr.albums_total,
+                        "album",
+                    ),
+                    SearchPanel::Playlists => (
+                        sr.playlist_list.selected().unwrap_or(0),
+                        sr.playlists.len(),
+                        sr.playlists_total,
+                        "playlist",
+                    ),
+                };
+                if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
+                    return None;
+                }
+                Some((sr.query.clone(), len as u32, stype))
+            });
 
             if let Some((query, offset, stype)) = should_load {
                 if let Some(sr) = self.state.search_results.as_mut() {
@@ -210,7 +205,7 @@ impl App {
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
                 }
-                None => return,
+                None => (),
             }
         }
     }
@@ -329,10 +324,10 @@ impl App {
             else {
                 return;
             };
-            if let Ok(resp) = http.get(&url).send().await {
-                if let Ok(bytes) = resp.bytes().await {
-                    let _ = tx.send(bytes.to_vec());
-                }
+            if let Ok(resp) = http.get(&url).send().await
+                && let Ok(bytes) = resp.bytes().await
+            {
+                let _ = tx.send(bytes.to_vec());
             }
         });
     }
@@ -357,7 +352,6 @@ impl App {
                         let _ = tx.send(bytes);
                     }
                 });
-                return;
             }
         }
     }

@@ -105,16 +105,15 @@ impl App {
             self.state.status_msg = Some(format!("Loaded: {playlist_name}"));
             self.needs_redraw = true;
 
-            if let Some(target_real) = self.state.tracks.iter().position(|t| matches(t)) {
-                if let Some(target_vi) = self
+            if let Some(target_real) = self.state.tracks.iter().position(matches)
+                && let Some(target_vi) = self
                     .state
                     .sorted_track_indices
                     .iter()
                     .position(|&r| r == target_real)
-                {
-                    self.select_track_in_view(target_vi, false);
-                    self.state.status_msg = Some("Jumped to playing track".to_string());
-                }
+            {
+                self.select_track_in_view(target_vi, false);
+                self.state.status_msg = Some("Jumped to playing track".to_string());
             }
         }
     }
@@ -137,16 +136,15 @@ impl App {
             self.state.track_list.select(Some(0));
             self.needs_redraw = true;
 
-            if let Some(target_real) = self.state.tracks.iter().position(|t| matches(t)) {
-                if let Some(target_vi) = self
+            if let Some(target_real) = self.state.tracks.iter().position(matches)
+                && let Some(target_vi) = self
                     .state
                     .sorted_track_indices
                     .iter()
                     .position(|&r| r == target_real)
-                {
-                    self.select_track_in_view(target_vi, false);
-                    self.state.status_msg = Some("Jumped to playing track".to_string());
-                }
+            {
+                self.select_track_in_view(target_vi, false);
+                self.state.status_msg = Some("Jumped to playing track".to_string());
             }
         }
     }
@@ -170,16 +168,15 @@ impl App {
             self.state.track_list.select(Some(0));
             self.needs_redraw = true;
 
-            if let Some(target_real) = self.state.tracks.iter().position(|t| matches(t)) {
-                if let Some(target_vi) = self
+            if let Some(target_real) = self.state.tracks.iter().position(matches)
+                && let Some(target_vi) = self
                     .state
                     .sorted_track_indices
                     .iter()
                     .position(|&r| r == target_real)
-                {
-                    self.select_track_in_view(target_vi, false);
-                    self.state.status_msg = Some("Jumped to playing track".to_string());
-                }
+            {
+                self.select_track_in_view(target_vi, false);
+                self.state.status_msg = Some("Jumped to playing track".to_string());
             }
         }
     }
@@ -199,7 +196,7 @@ impl App {
                     .unwrap_or(false)
             })
         } else {
-            let target_real = self.state.tracks.iter().position(|t| matches(t));
+            let target_real = self.state.tracks.iter().position(matches);
             target_real.and_then(|real| {
                 self.state
                     .sorted_track_indices

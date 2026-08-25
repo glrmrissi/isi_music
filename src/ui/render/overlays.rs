@@ -30,14 +30,14 @@ impl Ui {
                 .split(area);
 
             let art_area = cols[0];
-            if let Some(art) = &mut state.album_art {
-                if let Some(img_state) = &mut art.image_state {
-                    frame.render_stateful_widget(
-                        ratatui_image::StatefulImage::<StatefulProtocol>::default(),
-                        art_area,
-                        img_state,
-                    );
-                }
+            if let Some(art) = &mut state.album_art
+                && let Some(img_state) = &mut art.image_state
+            {
+                frame.render_stateful_widget(
+                    ratatui_image::StatefulImage::<StatefulProtocol>::default(),
+                    art_area,
+                    img_state,
+                );
             }
             cols[2]
         } else {

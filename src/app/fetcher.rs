@@ -5,6 +5,16 @@ use crate::ui::UiState;
 use crate::utils::debug_overlay::DebugOverlay;
 use crate::utils::lyrics::LyricsHandle;
 
+type MoreTracksResult = Result<
+    (
+        Vec<crate::spotify::TrackSummary>,
+        u32,
+        Option<String>,
+        Option<u32>,
+    ),
+    String,
+>;
+
 pub enum FetchResult {
     LikedTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     Albums(Result<(Vec<crate::spotify::AlbumSummary>, u32), String>),
@@ -12,17 +22,7 @@ pub enum FetchResult {
     PlaylistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32, u32), String>),
     AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
-    MoreTracks(
-        Result<
-            (
-                Vec<crate::spotify::TrackSummary>,
-                u32,
-                Option<String>,
-                Option<u32>,
-            ),
-            String,
-        >,
-    ),
+    MoreTracks(MoreTracksResult),
 }
 
 pub struct FetchCoordinator {
@@ -319,12 +319,11 @@ impl FetchCoordinator {
                         })
                         .map(|display_idx| display_idx + 1)
                         .or_else(|| selected_display.map(|display_idx| display_idx + 1));
-                    if let Some(next_display) = next_display {
-                        if next_display < state.sorted_track_indices.len()
-                            && state.tracks.len() > old_track_len
-                        {
-                            state.track_list.select(Some(next_display));
-                        }
+                    if let Some(next_display) = next_display
+                        && next_display < state.sorted_track_indices.len()
+                        && state.tracks.len() > old_track_len
+                    {
+                        state.track_list.select(Some(next_display));
                     }
                 }
                 false

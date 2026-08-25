@@ -162,31 +162,27 @@ impl SpotifyClient {
                 if !seed_artists.iter().any(|(i, _)| i == id) {
                     seed_artists.push((id.to_string(), String::new()));
                 }
-            } else if let Some(track_id) = uri.strip_prefix("spotify:track:") {
-                if let Ok(resp) = self
+            } else if let Some(track_id) = uri.strip_prefix("spotify:track:")
+                && let Ok(resp) = self
                     .http
                     .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
                     .bearer_auth(&token)
                     .send()
                     .await
-                {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let (Some(a_id), Some(a_name)) = (
-                            json["artists"]
-                                .as_array()
-                                .and_then(|a| a.first())
-                                .and_then(|a| a["id"].as_str()),
-                            json["artists"]
-                                .as_array()
-                                .and_then(|a| a.first())
-                                .and_then(|a| a["name"].as_str()),
-                        ) {
-                            if !seed_artists.iter().any(|(i, _)| i == a_id) {
-                                seed_artists.push((a_id.to_string(), a_name.to_string()));
-                            }
-                        }
-                    }
-                }
+                && let Ok(json) = resp.json::<serde_json::Value>().await
+                && let (Some(a_id), Some(a_name)) = (
+                    json["artists"]
+                        .as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|a| a["id"].as_str()),
+                    json["artists"]
+                        .as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|a| a["name"].as_str()),
+                )
+                && !seed_artists.iter().any(|(i, _)| i == a_id)
+            {
+                seed_artists.push((a_id.to_string(), a_name.to_string()));
             }
         }
 
@@ -213,56 +209,53 @@ impl SpotifyClient {
                 .query(&album_query)
                 .send()
                 .await
+                && let Ok(json) = resp.json::<serde_json::Value>().await
             {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    let album_ids: Vec<String> = json["items"]
-                        .as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(|a| a["id"].as_str())
-                        .take(4)
-                        .map(|s| s.to_string())
-                        .collect();
+                let album_ids: Vec<String> = json["items"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|a| a["id"].as_str())
+                    .take(4)
+                    .map(|s| s.to_string())
+                    .collect();
 
-                    for album_id in &album_ids {
-                        let track_query: Vec<(&str, &str)> =
-                            vec![("limit", "10"), ("market", "from_token")];
-                        if let Ok(resp2) = self
-                            .http
-                            .get(format!(
-                                "https://api.spotify.com/v1/albums/{album_id}/tracks"
-                            ))
-                            .bearer_auth(&token)
-                            .query(&track_query)
-                            .send()
-                            .await
-                        {
-                            if let Ok(json2) = resp2.json::<serde_json::Value>().await {
-                                if let Some(items) = json2["items"].as_array() {
-                                    for track in items {
-                                        if let Some(artists) = track["artists"].as_array() {
-                                            for a in artists {
-                                                if let Some(name) = a["name"].as_str() {
-                                                    let is_seed = seed_artist_names
-                                                        .iter()
-                                                        .any(|n| n.eq_ignore_ascii_case(name));
-                                                    if !is_seed
-                                                        && !featured_artists
-                                                            .iter()
-                                                            .any(|n| n.eq_ignore_ascii_case(name))
-                                                    {
-                                                        featured_artists.push(name.to_string());
-                                                    }
-                                                }
-                                            }
+                for album_id in &album_ids {
+                    let track_query: Vec<(&str, &str)> =
+                        vec![("limit", "10"), ("market", "from_token")];
+                    if let Ok(resp2) = self
+                        .http
+                        .get(format!(
+                            "https://api.spotify.com/v1/albums/{album_id}/tracks"
+                        ))
+                        .bearer_auth(&token)
+                        .query(&track_query)
+                        .send()
+                        .await
+                        && let Ok(json2) = resp2.json::<serde_json::Value>().await
+                        && let Some(items) = json2["items"].as_array()
+                    {
+                        for track in items {
+                            if let Some(artists) = track["artists"].as_array() {
+                                for a in artists {
+                                    if let Some(name) = a["name"].as_str() {
+                                        let is_seed = seed_artist_names
+                                            .iter()
+                                            .any(|n| n.eq_ignore_ascii_case(name));
+                                        if !is_seed
+                                            && !featured_artists
+                                                .iter()
+                                                .any(|n| n.eq_ignore_ascii_case(name))
+                                        {
+                                            featured_artists.push(name.to_string());
                                         }
                                     }
                                 }
                             }
                         }
-                        if featured_artists.len() >= 10 {
-                            break;
-                        }
+                    }
+                    if featured_artists.len() >= 10 {
+                        break;
                     }
                 }
             }
@@ -293,48 +286,43 @@ impl SpotifyClient {
                 .query(&search_query)
                 .send()
                 .await
+                && let Ok(json) = resp.json::<serde_json::Value>().await
+                && let Some(tracks) = json["tracks"]["items"].as_array()
             {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(tracks) = json["tracks"]["items"].as_array() {
-                        for t in tracks {
-                            let t_artist = t["artists"]
-                                .as_array()
-                                .and_then(|a| a.first())
-                                .and_then(|a| a["name"].as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            if seed_artist_names
-                                .iter()
-                                .any(|n| n.eq_ignore_ascii_case(&t_artist))
-                            {
-                                continue;
-                            }
-                            let name = t["name"].as_str().unwrap_or("Unknown").to_string();
-                            let artist = t["artists"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|x| x["name"].as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                })
-                                .unwrap_or_default();
-                            let uri = t["uri"].as_str().unwrap_or_default().to_string();
-                            if !uri.is_empty() {
-                                pool.push(TrackSummary {
-                                    name,
-                                    artist,
-                                    album: t["album"]["name"]
-                                        .as_str()
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                    duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
-                                    uri,
-                                    cover_path: None,
-                                    added_at: None,
-                                });
-                            }
-                        }
+                for t in tracks {
+                    let t_artist = t["artists"]
+                        .as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|a| a["name"].as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if seed_artist_names
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&t_artist))
+                    {
+                        continue;
+                    }
+                    let name = t["name"].as_str().unwrap_or("Unknown").to_string();
+                    let artist = t["artists"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x["name"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    let uri = t["uri"].as_str().unwrap_or_default().to_string();
+                    if !uri.is_empty() {
+                        pool.push(TrackSummary {
+                            name,
+                            artist,
+                            album: t["album"]["name"].as_str().unwrap_or_default().to_string(),
+                            duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
+                            uri,
+                            cover_path: None,
+                            added_at: None,
+                        });
                     }
                 }
             }

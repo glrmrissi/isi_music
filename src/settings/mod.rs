@@ -5,7 +5,7 @@ use anyhow::Result;
 ///
 /// In the MVP it only owns `AppConfig` (`config.toml`). Future phases will also
 /// own `Theme` and `Keybinds` so the Settings panel can edit them in one place.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Settings {
     pub config: AppConfig,
     pub dirty: bool,
@@ -27,14 +27,5 @@ impl Settings {
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            config: AppConfig::default(),
-            dirty: false,
-        }
     }
 }

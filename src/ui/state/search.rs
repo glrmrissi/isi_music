@@ -76,7 +76,7 @@ impl UiState {
                         .filter(|&vi| {
                             self.local_tree
                                 .get_visible(vi)
-                                .map_or(false, |node| match node {
+                                .is_some_and(|node| match node {
                                     LocalNode::Folder { name, .. } => {
                                         name.to_lowercase().contains(&query_lower)
                                     }

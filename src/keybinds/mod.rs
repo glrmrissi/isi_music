@@ -185,7 +185,7 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         "pagedown" | "pgdn" => KeyId::PageDown,
         s if s.starts_with('f') && s.len() > 1 => {
             let n: u8 = s[1..].parse().ok()?;
-            if n < 1 || n > 12 {
+            if !(1..=12).contains(&n) {
                 return None;
             }
             KeyId::F(n)

@@ -302,8 +302,8 @@ async fn fetch_lyrics(
         return Some(lyrics);
     }
 
-    if let Some(key) = musixmatch_api_key {
-        if let Some(lyrics) = fetch_from_musixmatch(
+    if let Some(key) = musixmatch_api_key
+        && let Some(lyrics) = fetch_from_musixmatch(
             http,
             &normalized_title,
             &normalized_artist,
@@ -311,9 +311,8 @@ async fn fetch_lyrics(
             &key,
         )
         .await
-        {
-            return Some(lyrics);
-        }
+    {
+        return Some(lyrics);
     }
 
     info!("lyrics: all synced APIs failed, trying fallback -> lyrics.ovh");

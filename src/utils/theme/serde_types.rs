@@ -104,19 +104,14 @@ impl From<WidgetStyle> for Style {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VisualizerStyle {
+    #[default]
     BrailleBars,
     BlockBars,
     Plasma,
     AnimeArt,
-}
-
-impl Default for VisualizerStyle {
-    fn default() -> Self {
-        Self::BrailleBars
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -137,19 +132,14 @@ pub struct VisualizerConfig {
     pub art_path: Option<PathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BorderStyle {
     Rounded,
     Thick,
+    #[default]
     LeftBar,
     None,
-}
-
-impl Default for BorderStyle {
-    fn default() -> Self {
-        Self::LeftBar
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -236,7 +236,7 @@ fn print_node(node: &LayoutNode, depth: usize) {
 
 fn collect_areas(node: &LayoutNode, area: Rect, areas: &mut Vec<(Option<UiWidget>, Rect)>) {
     if let Some(widget) = &node.widget {
-        areas.push((Some(widget.clone()), area));
+        areas.push((Some(*widget), area));
         return;
     }
     if let (Some(dir), Some(raw_constraints), Some(children)) =
@@ -588,9 +588,11 @@ status_bar = "rgb(30,30,30)"
 #[test]
 fn theme_lerp_endpoints() {
     let a = Theme::default();
-    let mut b = Theme::default();
-    b.primary = Color::Rgb(255, 0, 0);
-    b.accent_color = Color::Rgb(0, 255, 0);
+    let b = Theme {
+        primary: Color::Rgb(255, 0, 0),
+        accent_color: Color::Rgb(0, 255, 0),
+        ..Default::default()
+    };
 
     // t=0 should equal `from` on color fields.
     let at_zero = Theme::lerp(&a, &b, 0.0);
@@ -606,8 +608,10 @@ fn theme_lerp_endpoints() {
 #[test]
 fn theme_lerp_midpoint() {
     let a = Theme::default();
-    let mut b = Theme::default();
-    b.primary = Color::Rgb(0, 0, 100);
+    let b = Theme {
+        primary: Color::Rgb(0, 0, 100),
+        ..Default::default()
+    };
     // a.primary is Rgb(0xd8, 0xd8, 0xd8) = (216, 216, 216)
     // midpoint with (0, 0, 100) = (108, 108, 158)
     let mid = Theme::lerp(&a, &b, 0.5);
@@ -731,61 +735,63 @@ style = "none"
 
 #[test]
 fn focus_layout_toml_roundtrip() {
-    let mut t = Theme::default();
-    t.show_ascii_art = false;
-    t.layout_tree = LayoutNode {
-        direction: Some(SerializableDirection::Vertical),
-        constraints: Some(vec![
-            SerializableConstraint::Fill(1),
-            SerializableConstraint::Length(1),
-        ]),
-        widget: None,
-        children: Some(vec![
-            LayoutNode {
-                direction: Some(SerializableDirection::Horizontal),
-                constraints: Some(vec![
-                    SerializableConstraint::Percentage(30),
-                    SerializableConstraint::Fill(1),
-                ]),
-                widget: None,
-                children: Some(vec![
-                    LayoutNode {
-                        widget: Some(UiWidget::AlbumArt),
-                        direction: None,
-                        constraints: None,
-                        children: None,
-                    },
-                    LayoutNode {
-                        widget: Some(UiWidget::MainContent),
-                        direction: None,
-                        constraints: None,
-                        children: None,
-                    },
-                ]),
-            },
-            LayoutNode {
-                direction: Some(SerializableDirection::Horizontal),
-                constraints: Some(vec![
-                    SerializableConstraint::Percentage(30),
-                    SerializableConstraint::Fill(1),
-                ]),
-                widget: None,
-                children: Some(vec![
-                    LayoutNode {
-                        widget: Some(UiWidget::Marquee),
-                        direction: None,
-                        constraints: None,
-                        children: None,
-                    },
-                    LayoutNode {
-                        widget: Some(UiWidget::Progress),
-                        direction: None,
-                        constraints: None,
-                        children: None,
-                    },
-                ]),
-            },
-        ]),
+    let t = Theme {
+        show_ascii_art: false,
+        layout_tree: LayoutNode {
+            direction: Some(SerializableDirection::Vertical),
+            constraints: Some(vec![
+                SerializableConstraint::Fill(1),
+                SerializableConstraint::Length(1),
+            ]),
+            widget: None,
+            children: Some(vec![
+                LayoutNode {
+                    direction: Some(SerializableDirection::Horizontal),
+                    constraints: Some(vec![
+                        SerializableConstraint::Percentage(30),
+                        SerializableConstraint::Fill(1),
+                    ]),
+                    widget: None,
+                    children: Some(vec![
+                        LayoutNode {
+                            widget: Some(UiWidget::AlbumArt),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
+                        LayoutNode {
+                            widget: Some(UiWidget::MainContent),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
+                    ]),
+                },
+                LayoutNode {
+                    direction: Some(SerializableDirection::Horizontal),
+                    constraints: Some(vec![
+                        SerializableConstraint::Percentage(30),
+                        SerializableConstraint::Fill(1),
+                    ]),
+                    widget: None,
+                    children: Some(vec![
+                        LayoutNode {
+                            widget: Some(UiWidget::Marquee),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
+                        LayoutNode {
+                            widget: Some(UiWidget::Progress),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
+                    ]),
+                },
+            ]),
+        },
+        ..Default::default()
     };
 
     let toml_str = toml::to_string_pretty(&t).unwrap();

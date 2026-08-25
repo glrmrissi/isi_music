@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use console::{Term, style};
@@ -32,7 +32,7 @@ pub(super) fn optional_input(prompt: &str) -> Result<Option<String>> {
     })
 }
 
-pub(super) fn confirm_overwrite(path: &PathBuf) -> Result<bool> {
+pub(super) fn confirm_overwrite(path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(true);
     }
@@ -62,10 +62,10 @@ pub(super) fn detect_music_dir() -> Option<String> {
         } else {
             Some(PathBuf::from(candidate))
         };
-        if let Some(p) = expanded {
-            if p.exists() {
-                return p.to_str().map(|s| s.to_string());
-            }
+        if let Some(p) = expanded
+            && p.exists()
+        {
+            return p.to_str().map(|s| s.to_string());
         }
     }
 

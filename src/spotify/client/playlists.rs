@@ -105,12 +105,12 @@ impl SpotifyClient {
             return Ok((Vec::new(), 0, 0));
         }
         let key = format!("playlist:{playlist_id}:{offset}");
-        if let Some(cached) = self.library_cache.get_tracks(&key) {
-            if !cached.0.is_empty() {
-                info!("Library cache hit: playlist {playlist_id} offset={offset}");
-                let page_items = cached.1.saturating_sub(offset).min(50);
-                return Ok((cached.0, cached.1, page_items));
-            }
+        if let Some(cached) = self.library_cache.get_tracks(&key)
+            && !cached.0.is_empty()
+        {
+            info!("Library cache hit: playlist {playlist_id} offset={offset}");
+            let page_items = cached.1.saturating_sub(offset).min(50);
+            return Ok((cached.0, cached.1, page_items));
         }
         let token = self
             .get_access_token()

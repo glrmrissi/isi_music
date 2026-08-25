@@ -219,7 +219,7 @@ impl UiState {
                     }
                 }
                 ActiveContent::LocalFiles => {
-                    if self.sorted_track_indices.len() > 0 {
+                    if !self.sorted_track_indices.is_empty() {
                         self.local_tree_list.select(Some(0));
                     }
                 }
@@ -230,10 +230,10 @@ impl UiState {
                 }
             },
             Focus::Search => {
-                if let Some(sr) = &mut self.search_results {
-                    if sr.current_len() > 0 {
-                        sr.current_list_mut().select(Some(0));
-                    }
+                if let Some(sr) = &mut self.search_results
+                    && sr.current_len() > 0
+                {
+                    sr.current_list_mut().select(Some(0));
                 }
             }
             Focus::Queue => {

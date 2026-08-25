@@ -47,7 +47,7 @@ impl TokenManager {
             return None;
         }
 
-        let expires_at = self.expires_at.read().ok()?.clone();
+        let expires_at = *self.expires_at.read().ok()?;
         let needs_refresh = expires_at.map(|e| e <= Utc::now()).unwrap_or(true);
 
         if needs_refresh {

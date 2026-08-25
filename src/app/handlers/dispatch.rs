@@ -174,34 +174,34 @@ impl App {
                 }
             }
             A::RemoveFromQueue => {
-                if self.state.focus == Focus::Queue {
-                    if let Some(idx) = self.state.queue_list.selected() {
-                        let active_len = self
-                            .player_mgr
-                            .player
-                            .as_ref()
-                            .map(|p| p.user_queue().len())
-                            .unwrap_or(0);
-                        if idx < active_len {
-                            if let Some(player) = &mut self.player_mgr.player {
-                                player.remove_from_user_queue(idx);
-                            }
-                        } else {
-                            let parked_idx = idx - active_len;
-                            if let Some(player) = &mut self.player_mgr.parked_player {
-                                if parked_idx < player.user_queue().len() {
-                                    player.remove_from_user_queue(parked_idx);
-                                }
-                            }
+                if self.state.focus == Focus::Queue
+                    && let Some(idx) = self.state.queue_list.selected()
+                {
+                    let active_len = self
+                        .player_mgr
+                        .player
+                        .as_ref()
+                        .map(|p| p.user_queue().len())
+                        .unwrap_or(0);
+                    if idx < active_len {
+                        if let Some(player) = &mut self.player_mgr.player {
+                            player.remove_from_user_queue(idx);
                         }
-                        self.sync_queue_display();
-                        let new_sel = if self.state.queue_items.is_empty() {
-                            None
-                        } else {
-                            Some(idx.min(self.state.queue_items.len() - 1))
-                        };
-                        self.state.queue_list.select(new_sel);
+                    } else {
+                        let parked_idx = idx - active_len;
+                        if let Some(player) = &mut self.player_mgr.parked_player
+                            && parked_idx < player.user_queue().len()
+                        {
+                            player.remove_from_user_queue(parked_idx);
+                        }
                     }
+                    self.sync_queue_display();
+                    let new_sel = if self.state.queue_items.is_empty() {
+                        None
+                    } else {
+                        Some(idx.min(self.state.queue_items.len() - 1))
+                    };
+                    self.state.queue_list.select(new_sel);
                 }
             }
             A::SortTracks => {

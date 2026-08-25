@@ -15,11 +15,9 @@ impl SpotifyClient {
         }
 
         let key = format!("liked:{offset}");
-        if !force_refresh {
-            if let Some(cached) = self.library_cache.get_tracks(&key) {
-                info!("Library cache hit: liked songs offset={offset}");
-                return Ok(cached);
-            }
+        if !force_refresh && let Some(cached) = self.library_cache.get_tracks(&key) {
+            info!("Library cache hit: liked songs offset={offset}");
+            return Ok(cached);
         }
 
         let token = self
@@ -214,7 +212,7 @@ impl SpotifyClient {
         }
 
         // Fetch remaining pages sequentially
-        let total_pages = ((total + 49) / 50) as u32;
+        let total_pages = total.div_ceil(50);
         if total_pages > 1 {
             info!(
                 "sync_liked_tracks: fetching {} remaining pages ({} total tracks)",

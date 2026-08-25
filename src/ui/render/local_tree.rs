@@ -50,7 +50,7 @@ impl Ui {
                         LocalNode::Track { track, .. } => {
                             let is_playing =
                                 state.playback.title == track.name && state.playback.is_local;
-                            let icon = if is_playing { " " } else { " " };
+                            let icon = " ";
                             let title_style = if is_playing {
                                 Style::default()
                                     .fg(self.theme.primary)
@@ -174,7 +174,7 @@ impl Ui {
                     LocalNode::Track { track, .. } => {
                         let is_playing =
                             state.playback.title == track.name && state.playback.is_local;
-                        let icon = if is_playing { " " } else { " " };
+                        let icon = " ";
                         let title_style = if is_playing {
                             Style::default()
                                 .fg(self.theme.primary)

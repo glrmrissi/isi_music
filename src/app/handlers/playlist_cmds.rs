@@ -44,10 +44,8 @@ impl App {
             KeyCode::Backspace => {
                 self.state.command_buffer.pop();
             }
-            KeyCode::Char(c) => {
-                if c.is_ascii() {
-                    self.state.command_buffer.push(c);
-                }
+            KeyCode::Char(c) if c.is_ascii() => {
+                self.state.command_buffer.push(c);
             }
             _ => {}
         }
@@ -123,7 +121,7 @@ impl App {
         }
         match self
             .spotify
-            .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(&uri), None)
+            .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(uri), None)
             .await
         {
             Ok(_) => {
@@ -159,7 +157,7 @@ impl App {
         if let Some(playlist) = self.state.playlists.get(idx) {
             match self
                 .spotify
-                .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(&uri), None)
+                .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(uri), None)
                 .await
             {
                 Ok(_) => {

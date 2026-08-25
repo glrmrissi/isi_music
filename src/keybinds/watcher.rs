@@ -54,12 +54,12 @@ impl KeybindsWatcher {
             let new = Keybinds::load();
             let _ = tx.send(new);
         })
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
         if let Some(parent) = path.parent() {
             watcher
                 .watch(parent.as_ref(), RecursiveMode::NonRecursive)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
         }
 
         Ok(KeybindsWatcher {

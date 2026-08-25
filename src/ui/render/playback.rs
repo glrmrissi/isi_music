@@ -176,14 +176,14 @@ impl Ui {
             return;
         }
 
-        if let Some(art_data) = &mut state.album_art {
-            if let Some(protocol_state) = &mut art_data.image_state {
-                frame.render_stateful_widget(
-                    ratatui_image::StatefulImage::<StatefulProtocol>::default(),
-                    img_area,
-                    protocol_state,
-                );
-            }
+        if let Some(art_data) = &mut state.album_art
+            && let Some(protocol_state) = &mut art_data.image_state
+        {
+            frame.render_stateful_widget(
+                ratatui_image::StatefulImage::<StatefulProtocol>::default(),
+                img_area,
+                protocol_state,
+            );
         }
     }
 
@@ -192,22 +192,22 @@ impl Ui {
         if area.width < 2 || area.height < 2 {
             return Rect::ZERO;
         }
-        if let Some(art) = &state.album_art {
-            if let Some(ps) = &art.image_state {
-                let s = ps.size_for(
-                    Resize::Fit(None),
-                    ratatui::layout::Size::new(area.width, area.height),
-                );
-                if s.width < 2 || s.height < 2 {
-                    return Rect::ZERO;
-                }
-                return Rect {
-                    x: area.x + (area.width.saturating_sub(s.width)) / 2,
-                    y: area.y + (area.height.saturating_sub(s.height)) / 2,
-                    width: s.width,
-                    height: s.height,
-                };
+        if let Some(art) = &state.album_art
+            && let Some(ps) = &art.image_state
+        {
+            let s = ps.size_for(
+                Resize::Fit(None),
+                ratatui::layout::Size::new(area.width, area.height),
+            );
+            if s.width < 2 || s.height < 2 {
+                return Rect::ZERO;
             }
+            return Rect {
+                x: area.x + (area.width.saturating_sub(s.width)) / 2,
+                y: area.y + (area.height.saturating_sub(s.height)) / 2,
+                width: s.width,
+                height: s.height,
+            };
         }
         Rect::ZERO
     }
@@ -259,16 +259,17 @@ impl Ui {
         };
 
         #[cfg(feature = "album-art")]
-        if state.show_album_art && img_w >= 2 && img_h >= 2 {
-            if let Some(art) = &mut state.album_art {
-                if let Some(ps) = &mut art.image_state {
-                    frame.render_stateful_widget(
-                        ratatui_image::StatefulImage::<StatefulProtocol>::default(),
-                        art_area,
-                        ps,
-                    );
-                }
-            }
+        if state.show_album_art
+            && img_w >= 2
+            && img_h >= 2
+            && let Some(art) = &mut state.album_art
+            && let Some(ps) = &mut art.image_state
+        {
+            frame.render_stateful_widget(
+                ratatui_image::StatefulImage::<StatefulProtocol>::default(),
+                art_area,
+                ps,
+            );
         }
 
         let pb = &state.playback;

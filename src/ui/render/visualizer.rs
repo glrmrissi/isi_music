@@ -87,6 +87,7 @@ impl Ui {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_braille_bars(
         &self,
         frame: &mut Frame,
@@ -173,6 +174,7 @@ impl Ui {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_block_bars(
         &self,
         frame: &mut Frame,
@@ -243,6 +245,7 @@ impl Ui {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_plasma_wave(
         &self,
         frame: &mut Frame,
@@ -276,14 +279,16 @@ impl Ui {
 
             let bx = inner.x + x as u16;
             let by = viz_top + y.clamp(0, effective_h as i64 - 1) as u16;
-            if bx < inner.x + inner.width && by < viz_top + effective_h {
-                if let Some(cell) = frame.buffer_mut().cell_mut((bx, by)) {
-                    cell.set_char('●').set_fg(viz_color);
-                }
+            if bx < inner.x + inner.width
+                && by < viz_top + effective_h
+                && let Some(cell) = frame.buffer_mut().cell_mut((bx, by))
+            {
+                cell.set_char('●').set_fg(viz_color);
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_anime_art_viz(
         &self,
         frame: &mut Frame,

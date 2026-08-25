@@ -3,6 +3,7 @@ use std::time::Instant;
 use crate::ui::Ui;
 use crate::utils::theme::{Theme, ThemeWatcher};
 
+#[allow(clippy::large_enum_variant)]
 pub enum ThemeChange {
     None,
     Apply { theme: Theme },

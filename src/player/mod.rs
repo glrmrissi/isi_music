@@ -221,13 +221,11 @@ impl NativePlayer {
         bitrate: librespot_playback::config::Bitrate,
         gapless: bool,
     ) -> Result<Self> {
-        let cache_dir = dirs::cache_dir()
-            .or_else(|| dirs::config_dir())
-            .map(|mut p| {
-                p.push("isi-music");
-                p.push("audio-cache");
-                p
-            });
+        let cache_dir = dirs::cache_dir().or_else(dirs::config_dir).map(|mut p| {
+            p.push("isi-music");
+            p.push("audio-cache");
+            p
+        });
 
         let cache = cache_dir.and_then(|dir| {
             match Cache::new::<std::path::PathBuf>(
@@ -496,13 +494,12 @@ impl NativePlayer {
 
         let next_idx = self.next_index();
 
-        if let Some(idx) = next_idx {
-            if let Some(uri) = self.queue.get(idx) {
-                if let Ok(spotify_uri) = SpotifyUri::from_uri(uri) {
-                    debug!("Preloading next track at index {idx}: {uri}");
-                    self.player.preload(spotify_uri);
-                }
-            }
+        if let Some(idx) = next_idx
+            && let Some(uri) = self.queue.get(idx)
+            && let Ok(spotify_uri) = SpotifyUri::from_uri(uri)
+        {
+            debug!("Preloading next track at index {idx}: {uri}");
+            self.player.preload(spotify_uri);
         }
     }
 

@@ -471,7 +471,7 @@ impl SettingsPanel {
             .enumerate()
             .map(|(i, &(label, custom_status, enabled))| {
                 let is_selected = i == self.selected_item;
-                let prefix = if is_selected { " " } else { " " };
+                let prefix = " ";
                 let (status_str, status_color) = if !custom_status.is_empty() {
                     let color = if enabled {
                         enabled_color
@@ -518,13 +518,14 @@ impl SettingsPanel {
         theme: &Theme,
         autoplay_enabled: bool,
     ) {
-        let mut items = vec![];
-        #[cfg(feature = "album-art")]
-        items.push(("Cover Images", "", state.show_album_art));
-        items.push(("Lyrics Fetching", "", self.config.enable_lyrics()));
-        items.push(("Visualizer Display", "", state.show_visualizer));
-        items.push(("Compact Mode", "", state.compact_mode));
-        items.push(("Breadcrumb", "", state.show_breadcrumb));
+        let mut items = vec![
+            #[cfg(feature = "album-art")]
+            ("Cover Images", "", state.show_album_art),
+            ("Lyrics Fetching", "", self.config.enable_lyrics()),
+            ("Visualizer Display", "", state.show_visualizer),
+            ("Compact Mode", "", state.compact_mode),
+            ("Breadcrumb", "", state.show_breadcrumb),
+        ];
 
         let lastfm_text = if state.lastfm_connected {
             "Connected"
@@ -625,7 +626,7 @@ impl SettingsPanel {
             .enumerate()
             .map(|(i, (label, status, color))| {
                 let is_selected = i == self.selected_item;
-                let prefix = if is_selected { " " } else { " " };
+                let prefix = " ";
                 let line_style = if is_selected {
                     Style::default()
                         .fg(accent_color)
@@ -707,7 +708,7 @@ impl SettingsPanel {
 
         for (i, line) in stats_items.iter().enumerate() {
             let is_sel = i == self.selected_item && i < 3;
-            let prefix = if is_sel { " " } else { " " };
+            let prefix = " ";
             let style = if is_sel {
                 Style::default()
                     .fg(accent_color)
@@ -723,7 +724,7 @@ impl SettingsPanel {
 
         rows.push(ListItem::new(Line::from("")));
 
-        let actions = vec![
+        let actions = [
             ("Clear All Caches", "c"),
             ("Cleanup Expired", "f"),
             ("Refresh Stats", "r"),
@@ -733,7 +734,7 @@ impl SettingsPanel {
         for (i, (label, key)) in actions.iter().enumerate() {
             let idx = i + 4;
             let is_sel = idx == self.selected_item && idx >= 4;
-            let prefix = if is_sel { " " } else { " " };
+            let prefix = " ";
             let style = if is_sel {
                 Style::default()
                     .fg(accent_color)
@@ -798,9 +799,9 @@ impl SettingsPanel {
             .help_text
             .iter()
             .map(|line| {
-                if line.starts_with('#') {
+                if let Some(stripped) = line.strip_prefix('#') {
                     Line::from(Span::styled(
-                        &line[1..],
+                        stripped,
                         Style::default()
                             .fg(header_color)
                             .add_modifier(Modifier::BOLD),
@@ -844,11 +845,7 @@ impl SettingsPanel {
 
         // Clean title with minimal progress indicator
         let title = if total > visible {
-            let pct = if max_scroll > 0 {
-                (offset * 100) / max_scroll
-            } else {
-                0
-            };
+            let pct = (offset * 100).checked_div(max_scroll).unwrap_or(0);
             format!(" Help [{}%] ", pct)
         } else {
             " Help ".to_string()

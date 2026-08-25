@@ -124,7 +124,6 @@ impl App {
                             LogLevel::Error,
                             format!("CopyTrackLink: {cmd} exited with {status}"),
                         );
-                        return;
                     }
                     Err(e) => {
                         self.state.status_msg = Some(format!("Copy failed: {cmd} error ({e})"));
@@ -132,7 +131,6 @@ impl App {
                             LogLevel::Error,
                             format!("CopyTrackLink: {cmd} wait error: {e}"),
                         );
-                        return;
                     }
                 }
             } else {
@@ -237,17 +235,16 @@ impl App {
                             Ok(_) => {
                                 self.state.status_msg = Some("Unliked".to_string());
                                 let uri = self.current_track_uri.clone();
-                                if self.state.active_playlist_id.as_deref() == Some("liked_songs") {
-                                    if let Some(pos) =
+                                if self.state.active_playlist_id.as_deref() == Some("liked_songs")
+                                    && let Some(pos) =
                                         self.state.tracks.iter().position(|t| t.uri == uri)
-                                    {
-                                        self.state.tracks.remove(pos);
-                                        self.state.tracks_offset =
-                                            self.state.tracks_offset.saturating_sub(1);
-                                        self.state.tracks_total =
-                                            self.state.tracks_total.saturating_sub(1);
-                                        self.state.rebuild_sort_indices();
-                                    }
+                                {
+                                    self.state.tracks.remove(pos);
+                                    self.state.tracks_offset =
+                                        self.state.tracks_offset.saturating_sub(1);
+                                    self.state.tracks_total =
+                                        self.state.tracks_total.saturating_sub(1);
+                                    self.state.rebuild_sort_indices();
                                 }
                                 let library_cache = self.spotify.library_cache.clone();
                                 tokio::task::spawn_blocking(move || {
