@@ -65,6 +65,7 @@ pub struct App {
     trim_counter: u64,
     audio: crate::config::AudioConfig,
     needs_redraw: bool,
+    force_clear: bool,
     last_click_time: Option<Instant>,
     last_click_pos: (u16, u16),
 }
@@ -293,6 +294,7 @@ impl App {
             trim_counter: 0,
             audio: cfg.audio.clone(),
             needs_redraw: true,
+            force_clear: false,
             last_click_time: None,
             last_click_pos: (0, 0),
         })
@@ -357,6 +359,7 @@ impl App {
             )),
             audio: crate::config::AudioConfig::default(),
             needs_redraw: true,
+            force_clear: false,
             last_click_time: None,
             last_click_pos: (0, 0),
         }
@@ -935,6 +938,10 @@ impl App {
             let active = self.state.playback.is_playing || visual_active;
 
             if self.needs_redraw || visual_active {
+                if self.force_clear {
+                    terminal.clear()?;
+                    self.force_clear = false;
+                }
                 terminal.draw(|f| {
                     self.ui.render(f, &mut self.state);
                     if let Some(ref panel) = self.settings_panel {

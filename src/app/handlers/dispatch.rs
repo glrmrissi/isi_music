@@ -439,6 +439,8 @@ impl App {
             }
             A::ToggleDebug => {
                 self.debug_overlay.toggle_visible();
+                self.needs_redraw = true;
+                self.force_clear = true;
             }
             A::ScrollUp => {
                 if (self.state.fullscreen_player || self.state.show_lyrics)
