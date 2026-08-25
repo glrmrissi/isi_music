@@ -632,6 +632,10 @@ impl NativePlayer {
         if let Some(i) = &mut self.current_index {
             *i -= remove;
         }
+        self.play_history.retain(|&i| i >= remove);
+        for i in &mut self.play_history {
+            *i -= remove;
+        }
         true
     }
 
