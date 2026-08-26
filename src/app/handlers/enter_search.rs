@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::App;
 use crate::ui::{ActiveContent, Focus, SearchPanel};
@@ -67,6 +67,7 @@ impl App {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     match self.spotify.fetch_album_tracks(&id, 0).await {
                         Ok((tracks, total)) => {
+                            self.state.push_nav();
                             self.state.tracks = tracks;
                             self.state.tracks_total = total;
                             self.state.tracks_offset = self.state.tracks.len() as u32;
@@ -80,7 +81,6 @@ impl App {
                                 } else {
                                     Some(0)
                                 });
-                            self.state.push_nav();
                             self.state.active_content = ActiveContent::Tracks;
                             self.state.rebuild_sort_indices();
                             self.state.previous_search = self.state.search_results.take();
@@ -111,28 +111,9 @@ impl App {
                 if let Some((id, name, uri)) = playlist {
                     self.state.status_msg = Some(format!("Loading {name}…"));
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    match self.spotify.fetch_playlist_tracks(&id, 0).await {
-                        Ok((tracks, total, _page_items)) => {
-                            if tracks.is_empty() {
-                                self.state.status_msg = Some(
-                                    "Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
-                                );
-                            } else {
-                                self.state.tracks = tracks;
-                                self.state.tracks_total = total;
-                                self.state.tracks_offset = self.state.tracks.len() as u32;
-                                self.state.tracks_api_offset = _page_items;
-                                self.state.active_playlist_uri = Some(uri);
-                                self.state.active_playlist_id = Some(id);
-                                self.state.track_list.select(Some(0));
-                                self.state.push_nav();
-                                self.state.active_content = ActiveContent::Tracks;
-                                self.state.rebuild_sort_indices();
-                                self.state.previous_search = self.state.search_results.take();
-                                self.state.status_msg = None;
-                                self.state.focus = Focus::Tracks;
-                            }
-                        }
+                    let web_result = self.spotify.fetch_playlist_tracks(&id, 0).await;
+                    let loaded = match web_result {
+                        Ok((t, total, pi)) if !t.is_empty() => Some((t, total, pi)),
                         Err(e) => {
                             let err_str = e.to_string();
                             if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
@@ -140,15 +121,29 @@ impl App {
                                 *needs_reconnect = true;
                                 self.state.status_msg =
                                     Some("Authorization expired, reconnecting...".to_string());
-                            } else if err_str.contains("SPOTIFY_PLAYLIST_NOT_ACCESSIBLE") {
-                                self.state.status_msg = Some(
-                                    "Playlist tracks not available for playlists you don't own or collaborate on".to_string(),
-                                );
+                                None
                             } else {
-                                self.state.status_msg = Some(format!("Error: {e}"));
+                                self.mercury_playlist_fallback(&name, &uri, &id).await
                             }
                         }
-                    }
+                        Ok(_) => self.mercury_playlist_fallback(&name, &uri, &id).await,
+                    };
+                    let Some((tracks, total, page_items)) = loaded else {
+                        return;
+                    };
+                    self.state.push_nav();
+                    self.state.tracks = tracks;
+                    self.state.tracks_total = total;
+                    self.state.tracks_offset = self.state.tracks.len() as u32;
+                    self.state.tracks_api_offset = page_items;
+                    self.state.active_playlist_uri = Some(uri);
+                    self.state.active_playlist_id = Some(id);
+                    self.state.track_list.select(Some(0));
+                    self.state.active_content = ActiveContent::Tracks;
+                    self.state.rebuild_sort_indices();
+                    self.state.previous_search = self.state.search_results.take();
+                    self.state.status_msg = None;
+                    self.state.focus = Focus::Tracks;
                 }
             }
             Some(SearchPanel::Artists) => {
@@ -163,6 +158,7 @@ impl App {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     match self.spotify.fetch_artist_tracks(&name, 0).await {
                         Ok((tracks, total)) => {
+                            self.state.push_nav();
                             self.state.tracks = tracks;
                             self.state.tracks_total = total;
                             self.state.tracks_offset = self.state.tracks.len() as u32;
@@ -177,7 +173,6 @@ impl App {
                                 } else {
                                     Some(0)
                                 });
-                            self.state.push_nav();
                             self.state.active_content = ActiveContent::Tracks;
                             self.state.rebuild_sort_indices();
                             self.state.previous_search = self.state.search_results.take();
@@ -199,6 +194,49 @@ impl App {
                 }
             }
             None => {}
+        }
+    }
+
+    async fn mercury_playlist_fallback(
+        &mut self,
+        name: &str,
+        uri: &str,
+        playlist_id: &str,
+    ) -> Option<(Vec<crate::spotify::TrackSummary>, u32, u32)> {
+        self.state.status_msg = Some(format!("Trying Mercury protocol for {name}…"));
+        self.activate_spotify_player();
+        self.ensure_spotify_player().await;
+        let mercury_fut = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.fetch_playlist_via_mercury(uri));
+        match mercury_fut {
+            Some(fut) => match fut.await {
+                Ok(tracks) if !tracks.is_empty() => {
+                    let total = tracks.len() as u32;
+                    let key = format!("playlist:{playlist_id}:0");
+                    self.spotify.library_cache.save_tracks(&key, &tracks, total);
+                    info!(
+                        "Mercury playlist saved to cache: {playlist_id} ({} tracks)",
+                        tracks.len()
+                    );
+                    Some((tracks, total, total))
+                }
+                Ok(_) => {
+                    self.state.status_msg = Some("Playlist is empty or not accessible".to_string());
+                    None
+                }
+                Err(e) => {
+                    warn!("Mercury playlist fetch failed: {e:#}");
+                    self.state.status_msg = Some(format!("Could not load playlist: {e:#}"));
+                    None
+                }
+            },
+            None => {
+                self.state.status_msg = Some("Spotify player not available".to_string());
+                None
+            }
         }
     }
 }

@@ -34,9 +34,11 @@ Write-Host ""
 $DownloadUrl = "https://github.com/$Repo/releases/latest/download/isi-music-windows-x86_64.exe"
 $TargetPath = Join-Path $InstallDir $BinaryName
 
+$SkipDownload = $false
+
 # Check if already installed
 $ExistingPath = Get-Command isi-music -ErrorAction SilentlyContinue
-if ($ExistingPath -and $args -notcontains "--force") {
+if ($ExistingPath -and ($args -notcontains "--force")) {
     Write-Warn "isi-music is already installed at: $($ExistingPath.Source)"
     $Reinstall = Read-Host "  Reinstall? (y/N)"
     if ($Reinstall -notmatch '^[Yy]') {

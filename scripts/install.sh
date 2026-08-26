@@ -84,9 +84,10 @@ echo ""
 echo -e "  ${BOLD}Step 2/3: Download isi-music${RESET}"
 echo ""
 
-if command_exists "$BINARY_NAME" && [[ "$1" != "--force" ]]; then
+if command_exists "$BINARY_NAME" && [[ "${1:-}" != "--force" ]]; then
     warn "isi-music is already installed at: $(command -v $BINARY_NAME)"
-    read -rp "  Reinstall? (y/N) " reinstall
+    reinstall=""
+    read -rp "  Reinstall? (y/N) " reinstall || true
     if [[ ! "$reinstall" =~ ^[Yy] ]]; then
         ok "Keeping existing installation"
         echo ""
@@ -121,7 +122,7 @@ if [[ -z "${SKIP_DOWNLOAD:-}" ]]; then
 
     # Download icon files from the repo
     for size in 16 32 48 128 256 512; do
-        ICON_URL="https://raw.githubusercontent.com/${REPO}/main/assets/icons/hicolor/${size}x${size}/apps/isi-music.png"
+        ICON_URL="https://raw.githubusercontent.com/${REPO}/master/assets/icons/hicolor/${size}x${size}/apps/isi-music.png"
         ICON_DEST="${ICON_BASE}/${size}x${size}/apps/isi-music.png"
         mkdir -p "$(dirname "$ICON_DEST")"
         curl -fsSL "$ICON_URL" -o "$ICON_DEST" 2>/dev/null || true
@@ -129,7 +130,7 @@ if [[ -z "${SKIP_DOWNLOAD:-}" ]]; then
 
     # Download .desktop file
     mkdir -p "$APPS_DIR"
-    DESKTOP_URL="https://raw.githubusercontent.com/${REPO}/main/assets/isi-music.desktop"
+    DESKTOP_URL="https://raw.githubusercontent.com/${REPO}/master/assets/isi-music.desktop"
     curl -fsSL "$DESKTOP_URL" -o "${APPS_DIR}/isi-music.desktop" 2>/dev/null || true
 
     # Update desktop database (best effort)
