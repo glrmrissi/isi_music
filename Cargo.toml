@@ -1,6 +1,6 @@
 [package]
 name = "isi-music"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Guilherme Rissi <guilhermerissi04112006@gmail.com>"]
@@ -23,6 +23,7 @@ hyper-proxy2 = { path = "patches/hyper-proxy2" }
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net", "io-util", "signal"] }
+futures = "0.3"
 
 # TUI
 ratatui = { version = "0.30.2", features = ["crossterm_0_29", "unstable-backend-writer"] }
@@ -33,7 +34,11 @@ chrono = "0.4"
 
 # Spotify Connect / native audio
 librespot-core = { version = "0.8", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-metadata = { version = "0.8", default-features = false }
 librespot-playback = { version = "0.8", default-features = false, features = ["rodio-backend"] }
+librespot-protocol = "0.8"
+protobuf = "3"
+hyper = { version = "1.6", features = ["http1", "http2"] }
 
 # Local audio playback (MP3, FLAC)
 rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac"] }
