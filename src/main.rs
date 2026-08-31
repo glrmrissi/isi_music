@@ -149,7 +149,22 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
-    let client_id = prompt("Web API Client ID (press Enter for streaming-only): ");
+    let existing_id = cfg
+        .get_client_id()
+        .filter(|s| !s.is_empty() && s != "your_client_id_here");
+
+    let prompt_text = if let Some(ref id) = existing_id {
+        let masked = if id.len() > 8 {
+            format!("{}…{}", &id[..4], &id[id.len().saturating_sub(4)..])
+        } else {
+            id.clone()
+        };
+        format!("Web API Client ID (Enter to keep {masked}, blank for streaming-only): ")
+    } else {
+        "Web API Client ID (press Enter for streaming-only): ".to_string()
+    };
+
+    let client_id = prompt(&prompt_text);
     let trimmed = client_id.trim().to_string();
 
     if !trimmed.is_empty() {
@@ -161,6 +176,8 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         cfg.spotify.client_id = Some(trimmed);
         cfg.save()?;
         println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    } else if existing_id.is_some() {
+        println!("  {GREEN}[OK]{RESET}  Keeping existing Client ID.\n");
     } else {
         cfg.spotify.client_id = None;
         cfg.save()?;
