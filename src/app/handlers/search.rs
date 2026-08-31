@@ -89,6 +89,18 @@ impl App {
                     }
                 };
 
+                if self
+                    .state
+                    .playlists
+                    .iter()
+                    .any(|p| p.id == playlist_id && p.uri.starts_with("local:folder:"))
+                {
+                    self.state.delete_playlist_confirm = false;
+                    self.state.delete_playlist_target = None;
+                    self.state.status_msg = Some("Local folders cannot be deleted".to_string());
+                    return;
+                }
+
                 self.state.status_msg = Some("Deleting playlist...".to_string());
                 match self.spotify.unfollow_playlist(&playlist_id).await {
                     Ok(_) => {

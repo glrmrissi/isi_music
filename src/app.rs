@@ -178,6 +178,18 @@ impl App {
                     state.status_msg = Some(format!("Failed to load playlists: {e}"));
                 }
             }
+        } else if !spotify_enabled
+            && let Some(music_dir) = crate::app::library::resolve_music_dir(&cfg)
+        {
+            let playlists = tokio::task::spawn_blocking(move || {
+                crate::app::library::scan_local_folder_playlists(&music_dir)
+            })
+            .await
+            .unwrap_or_default();
+            state.playlists = playlists;
+            if !state.playlists.is_empty() {
+                state.playlist_list.select(Some(0));
+            }
         }
 
         let mut pb = if spotify_enabled {

@@ -114,6 +114,10 @@ impl App {
             self.state.status_msg = Some(format!("No playlist found matching '{name}'"));
             return;
         };
+        if playlist.uri.starts_with("local:folder:") {
+            self.state.status_msg = Some("Cannot add to a local folder".to_string());
+            return;
+        }
         let uri = &self.current_track_uri;
         if uri.is_empty() {
             self.state.status_msg = Some("No track playing".to_string());
@@ -155,6 +159,10 @@ impl App {
         }
 
         if let Some(playlist) = self.state.playlists.get(idx) {
+            if playlist.uri.starts_with("local:folder:") {
+                self.state.status_msg = Some("Cannot add to a local folder".to_string());
+                return;
+            }
             match self
                 .spotify
                 .add_tracks_to_playlist(&playlist.id, std::slice::from_ref(uri), None)
