@@ -25,6 +25,14 @@ struct TrackInfo {
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
+    // Daemon mode is Spotify-only (no local playback support).
+    if !cfg.spotify_enabled() {
+        anyhow::bail!(
+            "Spotify is disabled in config.toml ([spotify] enabled = false). \
+             Daemon mode requires Spotify."
+        );
+    }
+
     // stdout/stderr are redirected to /dev/null after fork — log to file instead
     if let Ok(log_path) = crate::config::log_path()
         && let Ok(log_file) = std::fs::OpenOptions::new()

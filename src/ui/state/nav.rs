@@ -1,7 +1,6 @@
 use ratatui::widgets::ListState;
 
 use super::{ActiveContent, CompactItem, Focus, NavEntry, UiState};
-use crate::ui::LIBRARY_ITEMS;
 
 fn scroll_up(state: &mut ListState, len: usize) {
     if len == 0 {
@@ -51,9 +50,9 @@ impl UiState {
     }
 
     pub(super) fn compact_selectable_positions(&self) -> Vec<usize> {
-        let mut positions: Vec<usize> = (1..=LIBRARY_ITEMS.len()).collect();
+        let mut positions: Vec<usize> = (1..=self.library_items.len()).collect();
         if !self.playlists.is_empty() {
-            let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
+            let playlist_start = 1 + self.library_items.len() + 1;
             for i in 0..self.playlists.len() {
                 positions.push(playlist_start + i);
             }
@@ -62,10 +61,10 @@ impl UiState {
     }
 
     pub fn compact_item_at(&self, pos: usize) -> Option<CompactItem> {
-        if pos >= 1 && pos < 1 + LIBRARY_ITEMS.len() {
+        if pos >= 1 && pos < 1 + self.library_items.len() {
             Some(CompactItem::LibraryItem(pos - 1))
         } else if !self.playlists.is_empty() {
-            let playlist_start = 1 + LIBRARY_ITEMS.len() + 1;
+            let playlist_start = 1 + self.library_items.len() + 1;
             if pos >= playlist_start {
                 let idx = pos - playlist_start;
                 if idx < self.playlists.len() {
@@ -104,7 +103,7 @@ impl UiState {
                     .selected()
                     .map(|i| {
                         if i == 0 {
-                            LIBRARY_ITEMS.len() - 1
+                            self.library_items.len() - 1
                         } else {
                             i - 1
                         }
@@ -156,7 +155,7 @@ impl UiState {
                     .library_list
                     .selected()
                     .map(|i| {
-                        if i >= LIBRARY_ITEMS.len() - 1 {
+                        if i >= self.library_items.len() - 1 {
                             0
                         } else {
                             i + 1
@@ -257,7 +256,7 @@ impl UiState {
             return;
         }
         match self.focus {
-            Focus::Library => self.library_list.select(Some(LIBRARY_ITEMS.len() - 1)),
+            Focus::Library => self.library_list.select(Some(self.library_items.len() - 1)),
             Focus::Playlists => {
                 let n = self.playlists.len();
                 if n > 0 {
@@ -326,7 +325,7 @@ impl UiState {
             return;
         }
         match self.focus {
-            Focus::Library => self.library_list.select(Some(LIBRARY_ITEMS.len() / 2)),
+            Focus::Library => self.library_list.select(Some(self.library_items.len() / 2)),
             Focus::Playlists => {
                 let n = self.playlists.len();
                 if n > 0 {

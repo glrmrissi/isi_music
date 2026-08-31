@@ -25,7 +25,11 @@ impl App {
                 if query.is_empty() {
                     self.state.cancel_search();
                 } else if !self.spotify.authenticated {
-                    self.state.status_msg = Some("Search requires Spotify".to_string());
+                    self.state.status_msg = Some(if !self.state.spotify_enabled {
+                        "Search is disabled — Spotify is off in config.toml".to_string()
+                    } else {
+                        "Search requires Spotify".to_string()
+                    });
                     self.state.search_active = false;
                 } else {
                     self.state.status_msg = Some(format!("Searching \"{query}\"..."));

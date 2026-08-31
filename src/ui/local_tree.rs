@@ -123,3 +123,16 @@ pub const LIBRARY_ITEMS: &[&str] = &[
     "Podcasts",
     "Local Files",
 ];
+
+/// Library entries shown when Spotify is disabled in config (`[spotify] enabled = false`).
+pub const LIBRARY_LOCAL_ONLY_ITEMS: &[&str] = &["Local Files"];
+
+/// Returns the library entries to display. Spotify sections are hidden when
+/// Spotify is disabled, leaving a pure local-only experience.
+pub fn library_items(spotify_enabled: bool) -> &'static [&'static str] {
+    if spotify_enabled {
+        LIBRARY_ITEMS
+    } else {
+        LIBRARY_LOCAL_ONLY_ITEMS
+    }
+}

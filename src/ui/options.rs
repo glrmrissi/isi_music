@@ -606,20 +606,21 @@ impl SettingsPanel {
             ("Disabled", disabled_color)
         };
 
-        let rows: Vec<(&str, &str, Color)> = vec![
-            ("Spotify", spotify_status.0, spotify_status.1),
-            ("Last.fm", lastfm_status.0, lastfm_status.1),
-            (
-                "Music dir",
-                &music_dir_status,
-                if self.music_dir_editing {
-                    accent_color
-                } else {
-                    text_color
-                },
-            ),
-            ("Discord", discord_status.0, discord_status.1),
-        ];
+        let mut rows: Vec<(&str, &str, Color)> = Vec::new();
+        if state.spotify_enabled {
+            rows.push(("Spotify", spotify_status.0, spotify_status.1));
+        }
+        rows.push(("Last.fm", lastfm_status.0, lastfm_status.1));
+        rows.push((
+            "Music dir",
+            &music_dir_status,
+            if self.music_dir_editing {
+                accent_color
+            } else {
+                text_color
+            },
+        ));
+        rows.push(("Discord", discord_status.0, discord_status.1));
 
         let list_items: Vec<ListItem> = rows
             .iter()
@@ -639,11 +640,10 @@ impl SettingsPanel {
                     Span::styled(*status, Style::default().fg(*color)),
                 ];
                 if is_selected && !self.music_dir_editing {
-                    let hint = match i {
-                        0 => "  (Enter: setup instructions)",
-                        1 => "  (Enter: setup instructions)",
-                        2 => "  (Enter: edit path)",
-                        3 => "  (Enter: toggle)",
+                    let hint = match *label {
+                        "Spotify" | "Last.fm" => "  (Enter: setup instructions)",
+                        "Music dir" => "  (Enter: edit path)",
+                        "Discord" => "  (Enter: toggle)",
                         _ => "",
                     };
                     spans.push(Span::styled(hint, Style::default().fg(muted_color)));

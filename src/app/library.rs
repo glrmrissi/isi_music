@@ -8,6 +8,11 @@ use crate::ui::{ActiveContent, Focus, LocalNode};
 
 impl App {
     pub async fn handle_library_item(&mut self, idx: usize) -> bool {
+        if !self.spotify_enabled {
+            // Spotify is disabled — only "Local Files" exists in the library
+            self.load_local_files().await;
+            return false;
+        }
         if idx != 4 && !self.spotify.authenticated {
             self.state.status_msg = Some(
                 "Spotify not connected - only Local Files available. Run: isi-music setup-spotify"

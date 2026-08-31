@@ -182,6 +182,9 @@ pub struct UiState {
     pub lastfm_pending: bool,
     pub first_run: bool,
     pub spotify_authenticated: bool,
+    pub spotify_enabled: bool,
+    /// Library entries shown in the left panel (filtered when Spotify is disabled).
+    pub library_items: &'static [&'static str],
     pub widget_rects: HashMap<UiWidget, ratatui::layout::Rect>,
 }
 
@@ -256,6 +259,8 @@ impl UiState {
             lastfm_pending: false,
             first_run: false,
             spotify_authenticated: false,
+            spotify_enabled: true,
+            library_items: crate::ui::LIBRARY_ITEMS,
             widget_rects: HashMap::new(),
         }
     }

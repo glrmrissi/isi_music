@@ -57,6 +57,10 @@ pub struct LastfmConfig {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SpotifyConfig {
     pub client_id: Option<String>,
+    /// Set to false to disable Spotify entirely (local-only mode): no auth
+    /// prompt, no Spotify sections in the library, no streaming (default: true).
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -169,6 +173,11 @@ impl AppConfig {
                     .filter(|s| !s.is_empty() && s.as_str() != "your_client_id_here")
                     .cloned()
             })
+    }
+
+    /// Spotify is enabled by default; only disabled if explicitly set to false.
+    pub fn spotify_enabled(&self) -> bool {
+        self.spotify.enabled.unwrap_or(true)
     }
 
     pub fn get_musixmatch_api_key(&self) -> Option<String> {

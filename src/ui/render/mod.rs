@@ -16,7 +16,7 @@ use ratatui::{
 use std::borrow::Cow;
 use unicode_width::UnicodeWidthStr;
 
-use super::{Focus, LIBRARY_ITEMS, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
+use super::{Focus, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
 
 pub(super) fn clamp_text(text: &str, max_width: usize) -> Cow<'_, str> {
     if text.width() <= max_width {

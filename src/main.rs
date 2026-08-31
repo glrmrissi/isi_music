@@ -292,6 +292,8 @@ SPOTIFY STREAMING
   Custom apps use: http://127.0.0.1:8888/callback
   Streaming uses: http://127.0.0.1:8898/login
   Both OAuth flows run during setup/startup.
+  Local-only mode: set [spotify] enabled = false in config.toml
+  (no auth prompt, no Spotify sections, no streaming).
 
 LAST.FM SCROBBLING
   Run `isi-music setup-lastfm` to enable scrobbling.
@@ -337,6 +339,14 @@ fn main() -> Result<()> {
     let mut cfg = config::AppConfig::load()?;
     let args: Vec<String> = std::env::args().collect();
     let arg1 = args.get(1).map(|s| s.as_str());
+
+    // Daemon mode is Spotify-only (no local playback) — refuse to start when disabled.
+    if (arg1 == Some("--daemon") || arg1 == Some("--daemon-child")) && !cfg.spotify_enabled() {
+        anyhow::bail!(
+            "Spotify is disabled in config.toml ([spotify] enabled = false). \
+             Daemon mode requires Spotify."
+        );
+    }
 
     if arg1 == Some("--daemon") {
         // Unix: classic double-step daemonize (fork + setsid + stdio to /dev/null)
@@ -556,7 +566,10 @@ fn main() -> Result<()> {
         }
     }
 
-    if config::load_refresh_token().is_none() && config::load_streaming_refresh_token().is_none() {
+    if cfg.spotify_enabled()
+        && config::load_refresh_token().is_none()
+        && config::load_streaming_refresh_token().is_none()
+    {
         println!();
         println!("  {YELLOW}First time with Spotify?{RESET} Authenticate now to enable streaming.");
         println!("  (Streaming uses the built-in client; Web API needs your Client ID.)\n");

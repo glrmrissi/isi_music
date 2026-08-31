@@ -257,6 +257,17 @@ music_dir = "~/Music"
 enabled = false
 ```
 
+### Local-only mode (disable Spotify)
+
+If you only play local files, set `enabled = false` in the `[spotify]` section:
+
+```toml
+[spotify]
+enabled = false
+```
+
+This completely removes Spotify from the app: no authentication prompt at startup, no Spotify sections (Liked Songs, Albums, Artists, Podcasts) in the Library panel, no search/autoplay, and the librespot streaming authentication is never run. Last.fm scrobbling still works for local tracks; it stays off until you run `isi-music setup-lastfm`. Daemon mode requires Spotify and will refuse to start while it is disabled.
+
 The application also stores its SQLite database and caches under the platform data and cache directories.
 
 ### Themes

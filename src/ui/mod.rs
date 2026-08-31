@@ -6,7 +6,7 @@ pub mod render;
 pub mod search;
 pub mod state;
 
-pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode};
+pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode, library_items};
 pub use options::SettingsPanel;
 pub use playback::PlaybackState;
 pub use search::SearchResults;
