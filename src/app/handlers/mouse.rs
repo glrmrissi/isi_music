@@ -92,9 +92,13 @@ impl App {
                     Some(UiWidget::Library) => {
                         if let Some(rect) = self.state.widget_rects.get(&UiWidget::Library) {
                             let offset = self.state.library_list.offset();
-                            if let Some(idx) =
-                                super::click_to_list_index(rect, cx, cy, super::LIBRARY_LEN, offset)
-                            {
+                            if let Some(idx) = super::click_to_list_index(
+                                rect,
+                                cx,
+                                cy,
+                                self.state.library_items.len(),
+                                offset,
+                            ) {
                                 self.state.library_list.select(Some(idx));
                             }
                         }

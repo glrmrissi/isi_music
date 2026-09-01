@@ -217,6 +217,47 @@ impl App {
                             None => return,
                         };
 
+                        let is_local_track = self
+                            .state
+                            .tracks
+                            .get(actual_idx)
+                            .map(|t| t.uri.starts_with("file://"))
+                            .unwrap_or(false);
+
+                        if is_local_track {
+                            self.activate_local_player();
+                            if !self.ensure_local_player().await {
+                                self.state.status_msg =
+                                    Some("Failed to initialize local player".to_string());
+                                return;
+                            }
+                            let all_tracks = self.state.tracks.clone();
+                            let start_idx = all_tracks
+                                .iter()
+                                .position(|t| t.uri == self.state.tracks[actual_idx].uri)
+                                .unwrap_or(0);
+                            if let Some(player) = &mut self.player_mgr.player {
+                                player.set_queue_tracks(&all_tracks, start_idx);
+                                self.player_mgr.playing_tracks = all_tracks;
+                                let track = self.state.tracks[actual_idx].clone();
+                                self.state.status_msg = Some(format!("Playing {}…", track.name));
+                                self.state.playback.title = track.name.clone();
+                                self.state.playback.artist = track.artist.clone();
+                                self.state.playback.album = track.album.clone();
+                                self.state.playback.duration_ms = track.duration_ms;
+                                self.state.playback.progress_ms = 0;
+                                self.state.playback.is_playing = true;
+                                self.state.playback.is_local = true;
+                                self.state.playback.cover_path = track.cover_path.clone();
+                                self.current_track_uri = track.uri.clone();
+                                self.on_track_started();
+                                self.integrations.reset_scrobble();
+                                self.integrations
+                                    .set_track_start(crate::app::metadata::unix_now());
+                            }
+                            return;
+                        }
+
                         if self.player_mgr.spotify_streaming_disabled {
                             self.state.status_msg =
                                 Some("Spotify Premium required for streaming".to_string());

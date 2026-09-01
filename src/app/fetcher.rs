@@ -23,6 +23,7 @@ pub enum FetchResult {
     AlbumTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     ArtistTracks(Result<(Vec<crate::spotify::TrackSummary>, u32), String>),
     MoreTracks(MoreTracksResult),
+    LocalFolderTracks(Result<Vec<crate::spotify::TrackSummary>, String>),
 }
 
 pub struct FetchCoordinator {
@@ -332,6 +333,28 @@ impl FetchCoordinator {
                 self.pending_nav_down = false;
                 state.tracks_loading = false;
                 state.status_msg = Some(format!("Load more error: {e}"));
+                false
+            }
+            FetchResult::LocalFolderTracks(Ok(tracks)) => {
+                let total = tracks.len() as u32;
+                state.tracks = tracks;
+                state.tracks_total = total;
+                state.tracks_offset = total;
+                state.tracks_api_offset = total;
+                state.track_list.select(if state.tracks.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
+                state.active_content = crate::ui::ActiveContent::Tracks;
+                state.search_results = None;
+                state.rebuild_sort_indices();
+                state.status_msg = None;
+                state.focus = crate::ui::Focus::Tracks;
+                false
+            }
+            FetchResult::LocalFolderTracks(Err(e)) => {
+                state.status_msg = Some(format!("Error: {e}"));
                 false
             }
         }

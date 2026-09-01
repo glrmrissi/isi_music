@@ -9,9 +9,6 @@ mod playback;
 mod playlist_cmds;
 mod search;
 
-/// Number of library items (matches LIBRARY_ITEMS in ui/local_tree.rs)
-const LIBRARY_LEN: usize = 5;
-
 /// Map a mouse click (cx, cy) to a list item index, given the widget's outer
 /// rect (including borders) and the list's scroll offset. Returns None if the
 /// click is on the border or outside the list items.

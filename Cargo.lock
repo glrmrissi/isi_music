@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "isi-music"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "arboard",

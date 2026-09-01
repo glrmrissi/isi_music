@@ -26,11 +26,16 @@ impl Ui {
 
         if state.compact_effective {
             if let Some(sr) = &mut state.search_results {
-                let label = match focus_panel {
-                    SearchPanel::Tracks => "Tracks",
-                    SearchPanel::Artists => "Artists",
-                    SearchPanel::Albums => "Albums",
-                    SearchPanel::Playlists => "Playlists",
+                let local_only = sr.local_only;
+                let label = if local_only {
+                    "Local Results"
+                } else {
+                    match focus_panel {
+                        SearchPanel::Tracks => "Tracks",
+                        SearchPanel::Artists => "Artists",
+                        SearchPanel::Albums => "Albums",
+                        SearchPanel::Playlists => "Playlists",
+                    }
                 };
                 let title = if is_loading {
                     format!("{label} …")
@@ -44,70 +49,94 @@ impl Ui {
                     return;
                 }
                 let list_height = list_area.height as usize;
-                let window = match focus_panel {
-                    SearchPanel::Tracks => {
-                        build_list_window(sr.tracks.len(), list_height, &sr.track_list, |idx| {
-                            let t = &sr.tracks[idx];
-                            ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.primary)),
-                                Span::styled(
-                                    format!("{:>3}. ", idx + 1),
-                                    Style::default().fg(self.theme.text_secondary),
-                                ),
-                                Span::styled(
-                                    t.name.as_str(),
-                                    Style::default().fg(self.theme.text_primary),
-                                ),
-                                Span::styled(
-                                    format!("  {}", t.artist),
-                                    Style::default().fg(self.theme.text_secondary),
-                                ),
-                            ]))
-                        })
+                let window = if local_only {
+                    build_list_window(sr.tracks.len(), list_height, &sr.track_list, |idx| {
+                        let t = &sr.tracks[idx];
+                        ListItem::new(Line::from(vec![
+                            Span::styled("", Style::default().fg(self.theme.primary)),
+                            Span::styled(
+                                format!("{:>3}. ", idx + 1),
+                                Style::default().fg(self.theme.text_secondary),
+                            ),
+                            Span::styled(
+                                t.name.as_str(),
+                                Style::default().fg(self.theme.text_primary),
+                            ),
+                            Span::styled(
+                                format!("  {}", t.artist),
+                                Style::default().fg(self.theme.text_secondary),
+                            ),
+                        ]))
+                    })
+                } else {
+                    match focus_panel {
+                        SearchPanel::Tracks => {
+                            build_list_window(sr.tracks.len(), list_height, &sr.track_list, |idx| {
+                                let t = &sr.tracks[idx];
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("", Style::default().fg(self.theme.primary)),
+                                    Span::styled(
+                                        format!("{:>3}. ", idx + 1),
+                                        Style::default().fg(self.theme.text_secondary),
+                                    ),
+                                    Span::styled(
+                                        t.name.as_str(),
+                                        Style::default().fg(self.theme.text_primary),
+                                    ),
+                                    Span::styled(
+                                        format!("  {}", t.artist),
+                                        Style::default().fg(self.theme.text_secondary),
+                                    ),
+                                ]))
+                            })
+                        }
+                        SearchPanel::Artists => build_list_window(
+                            sr.artists.len(),
+                            list_height,
+                            &sr.artist_list,
+                            |idx| {
+                                let a = &sr.artists[idx];
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("", Style::default().fg(self.theme.primary)),
+                                    Span::styled(
+                                        a.name.as_str(),
+                                        Style::default().fg(self.theme.text_primary),
+                                    ),
+                                ]))
+                            },
+                        ),
+                        SearchPanel::Albums => {
+                            build_list_window(sr.albums.len(), list_height, &sr.album_list, |idx| {
+                                let a = &sr.albums[idx];
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("", Style::default().fg(self.theme.primary)),
+                                    Span::styled(
+                                        a.name.as_str(),
+                                        Style::default().fg(self.theme.text_primary),
+                                    ),
+                                    Span::styled(
+                                        format!("  {}", a.artist),
+                                        Style::default().fg(self.theme.text_secondary),
+                                    ),
+                                ]))
+                            })
+                        }
+                        SearchPanel::Playlists => build_list_window(
+                            sr.playlists.len(),
+                            list_height,
+                            &sr.playlist_list,
+                            |idx| {
+                                let p = &sr.playlists[idx];
+                                ListItem::new(Line::from(vec![
+                                    Span::styled("", Style::default().fg(self.theme.primary)),
+                                    Span::styled(
+                                        p.name.as_str(),
+                                        Style::default().fg(self.theme.text_primary),
+                                    ),
+                                ]))
+                            },
+                        ),
                     }
-                    SearchPanel::Artists => {
-                        build_list_window(sr.artists.len(), list_height, &sr.artist_list, |idx| {
-                            let a = &sr.artists[idx];
-                            ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.primary)),
-                                Span::styled(
-                                    a.name.as_str(),
-                                    Style::default().fg(self.theme.text_primary),
-                                ),
-                            ]))
-                        })
-                    }
-                    SearchPanel::Albums => {
-                        build_list_window(sr.albums.len(), list_height, &sr.album_list, |idx| {
-                            let a = &sr.albums[idx];
-                            ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.primary)),
-                                Span::styled(
-                                    a.name.as_str(),
-                                    Style::default().fg(self.theme.text_primary),
-                                ),
-                                Span::styled(
-                                    format!("  {}", a.artist),
-                                    Style::default().fg(self.theme.text_secondary),
-                                ),
-                            ]))
-                        })
-                    }
-                    SearchPanel::Playlists => build_list_window(
-                        sr.playlists.len(),
-                        list_height,
-                        &sr.playlist_list,
-                        |idx| {
-                            let p = &sr.playlists[idx];
-                            ListItem::new(Line::from(vec![
-                                Span::styled("", Style::default().fg(self.theme.primary)),
-                                Span::styled(
-                                    p.name.as_str(),
-                                    Style::default().fg(self.theme.text_primary),
-                                ),
-                            ]))
-                        },
-                    ),
                 };
                 let ListWindow {
                     items,
@@ -122,60 +151,116 @@ impl Ui {
                             .add_modifier(Modifier::BOLD),
                     )
                     .highlight_symbol(self.theme.highlight_symbol.as_str());
-                match focus_panel {
-                    SearchPanel::Tracks => render_list_window(
-                        frame,
-                        list,
-                        list_area,
-                        &mut sr.track_list,
-                        start,
-                        selected,
-                    ),
-                    SearchPanel::Artists => render_list_window(
-                        frame,
-                        list,
-                        list_area,
-                        &mut sr.artist_list,
-                        start,
-                        selected,
-                    ),
-                    SearchPanel::Albums => render_list_window(
-                        frame,
-                        list,
-                        list_area,
-                        &mut sr.album_list,
-                        start,
-                        selected,
-                    ),
-                    SearchPanel::Playlists => render_list_window(
-                        frame,
-                        list,
-                        list_area,
-                        &mut sr.playlist_list,
-                        start,
-                        selected,
-                    ),
+                if local_only {
+                    render_list_window(frame, list, list_area, &mut sr.track_list, start, selected);
+                } else {
+                    match focus_panel {
+                        SearchPanel::Tracks => render_list_window(
+                            frame,
+                            list,
+                            list_area,
+                            &mut sr.track_list,
+                            start,
+                            selected,
+                        ),
+                        SearchPanel::Artists => render_list_window(
+                            frame,
+                            list,
+                            list_area,
+                            &mut sr.artist_list,
+                            start,
+                            selected,
+                        ),
+                        SearchPanel::Albums => render_list_window(
+                            frame,
+                            list,
+                            list_area,
+                            &mut sr.album_list,
+                            start,
+                            selected,
+                        ),
+                        SearchPanel::Playlists => render_list_window(
+                            frame,
+                            list,
+                            list_area,
+                            &mut sr.playlist_list,
+                            start,
+                            selected,
+                        ),
+                    }
                 }
             }
             return;
         }
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-
-        let top_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(rows[0]);
-
-        let bot_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(rows[1]);
-
         if let Some(sr) = &mut state.search_results {
+            let local_only = sr.local_only;
+
+            if local_only {
+                let title = if is_loading {
+                    "Local Results …".to_string()
+                } else {
+                    "Local Results".to_string()
+                };
+                let block = self.build_panel_block(UiWidget::Search, is_focused, &title);
+                let inner = block.inner(area);
+                frame.render_widget(block, area);
+                if inner.height == 0 {
+                    return;
+                }
+                let ListWindow {
+                    items,
+                    start,
+                    selected,
+                } = build_list_window(
+                    sr.tracks.len(),
+                    inner.height as usize,
+                    &sr.track_list,
+                    |idx| {
+                        let t = &sr.tracks[idx];
+                        ListItem::new(Line::from(vec![
+                            Span::styled(" ", Style::default().fg(self.theme.primary)),
+                            Span::styled(
+                                format!("{:>3}. ", idx + 1),
+                                Style::default().fg(self.theme.text_secondary),
+                            ),
+                            Span::styled(
+                                t.name.as_str(),
+                                Style::default().fg(self.theme.text_primary),
+                            ),
+                            Span::styled(
+                                format!(" - {}", t.artist),
+                                Style::default().fg(self.theme.text_secondary),
+                            ),
+                        ]))
+                    },
+                );
+                let list = List::new(items)
+                    .highlight_style(
+                        Style::default()
+                            .bg(self.theme.highlight_bg)
+                            .fg(self.theme.primary)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol(self.theme.highlight_symbol.as_str());
+                render_list_window(frame, list, inner, &mut sr.track_list, start, selected);
+                return;
+            }
+
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+
+            let top_cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(rows[0]);
+
+            let bot_cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(rows[1]);
             let ptitle = |panel: SearchPanel, base: &'static str| -> String {
                 if is_loading && focus_panel == panel {
                     format!("{base} …")

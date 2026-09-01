@@ -123,6 +123,7 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
 }
 
 async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
+    cfg.spotify.enabled = Some(true);
     println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
     println!("{}", bl!(format!("  {BOLD}Spotify Setup{RESET}")));
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
@@ -149,7 +150,22 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
     );
     println!("{RED}└───────────────────────────────────────────────────────────────┘{RESET}\n");
 
-    let client_id = prompt("Web API Client ID (press Enter for streaming-only): ");
+    let existing_id = cfg
+        .get_client_id()
+        .filter(|s| !s.is_empty() && s != "your_client_id_here");
+
+    let prompt_text = if let Some(ref id) = existing_id {
+        let masked = if id.len() > 8 {
+            format!("{}…{}", &id[..4], &id[id.len().saturating_sub(4)..])
+        } else {
+            id.clone()
+        };
+        format!("Web API Client ID (Enter to keep {masked}, blank for streaming-only): ")
+    } else {
+        "Web API Client ID (press Enter for streaming-only): ".to_string()
+    };
+
+    let client_id = prompt(&prompt_text);
     let trimmed = client_id.trim().to_string();
 
     if !trimmed.is_empty() {
@@ -161,6 +177,9 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         cfg.spotify.client_id = Some(trimmed);
         cfg.save()?;
         println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+    } else if existing_id.is_some() {
+        cfg.save()?;
+        println!("  {GREEN}[OK]{RESET}  Keeping existing Client ID.\n");
     } else {
         cfg.spotify.client_id = None;
         cfg.save()?;
@@ -281,6 +300,7 @@ SETUP
   isi-music setup                    First config (wizard)
   isi-music setup-spotify            Configure Spotify streaming
   isi-music setup-lastfm             Configure Last.fm scrobbling
+  isi-music local-only               Disable Spotify, use local files only
   isi-music doctor                   Diagnose common issues
   isi-music update                   Update to the latest release
   isi-music --clear-logs             Clear the log file
@@ -292,6 +312,8 @@ SPOTIFY STREAMING
   Custom apps use: http://127.0.0.1:8888/callback
   Streaming uses: http://127.0.0.1:8898/login
   Both OAuth flows run during setup/startup.
+  Local-only mode: set [spotify] enabled = false in config.toml
+  (no auth prompt, no Spotify sections, no streaming).
 
 LAST.FM SCROBBLING
   Run `isi-music setup-lastfm` to enable scrobbling.
@@ -337,6 +359,14 @@ fn main() -> Result<()> {
     let mut cfg = config::AppConfig::load()?;
     let args: Vec<String> = std::env::args().collect();
     let arg1 = args.get(1).map(|s| s.as_str());
+
+    // Daemon mode is Spotify-only (no local playback) — refuse to start when disabled.
+    if (arg1 == Some("--daemon") || arg1 == Some("--daemon-child")) && !cfg.spotify_enabled() {
+        anyhow::bail!(
+            "Spotify is disabled in config.toml ([spotify] enabled = false). \
+             Daemon mode requires Spotify."
+        );
+    }
 
     if arg1 == Some("--daemon") {
         // Unix: classic double-step daemonize (fork + setsid + stdio to /dev/null)
@@ -533,6 +563,16 @@ fn main() -> Result<()> {
             .block_on(run_lastfm_setup(&mut cfg));
     }
 
+    if arg1 == Some("local-only") {
+        cfg.spotify = config::SpotifyConfig {
+            client_id: cfg.spotify.client_id.clone(),
+            enabled: Some(false),
+        };
+        cfg.save()?;
+        println!("{GREEN}Spotify disabled.{RESET} Running in local-only mode.");
+        return Ok(());
+    }
+
     let config_missing = crate::config::config_path()
         .map(|p| !p.exists())
         .unwrap_or(true);
@@ -556,7 +596,10 @@ fn main() -> Result<()> {
         }
     }
 
-    if config::load_refresh_token().is_none() && config::load_streaming_refresh_token().is_none() {
+    if cfg.spotify_enabled()
+        && config::load_refresh_token().is_none()
+        && config::load_streaming_refresh_token().is_none()
+    {
         println!();
         println!("  {YELLOW}First time with Spotify?{RESET} Authenticate now to enable streaming.");
         println!("  (Streaming uses the built-in client; Web API needs your Client ID.)\n");

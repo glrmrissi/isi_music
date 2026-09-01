@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
-use super::{Focus, LIBRARY_ITEMS, Ui, UiState};
+use super::{Focus, Ui, UiState};
 use super::{ListWindow, build_list_window, render_list_window};
 
 impl Ui {
@@ -129,7 +129,8 @@ impl Ui {
 
         let block = self.build_panel_block(UiWidget::Library, focused, "Library");
 
-        let items: Vec<ListItem> = LIBRARY_ITEMS
+        let items: Vec<ListItem> = state
+            .library_items
             .iter()
             .map(|name| ListItem::new(Line::from(vec![Span::raw(format!("  {name} "))])))
             .collect();

@@ -6,6 +6,7 @@ use crate::config::AppConfig;
 use super::helpers::theme as dialog_theme;
 
 pub(super) async fn configure_spotify(cfg: &mut AppConfig) -> anyhow::Result<()> {
+    cfg.spotify.enabled = Some(true);
     println!();
     println!("  {}", style("Configure Spotify").bold());
     println!();

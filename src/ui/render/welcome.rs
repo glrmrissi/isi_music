@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{List, ListItem, Paragraph},
 };
 
-use super::{LIBRARY_ITEMS, Ui, UiState};
+use super::{Ui, UiState};
 
 impl Ui {
     pub fn render_welcome(&self, frame: &mut Frame, state: &mut UiState, area: Rect) {
@@ -21,7 +21,7 @@ impl Ui {
                     .add_modifier(Modifier::BOLD),
             ))));
 
-            for name in LIBRARY_ITEMS {
+            for name in state.library_items {
                 items.push(ListItem::new(Line::from(vec![Span::raw(format!(
                     "  {name} "
                 ))])));
@@ -71,7 +71,7 @@ impl Ui {
                 Line::from(""),
             ]
         } else if !state.spotify_authenticated && state.local_tree.visible_len() == 0 {
-            vec![
+            let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
                     "Welcome to isi-music",
@@ -85,47 +85,50 @@ impl Ui {
                     Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
+            ];
+            if state.spotify_enabled {
+                lines.push(Line::from(Span::styled(
                     " 1. Spotify streaming",
                     Style::default()
                         .fg(self.theme.text_primary)
                         .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(Span::styled(
+                )));
+                lines.push(Line::from(Span::styled(
                     "   Run: isi-music setup-spotify",
                     Style::default().fg(self.theme.accent_color),
-                )),
-                Line::from(Span::styled(
+                )));
+                lines.push(Line::from(Span::styled(
                     "   Then select Liked Songs or a playlist from the left panel",
                     Style::default()
                         .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    " 2. Local files",
-                    Style::default()
-                        .fg(self.theme.text_primary)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(Span::styled(
-                    "   Set [local] music_dir in config.toml",
-                    Style::default().fg(self.theme.accent_color),
-                )),
-                Line::from(Span::styled(
-                    "   Then select Local Files from the Library panel and press ENTER",
-                    Style::default()
-                        .fg(self.theme.text_secondary)
-                        .add_modifier(Modifier::DIM),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "TAB navigate   ENTER select   / search   ? help   q quit",
-                    Style::default()
-                        .fg(self.theme.text_secondary)
-                        .add_modifier(Modifier::DIM),
-                )),
-            ]
+                )));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled(
+                " 1. Local files",
+                Style::default()
+                    .fg(self.theme.text_primary)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "   Set [local] music_dir in config.toml",
+                Style::default().fg(self.theme.accent_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "   Then select Local Files from the Library panel and press ENTER",
+                Style::default()
+                    .fg(self.theme.text_secondary)
+                    .add_modifier(Modifier::DIM),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "TAB navigate   ENTER select   / search   ? help   q quit",
+                Style::default()
+                    .fg(self.theme.text_secondary)
+                    .add_modifier(Modifier::DIM),
+            )));
+            lines
         } else if state.spotify_authenticated && state.tracks.is_empty() {
             vec![
                 Line::from(""),
@@ -153,7 +156,7 @@ impl Ui {
                 )),
             ]
         } else if !state.spotify_authenticated && state.local_tree.visible_len() > 0 {
-            vec![
+            let mut lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
                     "isi-music",
@@ -167,19 +170,22 @@ impl Ui {
                     Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
+            ];
+            if state.spotify_enabled {
+                lines.push(Line::from(Span::styled(
                     "Want Spotify streaming? Run: isi-music setup-spotify",
                     Style::default().fg(self.theme.accent_color),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "TAB navigate   ENTER select   / search   ? help   q quit",
-                    Style::default()
-                        .fg(self.theme.text_secondary)
-                        .add_modifier(Modifier::DIM),
-                )),
-            ]
-        } else {
+                )));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled(
+                "TAB navigate   ENTER select   / search   ? help   q quit",
+                Style::default()
+                    .fg(self.theme.text_secondary)
+                    .add_modifier(Modifier::DIM),
+            )));
+            lines
+        } else if state.spotify_enabled {
             vec![
                 Line::from(""),
                 Line::from(Span::styled(
@@ -200,6 +206,28 @@ impl Ui {
                 Line::from(""),
                 Line::from(Span::styled(
                     "TAB navigate panels   ENTER select   / search   Ctrl+F quick search",
+                    Style::default()
+                        .fg(self.theme.text_secondary)
+                        .add_modifier(Modifier::DIM),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "isi-music",
+                    Style::default()
+                        .fg(self.theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Select Local Files from the Library panel and press ENTER to play.",
+                    Style::default().fg(self.theme.text_secondary),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "TAB navigate panels   ENTER select   Ctrl+F quick search",
                     Style::default()
                         .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),

@@ -44,6 +44,7 @@ pub struct App {
     pub seek_tx: mpsc::Sender<u32>,
     pub seek_rx: mpsc::Receiver<u32>,
     spotify: Arc<SpotifyClient>,
+    pub spotify_enabled: bool,
     pub player_mgr: player_mgr::PlayerManager,
     pub integrations: integrations::IntegrationManager,
     ui: Ui,
@@ -84,6 +85,7 @@ impl App {
         ));
         let cfg = lock_or_recover(&settings).config.clone();
         let autoplay_enabled = cfg.autoplay_enabled();
+        let spotify_enabled = cfg.spotify_enabled();
         let lastfm = match &cfg.lastfm.session_key {
             Some(sk) => {
                 use crate::utils::lastfm::{get_api_key, get_api_secret};
@@ -102,33 +104,43 @@ impl App {
 
         let mut startup_warning: Option<String> = None;
 
-        let spotify = match SpotifyClient::new().await {
-            Ok(s) => s,
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("SPOTIFY_FORBIDDEN") {
-                    warn!(
-                        "Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit"
-                    );
-                    debug_overlay.log(
-                        LogLevel::Warn,
-                        "Spotify 403 — create your own app: isi-music setup-spotify",
-                    );
-                    startup_warning = Some(
-                        "Spotify 403: your Client ID hit the Development Mode limit. Create your own app: isi-music setup-spotify".to_string(),
-                    );
-                } else {
-                    debug_overlay.log(
-                        LogLevel::Warn,
-                        format!("Spotify unavailable ({e:#}), starting in local-only mode"),
-                    );
-                }
+        let spotify = if spotify_enabled {
+            match SpotifyClient::new().await {
+                Ok(s) => s,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("SPOTIFY_FORBIDDEN") {
+                        warn!(
+                            "Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit"
+                        );
+                        debug_overlay.log(
+                            LogLevel::Warn,
+                            "Spotify 403 — create your own app: isi-music setup-spotify",
+                        );
+                        startup_warning = Some(
+                            "Spotify 403: your Client ID hit the Development Mode limit. Create your own app: isi-music setup-spotify".to_string(),
+                        );
+                    } else {
+                        debug_overlay.log(
+                            LogLevel::Warn,
+                            format!("Spotify unavailable ({e:#}), starting in local-only mode"),
+                        );
+                    }
 
-                SpotifyClient::new_unauthenticated().await?
+                    SpotifyClient::new_unauthenticated().await?
+                }
             }
+        } else {
+            debug_overlay.log(
+                LogLevel::Info,
+                "Spotify disabled in config ([spotify] enabled = false) — local-only mode",
+            );
+            SpotifyClient::new_unauthenticated().await?
         };
 
-        if spotify.authenticated || crate::config::load_streaming_refresh_token().is_some() {
+        if spotify_enabled
+            && (spotify.authenticated || crate::config::load_streaming_refresh_token().is_some())
+        {
             crate::player::ensure_streaming_auth()
                 .await
                 .map_err(|e| anyhow::anyhow!("Streaming authentication failed: {e}"))?;
@@ -146,12 +158,14 @@ impl App {
         state.reactive_theme_enabled = theme.reactive_theme;
         state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
         state.spotify_authenticated = spotify.authenticated;
+        state.spotify_enabled = spotify_enabled;
+        state.library_items = crate::ui::library_items(spotify_enabled);
 
         if let Some(msg) = startup_warning {
             state.status_msg = Some(msg);
         }
 
-        if spotify.authenticated {
+        if spotify_enabled && spotify.authenticated {
             match spotify.fetch_playlists().await {
                 Ok(playlists) => {
                     state.playlists = playlists;
@@ -164,9 +178,25 @@ impl App {
                     state.status_msg = Some(format!("Failed to load playlists: {e}"));
                 }
             }
+        } else if !spotify_enabled
+            && let Some(music_dir) = crate::app::library::resolve_music_dir(&cfg)
+        {
+            let playlists = tokio::task::spawn_blocking(move || {
+                crate::app::library::scan_local_folder_playlists(&music_dir)
+            })
+            .await
+            .unwrap_or_default();
+            state.playlists = playlists;
+            if !state.playlists.is_empty() {
+                state.playlist_list.select(Some(0));
+            }
         }
 
-        let mut pb = spotify.fetch_playback().await.unwrap_or_default();
+        let mut pb = if spotify_enabled {
+            spotify.fetch_playback().await.unwrap_or_default()
+        } else {
+            crate::ui::PlaybackState::default()
+        };
         pb.is_playing = false;
         let initial_art = pb.art_url.clone();
         state.art_url = initial_art.clone();
@@ -257,6 +287,7 @@ impl App {
             seek_tx,
             seek_rx,
             spotify: Arc::new(spotify),
+            spotify_enabled,
             player_mgr: player_mgr::PlayerManager::new(
                 saved_volume,
                 db_path,
@@ -335,6 +366,7 @@ impl App {
             seek_tx,
             seek_rx,
             spotify: Arc::new(spotify),
+            spotify_enabled: true,
             player_mgr: player_mgr::PlayerManager::new(50, String::new(), autoplay_enabled, None),
             integrations: integrations::IntegrationManager::new(),
             ui: crate::ui::Ui::new(Default::default(), debug_overlay.clone()),

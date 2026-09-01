@@ -21,6 +21,7 @@ pub struct SearchResults {
     pub albums_total: u32,
     pub playlists_total: u32,
     pub loading: bool,
+    pub local_only: bool,
 }
 
 impl SearchResults {
@@ -45,6 +46,7 @@ impl SearchResults {
             albums_total: r.albums_total,
             playlists_total: r.playlists_total,
             loading: false,
+            local_only: false,
         }
     }
 
@@ -93,10 +95,16 @@ impl SearchResults {
     }
 
     pub fn next_panel(&mut self) {
+        if self.local_only {
+            return;
+        }
         self.panel = self.panel.next();
     }
 
     pub fn prev_panel(&mut self) {
+        if self.local_only {
+            return;
+        }
         self.panel = self.panel.prev();
     }
 

@@ -2,6 +2,7 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::App;
+use crate::spotify::FullSearchResults;
 use crate::ui::{Focus, SearchResults};
 
 impl App {
@@ -24,6 +25,8 @@ impl App {
                 let query = self.state.search_query.trim().to_string();
                 if query.is_empty() {
                     self.state.cancel_search();
+                } else if !self.state.spotify_enabled {
+                    self.search_local_files(&query).await;
                 } else if !self.spotify.authenticated {
                     self.state.status_msg = Some("Search requires Spotify".to_string());
                     self.state.search_active = false;
@@ -66,6 +69,75 @@ impl App {
         Ok(())
     }
 
+    async fn ensure_local_tree_loaded(&mut self) {
+        let cfg = crate::config::AppConfig::load().unwrap_or_default();
+        let raw_dir = match cfg.local.music_dir {
+            Some(d) => d,
+            None => return,
+        };
+        let dir = if raw_dir.starts_with('~') {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&raw_dir[2..])
+            } else {
+                std::path::PathBuf::from(&raw_dir)
+            }
+        } else {
+            std::path::PathBuf::from(&raw_dir)
+        };
+        if !dir.exists() {
+            return;
+        }
+
+        let nodes =
+            tokio::task::spawn_blocking(move || crate::app::library::scan_local_files(&dir))
+                .await
+                .unwrap_or_default();
+
+        let tree = crate::ui::LocalFileTree::new(nodes);
+        self.state.local_tree = tree;
+    }
+
+    async fn search_local_files(&mut self, query: &str) {
+        if self.state.local_tree.all_nodes.is_empty() {
+            self.ensure_local_tree_loaded().await;
+        }
+        let query_lower = query.to_lowercase();
+        let all_tracks = self.state.local_tree.all_tracks_flat();
+        let matched: Vec<_> = all_tracks
+            .into_iter()
+            .filter(|t| {
+                t.name.to_lowercase().contains(&query_lower)
+                    || t.artist.to_lowercase().contains(&query_lower)
+                    || t.album.to_lowercase().contains(&query_lower)
+            })
+            .collect();
+        let total = matched.len() as u32;
+        let results = FullSearchResults {
+            tracks: matched,
+            artists: vec![],
+            albums: vec![],
+            playlists: vec![],
+            tracks_total: total,
+            artists_total: 0,
+            albums_total: 0,
+            playlists_total: 0,
+        };
+        self.state.search_results = Some(SearchResults::new(query.to_string(), results));
+        if let Some(sr) = &mut self.state.search_results {
+            sr.local_only = true;
+        }
+        self.state.tracks.clear();
+        self.state.rebuild_sort_indices();
+        self.state.active_playlist_uri = None;
+        self.state.search_active = false;
+        self.state.focus = Focus::Search;
+        self.state.status_msg = if total == 0 {
+            Some(format!("No local results for \"{query}\""))
+        } else {
+            Some(format!("{total} local results for \"{query}\""))
+        };
+    }
+
     pub async fn handle_delete_playlist_confirm_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -84,6 +156,18 @@ impl App {
                         return;
                     }
                 };
+
+                if self
+                    .state
+                    .playlists
+                    .iter()
+                    .any(|p| p.id == playlist_id && p.uri.starts_with("local:folder:"))
+                {
+                    self.state.delete_playlist_confirm = false;
+                    self.state.delete_playlist_target = None;
+                    self.state.status_msg = Some("Local folders cannot be deleted".to_string());
+                    return;
+                }
 
                 self.state.status_msg = Some("Deleting playlist...".to_string());
                 match self.spotify.unfollow_playlist(&playlist_id).await {
