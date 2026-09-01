@@ -16,43 +16,48 @@ impl App {
                     .and_then(|sr| sr.selected_track_uri())
                     .map(|s| s.to_string());
                 if let Some(track_uri) = uri {
-                    if self.player_mgr.spotify_streaming_disabled {
-                        self.state.status_msg =
-                            Some("Spotify Premium required for streaming".to_string());
-                        return;
-                    }
-                    self.activate_spotify_player();
-                    self.ensure_spotify_player().await;
-                    if let Some(player) = &mut self.player_mgr.player {
-                        self.current_track_uri = track_uri.clone();
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        player.set_queue(vec![track_uri], 0);
-                        if let Some(sr) = &self.state.search_results
-                            && let Some(idx) = sr.track_list.selected()
-                            && let Some(t) = sr.tracks.get(idx)
-                        {
-                            self.state.playback.title = t.name.clone();
-                            self.state.playback.artist = t.artist.clone();
-                            self.state.playback.album = t.album.clone();
-                            self.state.playback.duration_ms = t.duration_ms;
-                            self.state.playback.progress_ms = 0;
-                            self.state.playback.is_playing = true;
-                            self.state.playback.is_local = false;
-                            self.player_mgr.playing_tracks = vec![crate::spotify::TrackSummary {
-                                uri: t.uri.clone(),
-                                name: t.name.clone(),
-                                artist: t.artist.clone(),
-                                album: t.album.clone(),
-                                duration_ms: t.duration_ms,
-                                cover_path: t.cover_path.clone(),
-                                added_at: None,
-                            }];
-                            self.on_track_started();
+                    let is_local = track_uri.starts_with("file://");
+                    if is_local {
+                        self.play_local_search_track(&track_uri).await;
+                    } else {
+                        if self.player_mgr.spotify_streaming_disabled {
+                            self.state.status_msg =
+                                Some("Spotify Premium required for streaming".to_string());
+                            return;
                         }
-                    } else if self.spotify.authenticated {
-                        let _ = self.spotify.play_track_uri(&track_uri).await;
+                        self.activate_spotify_player();
+                        self.ensure_spotify_player().await;
+                        if let Some(player) = &mut self.player_mgr.player {
+                            self.current_track_uri = track_uri.clone();
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            player.set_queue(vec![track_uri], 0);
+                            if let Some(sr) = &self.state.search_results
+                                && let Some(idx) = sr.track_list.selected()
+                                && let Some(t) = sr.tracks.get(idx)
+                            {
+                                self.state.playback.title = t.name.clone();
+                                self.state.playback.artist = t.artist.clone();
+                                self.state.playback.album = t.album.clone();
+                                self.state.playback.duration_ms = t.duration_ms;
+                                self.state.playback.progress_ms = 0;
+                                self.state.playback.is_playing = true;
+                                self.state.playback.is_local = false;
+                                self.player_mgr.playing_tracks =
+                                    vec![crate::spotify::TrackSummary {
+                                        uri: t.uri.clone(),
+                                        name: t.name.clone(),
+                                        artist: t.artist.clone(),
+                                        album: t.album.clone(),
+                                        duration_ms: t.duration_ms,
+                                        cover_path: t.cover_path.clone(),
+                                        added_at: None,
+                                    }];
+                                self.on_track_started();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.play_track_uri(&track_uri).await;
+                        }
                     }
-                    self.state.focus = Focus::Tracks;
                 }
             }
             Some(SearchPanel::Albums) => {
@@ -194,6 +199,46 @@ impl App {
                 }
             }
             None => {}
+        }
+    }
+
+    async fn play_local_search_track(&mut self, track_uri: &str) {
+        self.activate_local_player();
+        if !self.ensure_local_player().await {
+            self.state.status_msg = Some("Failed to initialize local player".to_string());
+            return;
+        }
+        let track = self
+            .state
+            .search_results
+            .as_ref()
+            .and_then(|sr| sr.tracks.iter().find(|t| t.uri == track_uri))
+            .cloned();
+        let Some(track) = track else {
+            return;
+        };
+        let all_tracks = self.state.local_tree.all_tracks_flat();
+        let start_idx = all_tracks
+            .iter()
+            .position(|t| t.uri == track_uri)
+            .unwrap_or(0);
+        if let Some(player) = &mut self.player_mgr.player {
+            player.set_queue_tracks(&all_tracks, start_idx);
+            self.player_mgr.playing_tracks = all_tracks;
+            self.state.status_msg = Some(format!("Playing {}…", track.name));
+            self.state.playback.title = track.name.clone();
+            self.state.playback.artist = track.artist.clone();
+            self.state.playback.album = track.album.clone();
+            self.state.playback.duration_ms = track.duration_ms;
+            self.state.playback.progress_ms = 0;
+            self.state.playback.is_playing = true;
+            self.state.playback.is_local = true;
+            self.state.playback.cover_path = track.cover_path.clone();
+            self.current_track_uri = track.uri.clone();
+            self.on_track_started();
+            self.integrations.reset_scrobble();
+            self.integrations
+                .set_track_start(crate::app::metadata::unix_now());
         }
     }
 

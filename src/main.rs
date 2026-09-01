@@ -123,6 +123,7 @@ async fn run_lastfm_setup(cfg: &mut config::AppConfig) -> Result<()> {
 }
 
 async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
+    cfg.spotify.enabled = Some(true);
     println!("\n{RED}┌───────────────────────────────────────────────────────────────┐{RESET}");
     println!("{}", bl!(format!("  {BOLD}Spotify Setup{RESET}")));
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
@@ -177,6 +178,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         cfg.save()?;
         println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
     } else if existing_id.is_some() {
+        cfg.save()?;
         println!("  {GREEN}[OK]{RESET}  Keeping existing Client ID.\n");
     } else {
         cfg.spotify.client_id = None;
@@ -298,6 +300,7 @@ SETUP
   isi-music setup                    First config (wizard)
   isi-music setup-spotify            Configure Spotify streaming
   isi-music setup-lastfm             Configure Last.fm scrobbling
+  isi-music local-only               Disable Spotify, use local files only
   isi-music doctor                   Diagnose common issues
   isi-music update                   Update to the latest release
   isi-music --clear-logs             Clear the log file
@@ -558,6 +561,16 @@ fn main() -> Result<()> {
             .enable_all()
             .build()?
             .block_on(run_lastfm_setup(&mut cfg));
+    }
+
+    if arg1 == Some("local-only") {
+        cfg.spotify = config::SpotifyConfig {
+            client_id: cfg.spotify.client_id.clone(),
+            enabled: Some(false),
+        };
+        cfg.save()?;
+        println!("{GREEN}Spotify disabled.{RESET} Running in local-only mode.");
+        return Ok(());
     }
 
     let config_missing = crate::config::config_path()
