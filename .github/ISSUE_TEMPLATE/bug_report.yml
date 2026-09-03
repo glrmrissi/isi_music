@@ -48,8 +48,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: What version of isi-music are you running? (run `isi-music --help` and check the first line)
-      placeholder: v0.3.5
+      description: What version of isi-music are you running? (run `isi-music --version`)
+      placeholder: vX.Y.Z
     validations:
       required: true
 

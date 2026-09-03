@@ -214,15 +214,52 @@ pub fn reveal_secret(idx: usize) -> String {{
     // Embed icon in Windows .exe
     #[cfg(target_os = "windows")]
     {
-        let rc_path = Path::new("assets/isi-music.rc");
         let icon_path = Path::new("assets/isi-music.ico");
-        if rc_path.exists() && icon_path.exists() {
-            if let Err(e) = embed_resource::compile("assets/isi-music", embed_resource::NONE)
-                .manifest_required()
+        if icon_path.exists() {
+            let pkg_version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
+            let parts: Vec<&str> = pkg_version.split('.').collect();
+            let major: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let minor: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let patch: u32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let rc_content = format!(
+                r#"1 ICON "isi-music.ico"
+
+1 VERSIONINFO
+FILEVERSION {major},{minor},{patch},0
+PRODUCTVERSION {major},{minor},{patch},0
+FILEOS 0x40004L
+FILETYPE 0x1L
+{{
+    BLOCK "StringFileInfo"
+    {{
+        BLOCK "000004b0"
+        {{
+            VALUE "FileDescription", "isi-music - Spotify + local music TUI"
+            VALUE "ProductName", "isi-music"
+            VALUE "OriginalFilename", "isi-music.exe"
+            VALUE "FileVersion", "{pkg_version}"
+            VALUE "ProductVersion", "{pkg_version}"
+        }}
+    }}
+    BLOCK "VarFileInfo"
+    {{
+        VALUE "Translation", 0x0000, 0x04b0
+    }}
+}}
+"#
+            );
+            let rc_out = Path::new(&out_dir).join("isi-music.rc");
+            fs::write(&rc_out, &rc_content).expect("Failed to write isi-music.rc");
+
+            let rc_str = rc_out.to_str().expect("OUT_DIR not UTF-8");
+            let assets_dir = Path::new("assets");
+            let assets_str = assets_dir.to_str().expect("assets path not UTF-8");
+            if let Err(e) =
+                embed_resource::compile(rc_str, embed_resource::ParamsIncludeDirs(&[assets_str]))
+                    .manifest_required()
             {
                 println!("cargo:warning=Failed to embed icon: {e:?}");
             }
-            println!("cargo:rerun-if-changed=assets/isi-music.rc");
             println!("cargo:rerun-if-changed=assets/isi-music.ico");
         }
     }
