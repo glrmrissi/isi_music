@@ -66,7 +66,7 @@ impl App {
         let artist = self.state.playback.artist.clone();
         let uri = self.current_track_uri.clone();
 
-        if !title.is_empty() && !artist.is_empty() {
+        if !title.is_empty() && !artist.is_empty() && self.enable_lyrics {
             self.fetcher.ensure_lyrics(&self.debug_overlay);
             self.state.playback.lyrics_loading = true;
             if let Some(lyrics) = &self.fetcher.lyrics {
@@ -304,8 +304,11 @@ impl App {
         };
 
         if uri.starts_with("file://") {
-            self.state.status_msg =
-                Some("Recommendations require a Spotify track or artist".to_string());
+            self.state.status_msg = if !self.spotify_enabled {
+                Some("Recommendations require Spotify (disabled in config.toml)".to_string())
+            } else {
+                Some("Recommendations require a Spotify track or artist".to_string())
+            };
             return;
         }
 
