@@ -176,7 +176,10 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         }
         cfg.spotify.client_id = Some(trimmed);
         cfg.save()?;
-        println!("  {GREEN}[OK]{RESET}  Saved to ~/.config/isi-music/config.toml\n");
+        let saved_path = crate::config::config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "config.toml".to_string());
+        println!("  {GREEN}[OK]{RESET}  Saved to {saved_path}\n");
     } else if existing_id.is_some() {
         cfg.save()?;
         println!("  {GREEN}[OK]{RESET}  Keeping existing Client ID.\n");
@@ -250,7 +253,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
 fn print_help() {
     println!(
         "\
-isi-music — terminal Spotify player
+isi-music: terminal music player for Spotify and local files
 
 USAGE
   isi-music               Launch the TUI player
@@ -266,6 +269,13 @@ TUI KEYBINDINGS"
             println!("    {entry}");
         }
     }
+
+    let config_path_str = crate::config::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "config.toml".to_string());
+    let log_path_str = crate::config::log_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "isi-music.log".to_string());
 
     println!(
         "\
@@ -317,20 +327,15 @@ SPOTIFY STREAMING
 
 LAST.FM SCROBBLING
   Run `isi-music setup-lastfm` to enable scrobbling.
-  The setup will:
-    1. Ask for your Last.fm API Key and API Secret
-       (create an app at https://www.last.fm/api/account/create)
-    2. Open the Last.fm authorization page in your browser
-    3. Wait for you to authorize, then obtain a session key
-    4. Save credentials to ~/.config/isi-music/config.toml
+  No API credentials needed: isi-music handles everything.
+  The setup will open the Last.fm authorization page in your browser.
   Once configured, isi-music will:
     - Send \"now playing\" updates when a track starts
     - Scrobble tracks after 50% of the song has been played
 
 FILES
-  Config   ~/.config/isi-music/config.toml
-  Log      ~/.local/share/isi-music/isi-music.log
-"
+  Config   {config_path_str}
+  Log      {log_path_str}"
     );
 
     #[cfg(unix)]

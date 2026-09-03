@@ -232,8 +232,10 @@ impl App {
         let raw_dir = match cfg.local.music_dir {
             Some(d) => d,
             None => {
-                self.state.status_msg =
-                    Some("Set [local] music_dir in ~/.config/isi-music/config.toml".to_string());
+                let path = crate::config::config_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "config.toml".to_string());
+                self.state.status_msg = Some(format!("Set [local] music_dir in {}", path));
                 return;
             }
         };

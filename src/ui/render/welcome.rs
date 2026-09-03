@@ -106,7 +106,7 @@ impl Ui {
                 lines.push(Line::from(""));
             }
             lines.push(Line::from(Span::styled(
-                " 1. Local files",
+                " 2. Local files",
                 Style::default()
                     .fg(self.theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -166,7 +166,7 @@ impl Ui {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Local files loaded! Select Local Files and press ENTER to play.",
+                    "Local files loaded! Select a track and press ENTER to play.",
                     Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
@@ -179,7 +179,7 @@ impl Ui {
                 lines.push(Line::from(""));
             }
             lines.push(Line::from(Span::styled(
-                "TAB navigate   ENTER select   / search   ? help   q quit",
+                "TAB navigate   ENTER select   Ctrl+F quick search   ? help   q quit",
                 Style::default()
                     .fg(self.theme.text_secondary)
                     .add_modifier(Modifier::DIM),
@@ -222,12 +222,16 @@ impl Ui {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Select Local Files from the Library panel and press ENTER to play.",
+                    "Your music folders appear as playlists in the Playlists panel.",
+                    Style::default().fg(self.theme.text_secondary),
+                )),
+                Line::from(Span::styled(
+                    "Select one and press ENTER to play, or open Local Files for the full tree.",
                     Style::default().fg(self.theme.text_secondary),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "TAB navigate panels   ENTER select   Ctrl+F quick search",
+                    "TAB navigate panels   ENTER select   / search   Ctrl+F quick search",
                     Style::default()
                         .fg(self.theme.text_secondary)
                         .add_modifier(Modifier::DIM),
