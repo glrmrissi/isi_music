@@ -26,14 +26,15 @@ impl App {
                             player.play();
                         }
                         self.state.playback.is_playing = true;
+                        self.state.status_msg = None;
                     } else if self.spotify.authenticated {
                         let _ = self.spotify.toggle_playback().await;
                     }
                 }
             }
             A::NextTrack => {
-                if self.player_mgr.player.is_none() {
-                    self.ensure_spotify_player().await;
+                if self.player_mgr.player.is_none() && !self.ensure_spotify_player().await {
+                    self.ensure_local_player().await;
                 }
                 if let Some(player) = &mut self.player_mgr.player {
                     if player.next() {
@@ -45,8 +46,8 @@ impl App {
                 }
             }
             A::PrevTrack => {
-                if self.player_mgr.player.is_none() {
-                    self.ensure_spotify_player().await;
+                if self.player_mgr.player.is_none() && !self.ensure_spotify_player().await {
+                    self.ensure_local_player().await;
                 }
                 if let Some(player) = &mut self.player_mgr.player {
                     if player.prev() {
@@ -170,6 +171,9 @@ impl App {
                         );
                         self.state.status_msg = Some(format!("+ {name} added to queue"));
                         self.sync_queue_display();
+                    } else {
+                        self.state.status_msg =
+                            Some("Start playback first to add to queue".to_string());
                     }
                 }
             }
@@ -358,7 +362,7 @@ impl App {
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
-                if self.state.show_lyrics {
+                if self.state.show_lyrics && self.enable_lyrics {
                     self.fetcher.ensure_lyrics(&self.debug_overlay);
                 }
                 self.state.status_msg = Some(if self.state.show_lyrics {
@@ -418,20 +422,32 @@ impl App {
                 self.state.command_buffer.clear();
             }
             A::DeletePlaylist => {
-                if !self.spotify.authenticated {
-                    self.state.status_msg =
-                        Some("Spotify not connected - run: isi-music setup-spotify".to_string());
-                } else if self.state.focus == crate::ui::Focus::Playlists {
+                if self.state.focus == crate::ui::Focus::Playlists {
                     let idx = self.state.playlist_list.selected();
-                    let name = idx
+                    let is_local_folder = idx
                         .and_then(|i| self.state.playlists.get(i))
-                        .map(|p| p.name.clone())
-                        .unwrap_or_default();
-                    if name.is_empty() {
-                        self.state.status_msg = Some("No playlist selected".to_string());
+                        .is_some_and(|p| p.uri.starts_with("local:folder:"));
+                    if is_local_folder {
+                        return;
+                    }
+                    if !self.spotify_enabled {
+                        self.state.status_msg =
+                            Some("Spotify is disabled in config.toml".to_string());
+                    } else if !self.spotify.authenticated {
+                        self.state.status_msg = Some(
+                            "Spotify not connected - run: isi-music setup-spotify".to_string(),
+                        );
                     } else {
-                        self.state.delete_playlist_confirm = true;
-                        self.state.delete_playlist_target = Some(name);
+                        let name = idx
+                            .and_then(|i| self.state.playlists.get(i))
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
+                        if name.is_empty() {
+                            self.state.status_msg = Some("No playlist selected".to_string());
+                        } else {
+                            self.state.delete_playlist_confirm = true;
+                            self.state.delete_playlist_target = Some(name);
+                        }
                     }
                 } else {
                     self.state.status_msg = Some("Focus on Playlists tab to delete".to_string());

@@ -45,6 +45,7 @@ pub struct App {
     pub seek_rx: mpsc::Receiver<u32>,
     spotify: Arc<SpotifyClient>,
     pub spotify_enabled: bool,
+    pub enable_lyrics: bool,
     pub player_mgr: player_mgr::PlayerManager,
     pub integrations: integrations::IntegrationManager,
     ui: Ui,
@@ -86,6 +87,7 @@ impl App {
         let cfg = lock_or_recover(&settings).config.clone();
         let autoplay_enabled = cfg.autoplay_enabled();
         let spotify_enabled = cfg.spotify_enabled();
+        let enable_lyrics = cfg.enable_lyrics();
         let lastfm = match &cfg.lastfm.session_key {
             Some(sk) => {
                 use crate::utils::lastfm::{get_api_key, get_api_secret};
@@ -288,6 +290,7 @@ impl App {
             seek_rx,
             spotify: Arc::new(spotify),
             spotify_enabled,
+            enable_lyrics,
             player_mgr: player_mgr::PlayerManager::new(
                 saved_volume,
                 db_path,
@@ -367,6 +370,7 @@ impl App {
             seek_rx,
             spotify: Arc::new(spotify),
             spotify_enabled: true,
+            enable_lyrics: true,
             player_mgr: player_mgr::PlayerManager::new(50, String::new(), autoplay_enabled, None),
             integrations: integrations::IntegrationManager::new(),
             ui: crate::ui::Ui::new(Default::default(), debug_overlay.clone()),
@@ -401,6 +405,9 @@ impl App {
     }
 
     async fn ensure_spotify_player(&mut self) -> bool {
+        if !self.spotify_enabled {
+            return false;
+        }
         let ok = self
             .player_mgr
             .ensure_spotify_player(&self.spotify, &self.state, &self.debug_overlay, &self.audio)
@@ -517,7 +524,9 @@ impl App {
                             }
                         }
 
-                        self.fetcher.ensure_lyrics(&self.debug_overlay);
+                        if self.enable_lyrics {
+                            self.fetcher.ensure_lyrics(&self.debug_overlay);
+                        }
                         if let Some(lyrics) = &self.fetcher.lyrics {
                             lyrics.request(
                                 &self.state.playback.title,

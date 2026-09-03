@@ -223,7 +223,8 @@ impl App {
                         }
                     }
                     SettingsSection::Account => {
-                        let idx = panel.selected_item;
+                        let spotify_offset = if panel.config.spotify_enabled() { 0 } else { 1 };
+                        let idx = panel.selected_item + spotify_offset;
                         if idx == 3 {
                             let v = !panel.config.discord.enabled.unwrap_or(false);
                             panel.config.discord.enabled = Some(v);
@@ -253,7 +254,10 @@ impl App {
                     self.state.status_msg = Some("Cache stats refreshed".to_string());
                 }
                 SettingsAction::RefreshPlaylists => {
-                    if self.spotify.authenticated {
+                    if !self.spotify_enabled {
+                        self.state.status_msg =
+                            Some("Spotify is disabled in config.toml".to_string());
+                    } else if self.spotify.authenticated {
                         match self.spotify.fetch_playlists().await {
                             Ok(playlists) => {
                                 self.state.playlists = playlists;
