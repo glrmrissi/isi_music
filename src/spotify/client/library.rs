@@ -102,6 +102,54 @@ impl SpotifyClient {
         Ok((tracks, total))
     }
 
+    pub async fn stream_album_tracks(
+        &self,
+        album_id: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let (first_tracks, total) = self.fetch_album_tracks(album_id, 0).await?;
+        if tx
+            .send(crate::app::fetcher::StreamEvent::AlbumTracksInitial {
+                album_id: album_id.to_string(),
+                tracks: first_tracks,
+                total,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut offset = 50;
+        while offset < total {
+            super::spotify_rate_limit().await;
+            match self.fetch_album_tracks(album_id, offset).await {
+                Ok((batch, new_total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    offset += batch.len() as u32;
+                    if tx
+                        .send(crate::app::fetcher::StreamEvent::AlbumTracksBatch {
+                            album_id: album_id.to_string(),
+                            tracks: batch,
+                            total: new_total,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("stream_album_tracks: failed at offset {offset}: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
     pub async fn fetch_saved_albums(&self, offset: u32) -> Result<(Vec<AlbumSummary>, u32)> {
         if !self.authenticated {
             return Ok((Vec::new(), 0));
@@ -189,6 +237,61 @@ impl SpotifyClient {
         Ok((albums, total))
     }
 
+    pub async fn stream_saved_albums(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let (first_albums, total) = self.fetch_saved_albums(0).await?;
+        if tx
+            .send(crate::app::fetcher::StreamEvent::AlbumsInitial {
+                albums: first_albums,
+                total,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut offset = 20;
+        while offset < total {
+            super::spotify_rate_limit().await;
+            match self.fetch_saved_albums(offset).await {
+                Ok((batch, new_total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    offset += batch.len() as u32;
+                    if tx
+                        .send(crate::app::fetcher::StreamEvent::AlbumsBatch {
+                            albums: batch,
+                            total: new_total,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("stream_saved_albums: failed at offset {offset}: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
+    pub async fn stream_followed_artists(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let artists = self.fetch_followed_artists().await?;
+        let _ = tx.send(crate::app::fetcher::StreamEvent::ArtistsInitial { artists });
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
     pub async fn fetch_followed_artists(&self) -> Result<Vec<ArtistSummary>> {
         if !self.authenticated {
             return Ok(Vec::new());
@@ -197,76 +300,100 @@ impl SpotifyClient {
             info!("Library cache hit: followed artists");
             return Ok(cached);
         }
-        let token = self
-            .get_access_token()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
-        super::spotify_rate_limit().await;
-        let response = self
-            .http
-            .get("https://api.spotify.com/v1/me/following")
-            .bearer_auth(&token)
-            .query(&[("type", "artist"), ("limit", "50")])
-            .send()
+        let mut all_artists = Vec::with_capacity(50);
+        let mut after: Option<String> = None;
+
+        loop {
+            let token = self
+                .get_access_token()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+            super::spotify_rate_limit().await;
+            let mut query = vec![("type", "artist"), ("limit", "50")];
+            if let Some(ref a) = after {
+                query.push(("after", a));
+            }
+            let response = super::send_with_retry(
+                &token,
+                self.http
+                    .get("https://api.spotify.com/v1/me/following")
+                    .query(&query),
+            )
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
 
-            if status.as_u16() == 401 {
-                warn!("Got 401 Unauthorized - token may have expired");
-                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+                if status.as_u16() == 401 {
+                    warn!("Got 401 Unauthorized - token may have expired");
+                    return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+                }
+
+                if status.as_u16() == 429 {
+                    warn!("Rate limited on Spotify API");
+                    return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+                }
+
+                if status.as_u16() == 403 {
+                    warn!("Got 403 Forbidden. Body: {body}");
+                    return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+                }
+                return Err(anyhow::anyhow!(
+                    "Spotify API error: status {} body: {}",
+                    status,
+                    body
+                ));
             }
 
-            if status.as_u16() == 429 {
-                warn!("Rate limited on Spotify API");
-                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            let json: serde_json::Value = response.json().await?;
+            let mut page_count = 0usize;
+
+            if let Some(artists_obj) = json["artists"].as_object()
+                && let Some(items) = artists_obj.get("items").and_then(|v| v.as_array())
+            {
+                page_count = items.len();
+                for artist in items {
+                    let id = artist["id"].as_str().unwrap_or("").to_string();
+                    let name = artist["name"].as_str().unwrap_or("Unknown").to_string();
+                    let uri = artist["uri"].as_str().unwrap_or("").to_string();
+                    let genres = artist["genres"]
+                        .as_array()
+                        .map(|g| {
+                            g.iter()
+                                .filter_map(|x| x.as_str())
+                                .take(2)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    all_artists.push(ArtistSummary {
+                        id,
+                        name,
+                        uri,
+                        genres,
+                    });
+                }
             }
 
-            if status.as_u16() == 403 {
-                warn!("Got 403 Forbidden. Body: {body}");
-                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            let next_cursor = json["artists"]["cursors"]["after"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let has_next = json["artists"]["next"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty());
+
+            if page_count == 0 || !has_next || next_cursor.is_none() {
+                break;
             }
-            return Err(anyhow::anyhow!(
-                "Spotify API error: status {} body: {}",
-                status,
-                body
-            ));
+            after = next_cursor;
         }
 
-        let json: serde_json::Value = response.json().await?;
-        let mut artists = Vec::with_capacity(50);
-
-        if let Some(artists_obj) = json["artists"].as_object()
-            && let Some(items) = artists_obj.get("items").and_then(|v| v.as_array())
-        {
-            for artist in items {
-                let id = artist["id"].as_str().unwrap_or("").to_string();
-                let name = artist["name"].as_str().unwrap_or("Unknown").to_string();
-                let uri = artist["uri"].as_str().unwrap_or("").to_string();
-                let genres = artist["genres"]
-                    .as_array()
-                    .map(|g| {
-                        g.iter()
-                            .filter_map(|x| x.as_str())
-                            .take(2)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_default();
-                artists.push(ArtistSummary {
-                    id,
-                    name,
-                    uri,
-                    genres,
-                });
-            }
-        }
-
-        self.library_cache.save_artists(&artists);
-        Ok(artists)
+        self.library_cache.save_artists(&all_artists);
+        Ok(all_artists)
     }
 
     pub async fn fetch_artist_tracks(

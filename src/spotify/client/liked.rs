@@ -27,13 +27,13 @@ impl SpotifyClient {
 
         let offset_str = offset.to_string();
         super::spotify_rate_limit().await;
-        let response = self
-            .http
-            .get("https://api.spotify.com/v1/me/tracks")
-            .bearer_auth(&token)
-            .query(&[("limit", "50"), ("offset", &offset_str)])
-            .send()
-            .await?;
+        let response = super::send_with_retry(
+            &token,
+            self.http
+                .get("https://api.spotify.com/v1/me/tracks")
+                .query(&[("limit", "50"), ("offset", &offset_str)]),
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -117,11 +117,11 @@ impl SpotifyClient {
             return Ok((tracks, total, next_cursor));
         }
 
-        let (_, total) = self.fetch_liked_tracks(fallback_offset, true).await?;
+        let (api_tracks, total) = self.fetch_liked_tracks(fallback_offset, true).await?;
         let (tracks, _, next_cursor) = self
             .library_cache
             .get_liked_tracks_page(after, 50)
-            .unwrap_or_default();
+            .unwrap_or((api_tracks, total, None));
         Ok((tracks, total, next_cursor))
     }
 
@@ -136,13 +136,13 @@ impl SpotifyClient {
             .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         super::spotify_rate_limit().await;
-        let response = self
-            .http
-            .get("https://api.spotify.com/v1/me/tracks")
-            .bearer_auth(&token)
-            .query(&[("limit", "50"), ("offset", "0")])
-            .send()
-            .await?;
+        let response = super::send_with_retry(
+            &token,
+            self.http
+                .get("https://api.spotify.com/v1/me/tracks")
+                .query(&[("limit", "50"), ("offset", "0")]),
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -221,15 +221,19 @@ impl SpotifyClient {
             );
 
             for page in 1..total_pages {
+                let page_token = self
+                    .get_access_token()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
                 let offset = page * 50;
                 super::spotify_rate_limit().await;
-                let resp = self
-                    .http
-                    .get("https://api.spotify.com/v1/me/tracks")
-                    .bearer_auth(&token)
-                    .query(&[("limit", "50"), ("offset", &offset.to_string())])
-                    .send()
-                    .await?;
+                let resp = super::send_with_retry(
+                    &page_token,
+                    self.http
+                        .get("https://api.spotify.com/v1/me/tracks")
+                        .query(&[("limit", "50"), ("offset", &offset.to_string())]),
+                )
+                .await?;
 
                 if !resp.status().is_success() {
                     warn!("Failed to fetch liked tracks page {page}");
@@ -282,5 +286,190 @@ impl SpotifyClient {
             .reset_liked_tracks_cache(&all_tracks, &all_added_ats);
 
         Ok((all_tracks, total))
+    }
+
+    pub async fn stream_liked_tracks(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        if !self.authenticated {
+            let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+            return Ok(());
+        }
+
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        super::spotify_rate_limit().await;
+        let response = super::send_with_retry(
+            &token,
+            self.http
+                .get("https://api.spotify.com/v1/me/tracks")
+                .query(&[("limit", "50"), ("offset", "0")]),
+        )
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let err_msg = if status.as_u16() == 401 {
+                "SPOTIFY_UNAUTHORIZED".to_string()
+            } else if status.as_u16() == 429 {
+                "SPOTIFY_RATE_LIMITED".to_string()
+            } else if status.as_u16() == 403 {
+                format!("SPOTIFY_FORBIDDEN: {body}")
+            } else {
+                format!("Spotify API error: status {status} body: {body}")
+            };
+            let _ = tx.send(crate::app::fetcher::StreamEvent::Error(err_msg));
+            return Ok(());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+
+        if let Some((tracks, cached_total, _)) =
+            self.library_cache.get_liked_tracks_page(None, u32::MAX)
+            && !tracks.is_empty()
+            && cached_total == total
+        {
+            info!("stream_liked_tracks: cache hit ({} tracks)", tracks.len());
+            let _ = tx.send(crate::app::fetcher::StreamEvent::LikedTracksInitial { tracks, total });
+            let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+            return Ok(());
+        }
+
+        let mut page_0_tracks = Vec::with_capacity(50);
+        let mut page_0_added_ats = Vec::with_capacity(50);
+
+        if let Some(items) = json["items"].as_array() {
+            for saved in items {
+                let added_at = saved["added_at"].as_str().unwrap_or("").to_string();
+                let track = &saved["track"];
+                let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                let artist = track["artists"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x["name"].as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                let uri = track["uri"].as_str().unwrap_or("").to_string();
+
+                if !uri.is_empty() {
+                    page_0_added_ats.push(added_at.clone());
+                    page_0_tracks.push(TrackSummary {
+                        name,
+                        artist,
+                        album,
+                        duration_ms,
+                        uri,
+                        cover_path: None,
+                        added_at: Some(added_at),
+                    });
+                }
+            }
+        }
+
+        self.library_cache
+            .reset_liked_tracks_cache(&page_0_tracks, &page_0_added_ats);
+
+        if tx
+            .send(crate::app::fetcher::StreamEvent::LikedTracksInitial {
+                tracks: page_0_tracks,
+                total,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let total_pages = total.div_ceil(50);
+        for page in 1..total_pages {
+            let offset = page * 50;
+            let page_token = match self.get_access_token().await {
+                Some(t) => t,
+                None => continue,
+            };
+            super::spotify_rate_limit().await;
+            let resp = super::send_with_retry(
+                &page_token,
+                self.http
+                    .get("https://api.spotify.com/v1/me/tracks")
+                    .query(&[("limit", "50"), ("offset", &offset.to_string())]),
+            )
+            .await;
+
+            let Ok(resp) = resp else {
+                continue;
+            };
+
+            if !resp.status().is_success() {
+                continue;
+            }
+
+            let Ok(json) = resp.json::<serde_json::Value>().await else {
+                continue;
+            };
+
+            let mut batch_tracks = Vec::with_capacity(50);
+            let mut batch_added_ats = Vec::with_capacity(50);
+
+            if let Some(items) = json["items"].as_array() {
+                for saved in items {
+                    let added_at = saved["added_at"].as_str().unwrap_or("").to_string();
+                    let track = &saved["track"];
+                    let name = track["name"].as_str().unwrap_or("Unknown").to_string();
+                    let artist = track["artists"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x["name"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    let album = track["album"]["name"].as_str().unwrap_or("").to_string();
+                    let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
+                    let uri = track["uri"].as_str().unwrap_or("").to_string();
+
+                    if !uri.is_empty() {
+                        batch_added_ats.push(added_at.clone());
+                        batch_tracks.push(TrackSummary {
+                            name,
+                            artist,
+                            album,
+                            duration_ms,
+                            uri,
+                            cover_path: None,
+                            added_at: Some(added_at),
+                        });
+                    }
+                }
+            }
+
+            if !batch_tracks.is_empty() {
+                self.library_cache
+                    .append_liked_tracks_batch(&batch_tracks, &batch_added_ats);
+                if tx
+                    .send(crate::app::fetcher::StreamEvent::LikedTracksBatch {
+                        tracks: batch_tracks,
+                        total,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
     }
 }

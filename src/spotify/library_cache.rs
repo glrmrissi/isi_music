@@ -56,6 +56,8 @@ impl LibraryCache {
         })
     }
 
+    const CACHE_TTL_SECS: i64 = 3600;
+
     fn unix_now() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -65,13 +67,16 @@ impl LibraryCache {
 
     pub fn get_tracks(&self, key: &str) -> Option<(Vec<TrackSummary>, u32)> {
         let conn = self.conn.lock().ok()?;
-        let (data, total): (String, u32) = conn
+        let (data, total, saved_at): (String, u32, i64) = conn
             .query_row(
-                "SELECT data, total FROM library_cache WHERE key = ?1",
+                "SELECT data, total, saved_at FROM library_cache WHERE key = ?1",
                 params![key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .ok()?;
+        if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
+            return None;
+        }
         let rows: Vec<CachedTrack> = serde_json::from_str(&data).ok()?;
         let tracks = rows
             .into_iter()
@@ -118,13 +123,16 @@ impl LibraryCache {
 
     pub fn get_albums(&self) -> Option<(Vec<AlbumSummary>, u32)> {
         let conn = self.conn.lock().ok()?;
-        let (data, total): (String, u32) = conn
+        let (data, total, saved_at): (String, u32, i64) = conn
             .query_row(
-                "SELECT data, total FROM library_cache WHERE key = 'albums'",
+                "SELECT data, total, saved_at FROM library_cache WHERE key = 'albums'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .ok()?;
+        if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
+            return None;
+        }
         let rows: Vec<CachedAlbum> = serde_json::from_str(&data).ok()?;
         let albums = rows
             .into_iter()
@@ -163,13 +171,16 @@ impl LibraryCache {
 
     pub fn get_artists(&self) -> Option<Vec<ArtistSummary>> {
         let conn = self.conn.lock().ok()?;
-        let (data,): (String,) = conn
+        let (data, saved_at): (String, i64) = conn
             .query_row(
-                "SELECT data FROM library_cache WHERE key = 'artists'",
+                "SELECT data, saved_at FROM library_cache WHERE key = 'artists'",
                 [],
-                |r| Ok((r.get(0)?,)),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .ok()?;
+        if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
+            return None;
+        }
         let rows: Vec<CachedArtist> = serde_json::from_str(&data).ok()?;
         Some(
             rows.into_iter()
@@ -216,6 +227,7 @@ impl LibraryCache {
         );
     }
 
+    #[allow(dead_code)]
     pub fn has_liked_tracks_cache(&self) -> bool {
         let Ok(conn) = self.conn.lock() else {
             return false;

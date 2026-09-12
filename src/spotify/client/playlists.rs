@@ -10,25 +10,25 @@ impl SpotifyClient {
             warn!("fetch_playlists: not authenticated");
             return Ok(Vec::new());
         }
-        let token = self
-            .get_access_token()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
 
         info!("fetch_playlists: starting to fetch playlists");
         let mut all = Vec::with_capacity(50);
         let mut offset = 0u32;
         loop {
+            let token = self
+                .get_access_token()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
             let offset_str = offset.to_string();
             super::spotify_rate_limit().await;
             info!("fetch_playlists: requesting offset={}", offset);
-            let response = self
-                .http
-                .get("https://api.spotify.com/v1/me/playlists")
-                .bearer_auth(&token)
-                .query(&[("limit", "50"), ("offset", &offset_str)])
-                .send()
-                .await?;
+            let response = super::send_with_retry(
+                &token,
+                self.http
+                    .get("https://api.spotify.com/v1/me/playlists")
+                    .query(&[("limit", "50"), ("offset", &offset_str)]),
+            )
+            .await?;
 
             let status = response.status();
             if !status.is_success() {
@@ -93,6 +93,153 @@ impl SpotifyClient {
         Ok(all)
     }
 
+    pub async fn stream_playlists(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        if !self.authenticated {
+            let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+            return Ok(());
+        }
+
+        let mut offset = 0u32;
+        let mut is_first_page = true;
+
+        loop {
+            let token = self
+                .get_access_token()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+            let offset_str = offset.to_string();
+            super::spotify_rate_limit().await;
+            let response = super::send_with_retry(
+                &token,
+                self.http
+                    .get("https://api.spotify.com/v1/me/playlists")
+                    .query(&[("limit", "50"), ("offset", &offset_str)]),
+            )
+            .await?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                let err_msg = if status.as_u16() == 401 {
+                    "SPOTIFY_UNAUTHORIZED".to_string()
+                } else if status.as_u16() == 429 {
+                    "SPOTIFY_RATE_LIMITED".to_string()
+                } else if status.as_u16() == 403 {
+                    format!("SPOTIFY_FORBIDDEN: {body}")
+                } else {
+                    format!("Spotify API error: status {status} body: {body}")
+                };
+                let _ = tx.send(crate::app::fetcher::StreamEvent::Error(err_msg));
+                return Ok(());
+            }
+
+            let json: serde_json::Value = response.json().await?;
+            let _total = json["total"].as_u64().unwrap_or(0) as u32;
+            let fetched = json["items"]
+                .as_array()
+                .map(|a| a.len() as u32)
+                .unwrap_or(0);
+
+            let mut batch = Vec::with_capacity(fetched as usize);
+            if let Some(items) = json["items"].as_array() {
+                for p in items {
+                    let art_url = p["images"]
+                        .as_array()
+                        .and_then(|imgs| imgs.first())
+                        .and_then(|img| img["url"].as_str())
+                        .map(|s| s.to_string());
+                    batch.push(PlaylistSummary {
+                        id: p["id"].as_str().unwrap_or("").to_string(),
+                        uri: p["uri"].as_str().unwrap_or("").to_string(),
+                        name: p["name"].as_str().unwrap_or("Unknown").to_string(),
+                        total_tracks: p["items"]["total"]
+                            .as_u64()
+                            .or_else(|| p["tracks"]["total"].as_u64())
+                            .unwrap_or(0) as u32,
+                        art_url,
+                    });
+                }
+            }
+
+            if is_first_page {
+                is_first_page = false;
+                if tx
+                    .send(crate::app::fetcher::StreamEvent::PlaylistsInitial { playlists: batch })
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            } else if !batch.is_empty()
+                && tx
+                    .send(crate::app::fetcher::StreamEvent::PlaylistsBatch { playlists: batch })
+                    .is_err()
+            {
+                break;
+            }
+
+            if json["next"].is_null() || fetched == 0 {
+                break;
+            }
+            offset += fetched;
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
+    pub async fn stream_playlist_tracks(
+        &self,
+        playlist_id: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let (first_tracks, total, page_items) = self.fetch_playlist_tracks(playlist_id, 0).await?;
+        if tx
+            .send(crate::app::fetcher::StreamEvent::PlaylistTracksInitial {
+                playlist_id: playlist_id.to_string(),
+                tracks: first_tracks,
+                total,
+                page_items,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut offset = page_items;
+        while offset < total {
+            super::spotify_rate_limit().await;
+            match self.fetch_playlist_tracks(playlist_id, offset).await {
+                Ok((batch, new_total, batch_items)) => {
+                    if batch_items == 0 || batch.is_empty() {
+                        break;
+                    }
+                    offset += batch_items;
+                    if tx
+                        .send(crate::app::fetcher::StreamEvent::PlaylistTracksBatch {
+                            playlist_id: playlist_id.to_string(),
+                            tracks: batch,
+                            total: new_total,
+                            page_items: batch_items,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("stream_playlist_tracks: failed offset {offset}: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
     /// Returns (tracks, total, page_items_count).
     /// `page_items_count` is the number of items the API returned (before episode filtering),
     /// which callers must use to increment the offset — NOT `tracks.len()`.
@@ -120,17 +267,32 @@ impl SpotifyClient {
         let offset_str = offset.to_string();
         let limit_str = "50";
 
-        // Feb 2026: /tracks endpoint was deprecated and removed, use /items
-        let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
-        info!("Fetching playlist items for {playlist_id} (offset={offset})");
+        let tracks_url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/tracks");
+        info!("Fetching playlist tracks for {playlist_id} (offset={offset})");
         super::spotify_rate_limit().await;
-        let response = self
-            .http
-            .get(&url)
-            .bearer_auth(&token)
-            .query(&[("limit", limit_str), ("offset", &offset_str)])
-            .send()
-            .await?;
+        let mut response = super::send_with_retry(
+            &token,
+            self.http
+                .get(&tracks_url)
+                .query(&[("limit", limit_str), ("offset", &offset_str)]),
+        )
+        .await?;
+
+        if !response.status().is_success() {
+            let items_url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/items");
+            super::spotify_rate_limit().await;
+            if let Ok(items_resp) = super::send_with_retry(
+                &token,
+                self.http
+                    .get(&items_url)
+                    .query(&[("limit", limit_str), ("offset", &offset_str)]),
+            )
+            .await
+                && items_resp.status().is_success()
+            {
+                response = items_resp;
+            }
+        }
 
         let status = response.status();
         if !status.is_success() {
@@ -149,7 +311,7 @@ impl SpotifyClient {
 
             if status.as_u16() == 403 {
                 // Fallback: try the main playlist endpoint which returns items inline
-                info!("Got 403 on /items, trying main playlist endpoint for {playlist_id}");
+                info!("Got 403, trying main playlist endpoint for {playlist_id}");
                 super::spotify_rate_limit().await;
                 let main_url = format!("https://api.spotify.com/v1/playlists/{playlist_id}");
                 let main_resp = self.http.get(&main_url).bearer_auth(&token).send().await?;
@@ -157,19 +319,15 @@ impl SpotifyClient {
                 info!("Main playlist endpoint returned status={main_status} for {playlist_id}");
                 if main_status.is_success() {
                     let main_json: serde_json::Value = main_resp.json().await?;
-                    // New API: "items" field (was "tracks"), items[].item (was items[].track)
                     let tracks_obj = if !main_json["items"].is_null() {
                         &main_json["items"]
                     } else {
                         &main_json["tracks"]
                     };
                     let total = tracks_obj["total"].as_u64().unwrap_or(0) as u32;
-                    let items_count = tracks_obj["items"].as_array().map(|a| a.len()).unwrap_or(0);
-                    info!("Main endpoint: total={total}, items={items_count} for {playlist_id}");
-                    let mut tracks = Vec::new();
+                    let mut all_tracks = Vec::new();
                     if let Some(items) = tracks_obj["items"].as_array() {
                         for item_wrapper in items {
-                            // New API: "item" (was "track")
                             let track = if !item_wrapper["item"].is_null() {
                                 &item_wrapper["item"]
                             } else {
@@ -193,7 +351,7 @@ impl SpotifyClient {
                             let uri = track["uri"].as_str().unwrap_or("").to_string();
                             let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
                             if !uri.is_empty() {
-                                tracks.push(TrackSummary {
+                                all_tracks.push(TrackSummary {
                                     name,
                                     artist,
                                     album,
@@ -205,12 +363,14 @@ impl SpotifyClient {
                             }
                         }
                     }
-                    info!(
-                        "Main endpoint: parsed {} tracks for {playlist_id}",
-                        tracks.len()
-                    );
-                    self.library_cache.save_tracks(&key, &tracks, total);
-                    return Ok((tracks, total, items_count as u32));
+                    let paged_tracks: Vec<TrackSummary> = all_tracks
+                        .into_iter()
+                        .skip(offset as usize)
+                        .take(50)
+                        .collect();
+                    let page_items = paged_tracks.len() as u32;
+                    self.library_cache.save_tracks(&key, &paged_tracks, total);
+                    return Ok((paged_tracks, total, page_items));
                 }
                 let _ = main_resp.text().await.unwrap_or_default();
                 warn!("Main playlist endpoint also failed: {main_status}");
