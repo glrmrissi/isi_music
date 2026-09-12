@@ -54,11 +54,6 @@ impl LastfmClient {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()?;
-        let url = format!(
-            "https://ws.audioscrobbler.com/2.0/?method=auth.getToken&api_key={}&format=json",
-            api_key
-        );
-
         #[derive(Deserialize)]
         struct TokenResp {
             token: String,
@@ -67,7 +62,15 @@ impl LastfmClient {
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 0..3u32 {
             let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                let resp = http.get(&url).send().await?;
+                let resp = http
+                    .get("https://ws.audioscrobbler.com/2.0/")
+                    .query(&[
+                        ("method", "auth.getToken"),
+                        ("api_key", api_key),
+                        ("format", "json"),
+                    ])
+                    .send()
+                    .await?;
                 resp.json::<TokenResp>().await
             })
             .await;

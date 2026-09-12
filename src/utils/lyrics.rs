@@ -471,27 +471,31 @@ async fn fetch_from_musixmatch(
         format!("lyrics: fetching from musixmatch -> {} - {}", artist, title),
     );
 
-    let search_url = format!(
-        "https://api.musixmatch.com/ws/1.1/track.search?q_track={}&q_artist={}&f_has_lyrics=true&apikey={}",
-        urlencoding::encode(title),
-        urlencoding::encode(artist),
-        api_key
-    );
-
-    let search_resp =
-        match tokio::time::timeout(Duration::from_secs(5), http.get(&search_url).send()).await {
-            Ok(Ok(r)) => {
-                if r.status() == reqwest::StatusCode::UNAUTHORIZED {
-                    debug_overlay.log(
-                        LogLevel::Error,
-                        "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string(),
-                    );
-                    return None;
-                }
-                r
+    let search_resp = match tokio::time::timeout(
+        Duration::from_secs(5),
+        http.get("https://api.musixmatch.com/ws/1.1/track.search")
+            .query(&[
+                ("q_track", title),
+                ("q_artist", artist),
+                ("f_has_lyrics", "true"),
+                ("apikey", api_key),
+            ])
+            .send(),
+    )
+    .await
+    {
+        Ok(Ok(r)) => {
+            if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+                debug_overlay.log(
+                    LogLevel::Error,
+                    "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string(),
+                );
+                return None;
             }
-            _ => return None,
-        };
+            r
+        }
+        _ => return None,
+    };
 
     let search_json: MusixmatchResponse = match search_resp.json().await {
         Ok(j) => j,
@@ -542,16 +546,21 @@ async fn fetch_from_musixmatch(
     }
 
     let track_id = track.track.track_id;
-    let lyrics_url = format!(
-        "https://api.musixmatch.com/ws/1.1/track.lyrics.get?track_id={}&apikey={}",
-        track_id, api_key
-    );
 
-    let lyrics_resp =
-        match tokio::time::timeout(Duration::from_secs(5), http.get(&lyrics_url).send()).await {
-            Ok(Ok(r)) => r,
-            _ => return None,
-        };
+    let lyrics_resp = match tokio::time::timeout(
+        Duration::from_secs(5),
+        http.get("https://api.musixmatch.com/ws/1.1/track.lyrics.get")
+            .query(&[
+                ("track_id", track_id.to_string()),
+                ("apikey", api_key.to_string()),
+            ])
+            .send(),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        _ => return None,
+    };
 
     let lyrics_json: serde_json::Value = match lyrics_resp.json().await {
         Ok(j) => j,
