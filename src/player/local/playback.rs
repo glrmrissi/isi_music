@@ -1,4 +1,5 @@
 use rodio::Source;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -11,6 +12,32 @@ use crate::player::PlayerNotification;
 use crate::utils::lock::lock_or_recover;
 
 impl LocalPlayer {
+    fn spawn_waveform_loader(&self, path: PathBuf) {
+        *lock_or_recover(&self.waveform) = None;
+        *lock_or_recover(&self.duration_measured) = None;
+        let waveform = Arc::clone(&self.waveform);
+        let duration_measured = Arc::clone(&self.duration_measured);
+        let token = self.track_token.fetch_add(1, Ordering::SeqCst) + 1;
+        let token_arc = Arc::clone(&self.track_token);
+        std::thread::spawn(move || {
+            if token_arc.load(Ordering::SeqCst) != token {
+                return;
+            }
+            if let Some((dur, data)) = crate::utils::waveform::generate_for_file(&path)
+                && token_arc.load(Ordering::SeqCst) == token
+            {
+                if let Ok(mut w) = waveform.lock() {
+                    *w = Some(data);
+                }
+                if dur > 0
+                    && let Ok(mut d) = duration_measured.lock()
+                {
+                    *d = Some(dur);
+                }
+            }
+        });
+    }
+
     pub(super) fn load_track_inner(&mut self, idx: usize, record_history: bool) -> bool {
         let Some(track) = self.queue.get(idx) else {
             return false;
@@ -60,26 +87,7 @@ impl LocalPlayer {
         self.is_playing = true;
         self.load_guard = Some(Instant::now());
 
-        *lock_or_recover(&self.waveform) = None;
-        *lock_or_recover(&self.duration_measured) = None;
-        let waveform = Arc::clone(&self.waveform);
-        let duration_measured = Arc::clone(&self.duration_measured);
-        let current_token = self.track_token.fetch_add(1, Ordering::SeqCst) + 1;
-        let token_arc = Arc::clone(&self.track_token);
-        std::thread::spawn(move || {
-            if let Some((dur, data)) = crate::utils::waveform::generate_for_file(&path)
-                && token_arc.load(Ordering::SeqCst) == current_token
-            {
-                if let Ok(mut w) = waveform.lock() {
-                    *w = Some(data);
-                }
-                if dur > 0
-                    && let Ok(mut d) = duration_measured.lock()
-                {
-                    *d = Some(dur);
-                }
-            }
-        });
+        self.spawn_waveform_loader(path);
 
         let _ = self.event_tx.send(PlayerNotification::Playing);
         true
@@ -122,26 +130,7 @@ impl LocalPlayer {
         self.is_playing = true;
         self.load_guard = Some(Instant::now());
 
-        *lock_or_recover(&self.waveform) = None;
-        *lock_or_recover(&self.duration_measured) = None;
-        let waveform = Arc::clone(&self.waveform);
-        let duration_measured = Arc::clone(&self.duration_measured);
-        let current_token = self.track_token.fetch_add(1, Ordering::SeqCst) + 1;
-        let token_arc = Arc::clone(&self.track_token);
-        std::thread::spawn(move || {
-            if let Some((dur, data)) = crate::utils::waveform::generate_for_file(&path)
-                && token_arc.load(Ordering::SeqCst) == current_token
-            {
-                if let Ok(mut w) = waveform.lock() {
-                    *w = Some(data);
-                }
-                if dur > 0
-                    && let Ok(mut d) = duration_measured.lock()
-                {
-                    *d = Some(dur);
-                }
-            }
-        });
+        self.spawn_waveform_loader(path);
 
         let _ = self.event_tx.send(PlayerNotification::Playing);
         true

@@ -99,6 +99,7 @@ impl App {
                                 let v = !panel.config.enable_lyrics();
                                 panel.config.ui.enable_lyrics = Some(v);
                                 panel.save_config();
+                                self.enable_lyrics = v;
                                 self.state.status_msg = Some(if v {
                                     "Lyrics fetching enabled".to_string()
                                 } else {

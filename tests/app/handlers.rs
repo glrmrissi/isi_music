@@ -97,9 +97,23 @@ async fn dispatch_toggle_visualizer_toggles() {
 
     app.dispatch(Action::ToggleVisualizer).await;
     assert!(app.state.show_visualizer);
+    assert_eq!(app.state.status_msg.as_deref(), Some("Visualizer enabled"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_visualizer),
+        Some(true)
+    );
 
     app.dispatch(Action::ToggleVisualizer).await;
     assert!(!app.state.show_visualizer);
+    assert_eq!(app.state.status_msg.as_deref(), Some("Visualizer disabled"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_visualizer),
+        Some(false)
+    );
 }
 
 #[tokio::test]
@@ -114,6 +128,20 @@ async fn dispatch_toggle_lyrics_toggles_and_sets_status() {
     app.dispatch(Action::ToggleLyrics).await;
     assert!(!app.state.show_lyrics);
     assert_eq!(app.state.status_msg.as_deref(), Some("Lyrics panel off"));
+}
+
+#[tokio::test]
+async fn dispatch_toggle_lyrics_warns_when_fetching_disabled() {
+    let mut app = App::new_for_test().await;
+    app.state.show_lyrics = false;
+    app.enable_lyrics = false;
+
+    app.dispatch(Action::ToggleLyrics).await;
+    assert!(app.state.show_lyrics);
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Lyrics panel on (fetching disabled in Settings)")
+    );
 }
 
 #[tokio::test]
@@ -432,4 +460,54 @@ async fn dispatch_seek_forward_and_backward() {
 
     app.dispatch(Action::SeekBackward).await;
     assert_eq!(app.state.playback.progress_ms, 20_000);
+}
+
+#[tokio::test]
+async fn liked_songs_claims_context_when_reentered_from_artist() {
+    let mut app = App::new_for_test().await;
+    if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
+        spotify.authenticated = true;
+    }
+    app.spotify_enabled = true;
+    app.state.spotify_enabled = true;
+    app.state.active_playlist_id = Some("artist:abc".to_string());
+    app.state.active_playlist_uri = Some("spotify:artist:abc".to_string());
+
+    app.handle_library_item(0).await;
+
+    assert_eq!(
+        app.state.active_playlist_id.as_deref(),
+        Some("liked_songs"),
+        "liked songs must claim active_playlist_id eagerly or streamed events are dropped as stale"
+    );
+    assert_eq!(
+        app.state.active_playlist_uri.as_deref(),
+        Some("liked_songs")
+    );
+}
+
+#[tokio::test]
+async fn spotify_search_submit_clears_stale_playlist_context() {
+    let mut app = App::new_for_test().await;
+    if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
+        spotify.authenticated = true;
+    }
+    app.spotify_enabled = true;
+    app.state.spotify_enabled = true;
+    app.state.active_playlist_id = Some("playlist_xyz".to_string());
+    app.state.active_playlist_uri = Some("spotify:playlist:xyz".to_string());
+
+    app.state.start_search();
+    for c in "metallica".chars() {
+        app.state.search_push(c);
+    }
+    app.handle_search_key(crossterm::event::KeyCode::Enter)
+        .await
+        .expect("search submit");
+
+    assert!(
+        app.state.active_playlist_id.is_none(),
+        "search must clear stale playlist context or SearchInitial is dropped by the stale-id guard"
+    );
+    assert!(app.state.active_playlist_uri.is_none());
 }

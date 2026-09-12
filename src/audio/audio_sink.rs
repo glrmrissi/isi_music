@@ -159,6 +159,7 @@ pub struct AnalyzerHandle {
     bands: Arc<Mutex<Vec<f32>>>,
     producer: Arc<Mutex<AnalyzerProducer>>,
     enabled: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl AnalyzerHandle {
@@ -202,6 +203,7 @@ impl AnalyzerHandle {
             bands,
             producer: Arc::new(Mutex::new(prod)),
             enabled,
+            shutdown,
         }
     }
 
@@ -223,7 +225,6 @@ pub struct SharedAnalyzerState {
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     handle: Mutex<Option<AnalyzerHandle>>,
     enabled: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
 }
 
 impl SharedAnalyzerState {
@@ -232,23 +233,20 @@ impl SharedAnalyzerState {
             band_energies: Arc::new(Mutex::new(vec![0.0f32; N_BANDS])),
             handle: Mutex::new(None),
             enabled: Arc::new(AtomicBool::new(false)),
-            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::Relaxed);
-        let mut handle = lock_or_recover(&self.handle);
-        if on && handle.is_none() {
-            self.shutdown.store(false, Ordering::Relaxed);
-            *handle = Some(AnalyzerHandle::spawn_with_enabled(
-                Arc::clone(&self.band_energies),
-                Arc::clone(&self.enabled),
-                Arc::clone(&self.shutdown),
-            ));
-        } else if !on {
-            self.shutdown.store(true, Ordering::Relaxed);
-            *handle = None;
+        if on {
+            let mut handle = lock_or_recover(&self.handle);
+            if handle.is_none() {
+                *handle = Some(AnalyzerHandle::spawn_with_enabled(
+                    Arc::clone(&self.band_energies),
+                    Arc::clone(&self.enabled),
+                    Arc::new(AtomicBool::new(false)),
+                ));
+            }
         }
     }
 
@@ -266,6 +264,14 @@ impl SharedAnalyzerState {
 
     pub fn enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for SharedAnalyzerState {
+    fn drop(&mut self) {
+        if let Some(h) = self.handle.get_mut().ok().and_then(|h| h.take()) {
+            h.shutdown.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -400,5 +406,40 @@ where
     }
     fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
         self.inner.try_seek(pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visualizer_toggle_preserves_analyzer_handle() {
+        let state = SharedAnalyzerState::new();
+        state.set_enabled(true);
+        let h1 = state.handle().expect("handle must exist after enable");
+        state.set_enabled(false);
+        let h2 = state.handle().expect("handle must survive disable");
+        assert!(Arc::ptr_eq(&h1.producer, &h2.producer));
+        assert!(Arc::strong_count(&h1.shutdown) >= 3);
+        state.set_enabled(true);
+        let h3 = state.handle().expect("handle must exist after re-enable");
+        assert!(Arc::ptr_eq(&h1.producer, &h3.producer));
+    }
+
+    #[test]
+    fn dropping_shared_state_stops_analyzer_thread() {
+        let state = SharedAnalyzerState::new();
+        state.set_enabled(true);
+        let h = state.handle().expect("handle must exist after enable");
+        assert!(Arc::strong_count(&h.shutdown) >= 3);
+        drop(state);
+        for _ in 0..100 {
+            if Arc::strong_count(&h.shutdown) == 1 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("analyzer thread still running after SharedAnalyzerState drop");
     }
 }

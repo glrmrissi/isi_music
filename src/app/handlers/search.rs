@@ -41,6 +41,8 @@ impl App {
                     let q = query.clone();
                     self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.loading = true;
+                    self.state.active_playlist_id = None;
+                    self.state.active_playlist_uri = None;
                     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                     self.fetcher.stream_rx = Some(rx);
                     tokio::spawn(async move {
@@ -99,8 +101,16 @@ impl App {
     }
 
     async fn search_local_files(&mut self, query: &str) {
+        let mut music_dir_missing = false;
         if self.state.local_tree.all_nodes.is_empty() {
             self.ensure_local_tree_loaded().await;
+            if self.state.local_tree.all_nodes.is_empty() {
+                music_dir_missing = crate::config::AppConfig::load()
+                    .unwrap_or_default()
+                    .local
+                    .music_dir
+                    .is_none();
+            }
         }
         let query_lower = query.to_lowercase();
         let all_tracks = self.state.local_tree.all_tracks_flat();
@@ -129,10 +139,16 @@ impl App {
         }
         self.state.tracks.clear();
         self.state.rebuild_sort_indices();
+        self.state.active_playlist_id = None;
         self.state.active_playlist_uri = None;
         self.state.search_active = false;
         self.state.focus = Focus::Search;
-        self.state.status_msg = if total == 0 {
+        self.state.status_msg = if music_dir_missing {
+            let path = crate::config::config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "config.toml".to_string());
+            Some(format!("Set [local] music_dir in {path}"))
+        } else if total == 0 {
             Some(format!("No local results for \"{query}\""))
         } else {
             Some(format!("{total} local results for \"{query}\""))

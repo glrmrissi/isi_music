@@ -55,7 +55,11 @@ impl Default for CacheOptions {
 
 impl CacheManager {
     pub fn new() -> anyhow::Result<Self> {
-        let db_path = config::get_local_db_path();
+        let db_path = if cfg!(test) {
+            ":memory:".to_string()
+        } else {
+            config::get_local_db_path()
+        };
         Self::new_with_path(&db_path)
     }
 

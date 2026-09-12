@@ -29,6 +29,8 @@ impl App {
                         self.state.status_msg = None;
                     } else if self.spotify.authenticated {
                         let _ = self.spotify.toggle_playback().await;
+                    } else if self.state.status_msg.is_none() {
+                        self.state.status_msg = Some("No audio player available".to_string());
                     }
                 }
             }
@@ -43,6 +45,8 @@ impl App {
                     }
                 } else if self.spotify.authenticated {
                     let _ = self.spotify.next_track().await;
+                } else if self.state.status_msg.is_none() {
+                    self.state.status_msg = Some("No audio player available".to_string());
                 }
             }
             A::PrevTrack => {
@@ -56,6 +60,8 @@ impl App {
                     }
                 } else if self.spotify.authenticated {
                     let _ = self.spotify.prev_track().await;
+                } else if self.state.status_msg.is_none() {
+                    self.state.status_msg = Some("No audio player available".to_string());
                 }
             }
             A::VolumeUp => {
@@ -413,16 +419,27 @@ impl App {
                     .player
                     .as_ref()
                     .and_then(|p| p.band_energies());
+                if let Some(panel) = &mut self.settings_panel {
+                    panel.config.ui.show_visualizer = Some(self.state.show_visualizer);
+                    panel.save_config();
+                }
+                self.state.status_msg = Some(if self.state.show_visualizer {
+                    "Visualizer enabled".to_string()
+                } else {
+                    "Visualizer disabled".to_string()
+                });
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
                 if self.state.show_lyrics && self.enable_lyrics {
                     self.fetcher.ensure_lyrics(&self.debug_overlay);
                 }
-                self.state.status_msg = Some(if self.state.show_lyrics {
+                self.state.status_msg = Some(if !self.state.show_lyrics {
+                    "Lyrics panel off".to_string()
+                } else if self.enable_lyrics {
                     "Lyrics panel on".to_string()
                 } else {
-                    "Lyrics panel off".to_string()
+                    "Lyrics panel on (fetching disabled in Settings)".to_string()
                 });
             }
             A::OptionsPanel => {
