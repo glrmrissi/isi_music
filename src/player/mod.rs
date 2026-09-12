@@ -112,6 +112,9 @@ pub trait AudioPlayer: Send {
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (vec![], None)
     }
+    fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        vec![]
+    }
     fn set_visualizer_enabled(&mut self, _enabled: bool) {}
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None
@@ -422,6 +425,10 @@ impl NativePlayer {
 
     pub fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (self.queue.clone(), self.current_index)
+    }
+
+    pub fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        self.user_queue.clone()
     }
 
     pub fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
@@ -986,6 +993,10 @@ impl AudioPlayer for NativePlayer {
         self.snapshot_queue()
     }
 
+    fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        self.snapshot_user_queue()
+    }
+
     fn current_playback_state(&self) -> Option<PlaybackState> {
         let guard = self.server_position.lock().ok()?;
         let (base, recorded_at) = *guard;
@@ -1014,5 +1025,11 @@ impl AudioPlayer for NativePlayer {
         playlist_uri: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<TrackSummary>>> + Send + 'a>> {
         Box::pin(self.fetch_playlist_tracks_via_mercury(playlist_uri))
+    }
+}
+
+impl Drop for NativePlayer {
+    fn drop(&mut self) {
+        self.player.stop();
     }
 }
