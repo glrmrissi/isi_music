@@ -97,9 +97,23 @@ async fn dispatch_toggle_visualizer_toggles() {
 
     app.dispatch(Action::ToggleVisualizer).await;
     assert!(app.state.show_visualizer);
+    assert_eq!(app.state.status_msg.as_deref(), Some("Visualizer enabled"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_visualizer),
+        Some(true)
+    );
 
     app.dispatch(Action::ToggleVisualizer).await;
     assert!(!app.state.show_visualizer);
+    assert_eq!(app.state.status_msg.as_deref(), Some("Visualizer disabled"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_visualizer),
+        Some(false)
+    );
 }
 
 #[tokio::test]
@@ -114,6 +128,20 @@ async fn dispatch_toggle_lyrics_toggles_and_sets_status() {
     app.dispatch(Action::ToggleLyrics).await;
     assert!(!app.state.show_lyrics);
     assert_eq!(app.state.status_msg.as_deref(), Some("Lyrics panel off"));
+}
+
+#[tokio::test]
+async fn dispatch_toggle_lyrics_warns_when_fetching_disabled() {
+    let mut app = App::new_for_test().await;
+    app.state.show_lyrics = false;
+    app.enable_lyrics = false;
+
+    app.dispatch(Action::ToggleLyrics).await;
+    assert!(app.state.show_lyrics);
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Lyrics panel on (fetching disabled in Settings)")
+    );
 }
 
 #[tokio::test]

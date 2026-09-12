@@ -101,9 +101,9 @@ impl SettingsPanel {
         if let Ok(mut guard) = self.settings.lock() {
             guard.config = self.config.clone();
             guard.mark_dirty();
-        }
-        if let Ok(guard) = self.settings.lock() {
-            let _ = guard.save();
+            if !cfg!(test) {
+                let _ = guard.save();
+            }
         }
     }
 

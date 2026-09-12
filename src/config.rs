@@ -343,7 +343,7 @@ pub fn get_local_db_path() -> String {
         }
 
         if let Err(e) = std::fs::create_dir_all(&path) {
-            eprintln!("Erro ao criar diretório: {e}");
+            eprintln!("Failed to create directory: {e}");
             return "local_files.db".into();
         }
 
