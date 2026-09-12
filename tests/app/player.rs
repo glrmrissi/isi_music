@@ -310,3 +310,39 @@ async fn on_track_started_sets_radio_mode_from_flag() {
 
     assert!(app.state.playback.radio_mode);
 }
+
+#[tokio::test]
+async fn sync_track_selection_matches_current_track_by_uri() {
+    let mut app = App::new_for_test().await;
+    let mut mock = MockPlayer::new(Arc::default(), Arc::default());
+    mock.queue = vec!["file://a.mp3".into(), "file://b.mp3".into()];
+    mock.current_index = Some(1);
+    app.player_mgr.player = Some(Box::new(mock));
+    app.player_mgr.local_active = true;
+
+    app.player_mgr.playing_tracks = vec![
+        crate::spotify::TrackSummary {
+            name: "Track B".into(),
+            artist: "Artist B".into(),
+            album: String::new(),
+            duration_ms: 60_000,
+            uri: "file://b.mp3".into(),
+            cover_path: None,
+            added_at: None,
+        },
+        crate::spotify::TrackSummary {
+            name: "Track A".into(),
+            artist: "Artist A".into(),
+            album: String::new(),
+            duration_ms: 60_000,
+            uri: "file://a.mp3".into(),
+            cover_path: None,
+            added_at: None,
+        },
+    ];
+
+    app.sync_track_selection();
+
+    assert_eq!(app.state.playback.title, "Track B");
+    assert_eq!(app.current_track_uri, "file://b.mp3");
+}

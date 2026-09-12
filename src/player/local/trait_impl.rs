@@ -188,6 +188,21 @@ impl AudioPlayer for LocalPlayer {
         self.current_idx
     }
 
+    fn current_track_summary(&self) -> Option<TrackSummary> {
+        self.current_track_meta().map(|t| TrackSummary {
+            name: t.name.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            duration_ms: t.duration_ms,
+            uri: t.uri.clone(),
+            cover_path: t
+                .cover_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            added_at: None,
+        })
+    }
+
     fn volume_up(&mut self) {
         self.volume = self.volume.saturating_add(5).min(100);
         self.apply_volume();

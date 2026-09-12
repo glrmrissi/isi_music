@@ -102,9 +102,20 @@ impl App {
         }
 
         if let Some(player) = &self.player_mgr.player
-            && let Some(idx) = player.current_index()
+            && let Some(cur) = player.current_track_summary()
         {
-            if let Some(track) = self.player_mgr.playing_tracks.get(idx) {
+            let track = self
+                .player_mgr
+                .playing_tracks
+                .iter()
+                .find(|t| t.uri == cur.uri)
+                .or(if cur.name.is_empty() {
+                    None
+                } else {
+                    Some(&cur)
+                });
+
+            if let Some(track) = track {
                 self.state.playback.title = track.name.clone();
                 self.state.playback.artist = track.artist.clone();
                 self.state.playback.album = track.album.clone();
@@ -132,11 +143,8 @@ impl App {
                 self.on_track_started();
             }
 
-            if self.player_mgr.playing_tracks.len() == self.state.tracks.len()
-                && self.player_mgr.playing_tracks.get(idx).map(|t| &t.uri)
-                    == self.state.tracks.get(idx).map(|t| &t.uri)
-            {
-                self.state.track_list.select(Some(idx));
+            if let Some(pos) = self.state.tracks.iter().position(|t| t.uri == cur.uri) {
+                self.state.track_list.select(Some(pos));
             }
         }
     }

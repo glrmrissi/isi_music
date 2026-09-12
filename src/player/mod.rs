@@ -93,6 +93,7 @@ pub trait AudioPlayer: Send {
     fn shuffle(&self) -> bool;
     fn repeat(&self) -> RepeatMode;
     fn current_index(&self) -> Option<usize>;
+    fn current_track_summary(&self) -> Option<TrackSummary>;
 
     /// Remove already-played tracks from the front of the queue.
     /// Returns true if the queue was actually trimmed.
@@ -939,6 +940,17 @@ impl AudioPlayer for NativePlayer {
     }
     fn current_index(&self) -> Option<usize> {
         self.current_index()
+    }
+    fn current_track_summary(&self) -> Option<TrackSummary> {
+        self.queue.get(self.current_index?).map(|uri| TrackSummary {
+            name: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: 0,
+            uri: uri.clone(),
+            cover_path: None,
+            added_at: None,
+        })
     }
 
     fn trim_played(&mut self, keep_behind: usize) -> bool {
