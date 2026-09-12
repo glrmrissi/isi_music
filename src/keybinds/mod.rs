@@ -199,6 +199,10 @@ fn parse_key_combo(s: &str) -> Option<KeyCombo> {
             if c.is_ascii_uppercase() {
                 shift = true;
             }
+            const SHIFTED_PUNCT: &str = "!@#$%^&*()_+{}|:\"<>?~";
+            if SHIFTED_PUNCT.contains(c) {
+                shift = true;
+            }
             KeyId::Char(c.to_ascii_lowercase())
         }
     };
@@ -385,15 +389,32 @@ impl Keybinds {
             return self.action_for.get(&combo).copied();
         }
         if let KeyCode::Char(c) = code {
-            let shift = modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase();
             let c_lower = c.to_ascii_lowercase();
+            let is_alpha = c_lower.is_ascii_alphabetic();
+            let shift = if is_alpha {
+                modifiers.contains(KeyModifiers::SHIFT) || c.is_uppercase()
+            } else {
+                modifiers.contains(KeyModifiers::SHIFT)
+            };
             let combo = KeyCombo {
                 key: KeyId::Char(c_lower),
                 ctrl: modifiers.contains(KeyModifiers::CONTROL),
                 alt: modifiers.contains(KeyModifiers::ALT),
                 shift,
             };
-            return self.action_for.get(&combo).copied();
+            if let Some(a) = self.action_for.get(&combo).copied() {
+                return Some(a);
+            }
+            if !is_alpha {
+                let combo_no_shift = KeyCombo {
+                    shift: false,
+                    ..combo
+                };
+                if let Some(a) = self.action_for.get(&combo_no_shift).copied() {
+                    return Some(a);
+                }
+            }
+            return None;
         }
 
         let key = match code {

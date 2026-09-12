@@ -140,6 +140,8 @@ impl App {
             SpotifyClient::new_unauthenticated().await?
         };
 
+        let spotify = Arc::new(spotify);
+
         if spotify_enabled
             && (spotify.authenticated || crate::config::load_streaming_refresh_token().is_some())
         {
@@ -167,19 +169,14 @@ impl App {
             state.status_msg = Some(msg);
         }
 
+        let mut initial_stream_rx = None;
         if spotify_enabled && spotify.authenticated {
-            match spotify.fetch_playlists().await {
-                Ok(playlists) => {
-                    state.playlists = playlists;
-                    if !state.playlists.is_empty() {
-                        state.playlist_list.select(Some(0));
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to load playlists: {e}");
-                    state.status_msg = Some(format!("Failed to load playlists: {e}"));
-                }
-            }
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            initial_stream_rx = Some(rx);
+            let spotify_clone = Arc::clone(&spotify);
+            tokio::spawn(async move {
+                let _ = spotify_clone.stream_playlists(tx).await;
+            });
         } else if !spotify_enabled
             && let Some(music_dir) = crate::app::library::resolve_music_dir(&cfg)
         {
@@ -288,7 +285,7 @@ impl App {
         Ok(Self {
             seek_tx,
             seek_rx,
-            spotify: Arc::new(spotify),
+            spotify,
             spotify_enabled,
             enable_lyrics,
             player_mgr: player_mgr::PlayerManager::new(
@@ -324,7 +321,11 @@ impl App {
             theme_mgr: theme_mgr::ThemeManager::new(theme, theme_rx),
             keybinds,
             keybinds_rx,
-            fetcher: fetcher::FetchCoordinator::new(),
+            fetcher: {
+                let mut fc = fetcher::FetchCoordinator::new();
+                fc.stream_rx = initial_stream_rx;
+                fc
+            },
             debug_overlay,
             settings_panel: Some(settings_panel),
             #[cfg(target_os = "linux")]
@@ -428,7 +429,13 @@ impl App {
     }
 
     fn save_session(&self) -> Result<()> {
-        let mut cfg = crate::config::AppConfig::load().unwrap_or_default();
+        let mut cfg = match crate::config::AppConfig::load() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Skipping session save: config load failed: {e:#}");
+                return Err(e);
+            }
+        };
         cfg.session.focus = Some(match self.state.focus {
             crate::ui::Focus::Library => "library".to_string(),
             crate::ui::Focus::Playlists => "playlists".to_string(),
@@ -895,62 +902,66 @@ impl App {
             }
 
             #[cfg(feature = "album-art")]
-            if let Some(rx) = &mut self.fetcher.album_art_pending
-                && let Ok(bytes) = rx.try_recv()
-            {
-                self.fetcher.album_art_pending = None;
+            if let Some(rx) = &mut self.fetcher.album_art_pending {
+                match rx.try_recv() {
+                    Ok(bytes) => {
+                        self.fetcher.album_art_pending = None;
 
-                // Feed the SMTC thumbnail: Spotify tracks played via
-                // librespot never populate `pb.art_url`/`pb.cover_path`,
-                // so we materialise the downloaded cover bytes into a temp
-                // file and expose it via `cover_path` for the SMTC worker.
-                #[cfg(windows)]
-                if let Some(path) = crate::utils::smtc::cache_cover_bytes(&bytes)
-                    && let Some(s) = path.to_str()
-                {
-                    self.state.playback.cover_path = Some(s.to_string());
-                }
-
-                let reactive_enabled = self.theme_mgr.reactive_theme_enabled();
-                let decoded = tokio::task::spawn_blocking(move || {
-                    let img = image::load_from_memory(&bytes)?;
-                    let img = if img.width() <= 256 && img.height() <= 256 {
-                        img
-                    } else {
-                        img.thumbnail(256, 256)
-                    };
-                    Ok::<_, anyhow::Error>(img)
-                })
-                .await;
-                match decoded {
-                    Ok(Ok(img)) => {
-                        #[cfg(all(feature = "palette", feature = "album-art"))]
-                        if reactive_enabled {
-                            let swatches = crate::utils::palette::extract_palette(&img, 5);
-                            tracing::debug!(
-                                "reactive: swatches={} theme.reactive_theme={}",
-                                swatches.len(),
-                                reactive_enabled
-                            );
-                            self.theme_mgr.store_swatches(swatches.clone());
-                            self.theme_mgr.start_reactive(&swatches, &self.ui);
-                            tracing::debug!("reactive: start_reactive_theme called");
+                        #[cfg(windows)]
+                        if let Some(path) = crate::utils::smtc::cache_cover_bytes(&bytes)
+                            && let Some(s) = path.to_str()
+                        {
+                            self.state.playback.cover_path = Some(s.to_string());
                         }
 
-                        let image_state = self.picker.new_resize_protocol(img);
-                        self.state.album_art = Some(AlbumArtData {
-                            image_state: Some(image_state),
-                        });
-                        self.needs_redraw = true;
+                        let reactive_enabled = self.theme_mgr.reactive_theme_enabled();
+                        let decoded = tokio::task::spawn_blocking(move || {
+                            let img = image::load_from_memory(&bytes)?;
+                            let img = if img.width() <= 256 && img.height() <= 256 {
+                                img
+                            } else {
+                                img.thumbnail(256, 256)
+                            };
+                            Ok::<_, anyhow::Error>(img)
+                        })
+                        .await;
+                        match decoded {
+                            Ok(Ok(img)) => {
+                                #[cfg(all(feature = "palette", feature = "album-art"))]
+                                if reactive_enabled {
+                                    let swatches = crate::utils::palette::extract_palette(&img, 5);
+                                    tracing::debug!(
+                                        "reactive: swatches={} theme.reactive_theme={}",
+                                        swatches.len(),
+                                        reactive_enabled
+                                    );
+                                    self.theme_mgr.store_swatches(swatches.clone());
+                                    self.theme_mgr.start_reactive(&swatches, &self.ui);
+                                    tracing::debug!("reactive: start_reactive_theme called");
+                                }
+
+                                let image_state = self.picker.new_resize_protocol(img);
+                                self.state.album_art = Some(AlbumArtData {
+                                    image_state: Some(image_state),
+                                });
+                                self.needs_redraw = true;
+                            }
+                            Ok(Err(e)) => {
+                                self.debug_overlay.log(
+                                    LogLevel::Error,
+                                    format!("Failed to decode album art: {e}"),
+                                );
+                            }
+                            Err(e) => {
+                                self.debug_overlay
+                                    .log(LogLevel::Error, format!("Album art task failed: {e}"));
+                            }
+                        }
                     }
-                    Ok(Err(e)) => {
-                        self.debug_overlay
-                            .log(LogLevel::Error, format!("Failed to decode album art: {e}"));
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        self.fetcher.album_art_pending = None;
                     }
-                    Err(e) => {
-                        self.debug_overlay
-                            .log(LogLevel::Error, format!("Album art task failed: {e}"));
-                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
             }
 
