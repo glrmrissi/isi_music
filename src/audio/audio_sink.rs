@@ -57,7 +57,7 @@ impl AnalyzerThread {
             band_peaks: vec![1e-6; N_BANDS],
             window,
             chunk_buf: vec![0.0; FFT_SIZE],
-            magnitudes_buf: vec![0.0; FFT_SIZE / 2],
+            magnitudes_buf: vec![0.0; FFT_SIZE / 2 + 1],
             new_bands_buf: vec![0.0; N_BANDS],
             write_pos: 0,
             sample_counter: 0,
@@ -104,7 +104,7 @@ impl AnalyzerThread {
         for (out, c) in self
             .magnitudes_buf
             .iter_mut()
-            .zip(self.fft_input[1..half].iter())
+            .zip(self.fft_input[..=half].iter())
         {
             *out = c.norm_sqr();
         }
@@ -117,13 +117,15 @@ impl AnalyzerThread {
         for band in 0..N_BANDS {
             let f_target =
                 2.0f32.powf(log_min + (band as f32 / N_BANDS as f32) * (log_max - log_min));
-            let bin_idx = f_target / freq_per_bin;
+            let bin_idx = (f_target / freq_per_bin).min((self.magnitudes_buf.len() - 1) as f32);
             let i = bin_idx.floor() as usize;
             let fract = bin_idx.fract();
             if i + 1 < self.magnitudes_buf.len() {
                 let val =
                     self.magnitudes_buf[i] * (1.0 - fract) + self.magnitudes_buf[i + 1] * fract;
                 self.new_bands_buf[band] = val.sqrt();
+            } else if i < self.magnitudes_buf.len() {
+                self.new_bands_buf[band] = self.magnitudes_buf[i].sqrt();
             }
         }
         for i in 0..N_BANDS {
