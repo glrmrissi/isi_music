@@ -138,7 +138,7 @@ Both must report "did not match any packages".
 The project vendors two crates under `patches/` (wired via
 `[patch.crates-io]` in `Cargo.toml`):
 
-**`patches/librespot-core`** is pinned to the crates.io `0.8.0` source with four deliberate changes: quick-xml 0.41 API fix, keymaster fallback when the login5 token endpoint fails, extra `warn!` logging on failed internal requests, and a vendored build script replacing `vergen` with static build info.
+**`patches/librespot-core`** is pinned to the crates.io `0.8.0` source with five deliberate changes: quick-xml 0.41 API fix, keymaster fallback when the login5 token endpoint fails, extra `warn!` logging on failed internal requests, a vendored build script replacing `vergen` with static build info, and removal of username/account_type interpolation in `session.rs` logs (CodeQL cleartext-logging).
 
 **`patches/hyper-proxy2`** is identical to upstream `0.1.0` source, with `Cargo.toml` updated to rustls 0.23 / hyper-rustls 0.27 using the `ring` crypto provider (no `aws-lc-rs`, which avoids a heavy C build for ARM64).
 

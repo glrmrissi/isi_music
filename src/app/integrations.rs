@@ -20,6 +20,8 @@ pub struct IntegrationManager {
     pub pending_lastfm_token: Option<String>,
     pub scrobble_sent: bool,
     pub track_start_unix: u64,
+    listened_ms: u64,
+    last_progress_ms: u64,
     pub discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
@@ -54,6 +56,8 @@ impl IntegrationManager {
             pending_lastfm_token: None,
             scrobble_sent: false,
             track_start_unix: 0,
+            listened_ms: 0,
+            last_progress_ms: 0,
             discord: None,
             discord_last_title: String::new(),
             discord_last_playing: false,
@@ -79,6 +83,8 @@ impl IntegrationManager {
 
     pub fn reset_scrobble(&mut self) {
         self.scrobble_sent = false;
+        self.listened_ms = 0;
+        self.last_progress_ms = 0;
     }
 
     pub fn set_track_start(&mut self, ts: u64) {
@@ -103,7 +109,7 @@ impl IntegrationManager {
             if pb.title.is_empty() {
                 discord.clear();
             } else if pb.is_playing {
-                discord.update_playing(&pb.title, &pb.artist, pb.art_url.as_deref());
+                discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
             } else {
                 discord.update_paused(&pb.title, &pb.artist);
             }
@@ -118,7 +124,7 @@ impl IntegrationManager {
                 if pb.title.is_empty() {
                     discord.clear();
                 } else if pb.is_playing {
-                    discord.update_playing(&pb.title, &pb.artist, pb.art_url.as_deref());
+                    discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
                 } else {
                     discord.update_paused(&pb.title, &pb.artist);
                 }
@@ -231,7 +237,13 @@ impl IntegrationManager {
         let progress = state.playback.progress_ms;
         let duration = state.playback.duration_ms;
 
-        if duration < 30_000 || (progress < duration / 2 && progress < 240_000) {
+        let delta = progress.saturating_sub(self.last_progress_ms);
+        if delta > 0 && delta <= 2_000 {
+            self.listened_ms += delta;
+        }
+        self.last_progress_ms = progress;
+
+        if duration <= 30_000 || (self.listened_ms < duration / 2 && self.listened_ms < 240_000) {
             return;
         }
         if let Some(lfm) = self.lastfm.clone() {
@@ -248,8 +260,8 @@ impl IntegrationManager {
             tokio::spawn(async move {
                 lfm.scrobble(&artist, &track, &album, ts, dur).await;
             });
+            self.scrobble_sent = true;
         }
-        self.scrobble_sent = true;
     }
 
     pub async fn toggle_lastfm(&mut self, state: &mut UiState) {

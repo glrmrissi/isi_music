@@ -66,7 +66,7 @@ impl App {
         let artist = self.state.playback.artist.clone();
         let uri = self.current_track_uri.clone();
 
-        if !title.is_empty() && !artist.is_empty() {
+        if !title.is_empty() && !artist.is_empty() && self.enable_lyrics {
             self.fetcher.ensure_lyrics(&self.debug_overlay);
             self.state.playback.lyrics_loading = true;
             if let Some(lyrics) = &self.fetcher.lyrics {
@@ -102,9 +102,20 @@ impl App {
         }
 
         if let Some(player) = &self.player_mgr.player
-            && let Some(idx) = player.current_index()
+            && let Some(cur) = player.current_track_summary()
         {
-            if let Some(track) = self.player_mgr.playing_tracks.get(idx) {
+            let track = self
+                .player_mgr
+                .playing_tracks
+                .iter()
+                .find(|t| t.uri == cur.uri)
+                .or(if cur.name.is_empty() {
+                    None
+                } else {
+                    Some(&cur)
+                });
+
+            if let Some(track) = track {
                 self.state.playback.title = track.name.clone();
                 self.state.playback.artist = track.artist.clone();
                 self.state.playback.album = track.album.clone();
@@ -132,11 +143,8 @@ impl App {
                 self.on_track_started();
             }
 
-            if self.player_mgr.playing_tracks.len() == self.state.tracks.len()
-                && self.player_mgr.playing_tracks.get(idx).map(|t| &t.uri)
-                    == self.state.tracks.get(idx).map(|t| &t.uri)
-            {
-                self.state.track_list.select(Some(idx));
+            if let Some(pos) = self.state.tracks.iter().position(|t| t.uri == cur.uri) {
+                self.state.track_list.select(Some(pos));
             }
         }
     }
@@ -150,21 +158,15 @@ impl App {
         {
             p.pause();
         }
-        self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
-        if self.player_mgr.parked_player.is_some() {
-            std::mem::swap(
-                &mut self.player_mgr.player,
-                &mut self.player_mgr.parked_player,
-            );
-            self.player_mgr.local_active = true;
-            self.player_mgr.band_energies = self
-                .player_mgr
-                .player
-                .as_ref()
-                .and_then(|p| p.band_energies());
-        } else {
-            self.player_mgr.local_active = true;
+        std::mem::swap(
+            &mut self.player_mgr.player,
+            &mut self.player_mgr.parked_player,
+        );
+        self.player_mgr.local_active = true;
+        if let Some(ref mut p) = self.player_mgr.player {
+            p.set_visualizer_enabled(self.state.show_visualizer);
+            self.player_mgr.band_energies = p.band_energies();
         }
     }
 
@@ -177,21 +179,15 @@ impl App {
         {
             p.pause();
         }
-        self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
-        if self.player_mgr.parked_player.is_some() {
-            std::mem::swap(
-                &mut self.player_mgr.player,
-                &mut self.player_mgr.parked_player,
-            );
-            self.player_mgr.local_active = false;
-            self.player_mgr.band_energies = self
-                .player_mgr
-                .player
-                .as_ref()
-                .and_then(|p| p.band_energies());
-        } else {
-            self.player_mgr.local_active = false;
+        std::mem::swap(
+            &mut self.player_mgr.player,
+            &mut self.player_mgr.parked_player,
+        );
+        self.player_mgr.local_active = false;
+        if let Some(ref mut p) = self.player_mgr.player {
+            p.set_visualizer_enabled(self.state.show_visualizer);
+            self.player_mgr.band_energies = p.band_energies();
         }
     }
 
@@ -304,8 +300,11 @@ impl App {
         };
 
         if uri.starts_with("file://") {
-            self.state.status_msg =
-                Some("Recommendations require a Spotify track or artist".to_string());
+            self.state.status_msg = if !self.spotify_enabled {
+                Some("Recommendations require Spotify (disabled in config.toml)".to_string())
+            } else {
+                Some("Recommendations require a Spotify track or artist".to_string())
+            };
             return;
         }
 
@@ -404,12 +403,37 @@ impl App {
             .as_ref()
             .map(|p| p.snapshot_queue())
             .unwrap_or_default();
+        let saved_user_queue = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.snapshot_user_queue())
+            .unwrap_or_default();
         let saved_volume = self
             .player_mgr
             .player
             .as_ref()
             .map(|p| p.volume())
             .unwrap_or(50);
+        let saved_shuffle = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.shuffle())
+            .unwrap_or(false);
+        let saved_repeat = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.repeat())
+            .unwrap_or(crate::player::RepeatMode::Off);
+        let saved_progress = self.state.playback.progress_ms;
+        let saved_is_playing = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.is_playing())
+            .unwrap_or(false);
 
         self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
@@ -430,6 +454,36 @@ impl App {
                     let start = saved_index.unwrap_or(0);
                     p.set_queue(saved_queue, start);
                 }
+                for qt in &saved_user_queue {
+                    p.add_to_queue(
+                        qt.uri.clone(),
+                        qt.name.clone(),
+                        qt.artist.clone(),
+                        qt.album.clone(),
+                        qt.duration_ms,
+                        qt.cover_path.clone(),
+                    );
+                }
+                if saved_shuffle {
+                    p.toggle_shuffle();
+                }
+                match saved_repeat {
+                    crate::player::RepeatMode::Queue => {
+                        p.cycle_repeat();
+                    }
+                    crate::player::RepeatMode::Track => {
+                        p.cycle_repeat();
+                        p.cycle_repeat();
+                    }
+                    crate::player::RepeatMode::Off => {}
+                }
+                if saved_progress > 1000 {
+                    p.seek(saved_progress as u32);
+                }
+                if !saved_is_playing {
+                    p.pause();
+                }
+                p.set_visualizer_enabled(self.state.show_visualizer);
                 self.player_mgr.band_energies = p.band_energies();
                 self.player_mgr.player = Some(Box::new(p));
                 self.state.status_msg = Some("Reconnected!".to_string());

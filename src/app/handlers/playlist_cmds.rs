@@ -76,6 +76,10 @@ impl App {
                     self.state.status_msg = Some("Usage: newplaylist <name>".to_string());
                     return;
                 }
+                if !self.spotify_enabled {
+                    self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+                    return;
+                }
                 if !self.spotify.authenticated {
                     self.state.status_msg =
                         Some("Spotify not connected - run: isi-music setup-spotify".to_string());

@@ -5,6 +5,14 @@ use crate::utils::debug_overlay::LogLevel;
 
 impl App {
     pub(super) async fn dispatch_like_track(&mut self) {
+        if self.current_track_uri.starts_with("file://") {
+            self.state.status_msg = Some("Liking local tracks is not supported".to_string());
+            return;
+        }
+        if !self.spotify_enabled {
+            self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+            return;
+        }
         if !self.spotify.authenticated {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
@@ -142,7 +150,9 @@ impl App {
     }
 
     pub(super) async fn dispatch_remove_from_playlist(&mut self) {
-        if !self.spotify.authenticated {
+        if !self.spotify_enabled {
+            self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+        } else if !self.spotify.authenticated {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
         } else {

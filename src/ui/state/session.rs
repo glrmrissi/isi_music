@@ -34,7 +34,24 @@ impl UiState {
     }
 
     pub fn restore_session(&mut self, session: &crate::config::SessionState) {
-        self.focus = Focus::Library;
+        if let Some(ref focus) = session.focus {
+            self.focus = match focus.as_str() {
+                "library" => Focus::Library,
+                "playlists" => Focus::Playlists,
+                "tracks" => Focus::Tracks,
+                "search" => {
+                    if self.search_results.is_some() {
+                        Focus::Search
+                    } else {
+                        Focus::Library
+                    }
+                }
+                "queue" => Focus::Queue,
+                _ => Focus::Library,
+            };
+        } else {
+            self.focus = Focus::Library;
+        }
         if let Some(ref content) = session.active_content {
             match content.as_str() {
                 "tracks" => self.active_content = ActiveContent::Tracks,

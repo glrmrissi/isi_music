@@ -48,6 +48,10 @@ impl App {
     }
 
     async fn play_track_by_id(&mut self, track_id: &str) {
+        if !self.spotify_enabled {
+            self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+            return;
+        }
         if !self.spotify.authenticated {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
@@ -95,6 +99,10 @@ impl App {
     }
 
     async fn play_playlist_by_id(&mut self, playlist_id: &str) {
+        if !self.spotify_enabled {
+            self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+            return;
+        }
         if !self.spotify.authenticated {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
@@ -175,6 +183,10 @@ impl App {
     }
 
     async fn play_album_by_id(&mut self, album_id: &str) {
+        if !self.spotify_enabled {
+            self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+            return;
+        }
         if !self.spotify.authenticated {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
@@ -252,6 +264,10 @@ impl App {
     }
 
     async fn play_artist_by_id(&mut self, artist_id: &str) {
+        if !self.spotify_enabled {
+            self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
+            return;
+        }
         if !self.spotify.authenticated {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());

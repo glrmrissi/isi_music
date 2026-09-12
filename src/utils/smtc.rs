@@ -112,7 +112,8 @@ fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(3))
+            .connect_timeout(Duration::from_secs(2))
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new())
     })
@@ -168,8 +169,6 @@ fn resolve_cover_path(
     cover_path: Option<&str>,
     cache: &mut HashMap<String, PathBuf>,
 ) -> Option<PathBuf> {
-    // Prefer art_url when it is a usable image source, otherwise fall back to cover_path.
-    // Handles file://, file:///, http(s) URLs, and raw local paths.
     let source = art_url
         .filter(|s| !s.is_empty() && !s.starts_with("spotify:"))
         .or(cover_path.filter(|s| !s.is_empty() && !s.starts_with("spotify:")))?;
@@ -178,11 +177,17 @@ fn resolve_cover_path(
         return Some(path.clone());
     }
 
+    if source.starts_with("http://") || source.starts_with("https://") {
+        if let Some(path) = cover_temp_path_from_url(source) {
+            cache.insert(source.to_string(), path.clone());
+            return Some(path);
+        }
+        return None;
+    }
+
     let resolved = if let Some(path) = source.strip_prefix("file://") {
         let path = path.strip_prefix('/').unwrap_or(path);
         Some(PathBuf::from(path))
-    } else if source.starts_with("http://") || source.starts_with("https://") {
-        cover_temp_path_from_url(source)
     } else {
         Some(PathBuf::from(source))
     };
@@ -407,6 +412,7 @@ fn smtc_worker(
         ))?;
 
         let mut update_state = UpdateState::default();
+        let mut last_cleanup = Instant::now();
         loop {
             process_message_pump();
 
@@ -421,6 +427,11 @@ fn smtc_worker(
 
             if let Some(state) = latest {
                 let _ = update_smtc(&smtc, &state, &mut update_state);
+            }
+
+            if last_cleanup.elapsed() >= Duration::from_secs(3600) {
+                cleanup_cover_cache();
+                last_cleanup = Instant::now();
             }
 
             match stop_rx.try_recv() {

@@ -78,7 +78,7 @@ if [ "$MODE" = "pre-push" ] || [ "$MODE" = "ci" ]; then
     run_step "cargo clippy -- -D warnings" cargo clippy --all-targets --all-features --locked -- -D warnings
     run_step "cargo build --release" cargo build --release --locked
     run_step "cargo build --release -F mpris" cargo build --release --locked -F mpris
-    run_step "cargo build --release (minimal)" cargo build --release --locked --no-default-features -F spotify,discord
+    run_step "cargo build --release (minimal)" cargo build --release --locked --no-default-features -F discord
 fi
 
 # CI MODE: + ARM64 cross-compile (native toolchain, no Docker)

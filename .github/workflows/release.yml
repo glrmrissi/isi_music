@@ -86,7 +86,7 @@ jobs:
         run: cargo test --locked --verbose
 
       - name: Test (minimal features)
-        run: cargo test --locked --no-default-features -F spotify,discord --verbose
+        run: cargo test --locked --no-default-features -F discord --verbose
 
       - name: Remove generated secrets from target
         shell: bash
@@ -201,7 +201,7 @@ jobs:
             --locked \
             --target ${{ matrix.target }} \
             --no-default-features \
-            -F spotify,discord \
+            -F discord \
             --verbose && \
           cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" \
              "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}-minimal"

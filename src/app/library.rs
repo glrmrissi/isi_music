@@ -123,49 +123,38 @@ impl App {
         match idx {
             0 => {
                 self.state.push_nav();
-                let first_load = !self.spotify.library_cache.has_liked_tracks_cache();
-                self.state.status_msg = Some(if first_load {
-                    "Loading Liked Songs (first load may take a while)…".to_string()
-                } else {
-                    "Loading Liked Songs…".to_string()
-                });
+                self.fetcher.cancel_all_pending(&mut self.state);
+                self.state.status_msg = Some("Loading Liked Songs…".to_string());
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
-                let (tx, rx) = oneshot::channel();
-                self.fetcher.pending_fetch = Some(rx);
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify.sync_liked_tracks().await.map_err(|e| e.to_string());
-                    let _ = tx.send(FetchResult::LikedTracks(result));
+                    let _ = spotify.stream_liked_tracks(tx).await;
                 });
             }
             1 => {
                 self.state.push_nav();
+                self.fetcher.cancel_all_pending(&mut self.state);
                 self.state.status_msg = Some("Loading saved albums…".to_string());
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
-                let (tx, rx) = oneshot::channel();
-                self.fetcher.pending_fetch = Some(rx);
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify
-                        .fetch_saved_albums(0)
-                        .await
-                        .map_err(|e| e.to_string());
-                    let _ = tx.send(FetchResult::Albums(result));
+                    let _ = spotify.stream_saved_albums(tx).await;
                 });
             }
             2 => {
                 self.state.push_nav();
+                self.fetcher.cancel_all_pending(&mut self.state);
                 self.state.status_msg = Some("Loading followed artists…".to_string());
                 self.state.loading = true;
                 let spotify = Arc::clone(&self.spotify);
-                let (tx, rx) = oneshot::channel();
-                self.fetcher.pending_fetch = Some(rx);
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
                 tokio::spawn(async move {
-                    let result = spotify
-                        .fetch_followed_artists()
-                        .await
-                        .map_err(|e| e.to_string());
-                    let _ = tx.send(FetchResult::Artists(result));
+                    let _ = spotify.stream_followed_artists(tx).await;
                 });
             }
             3 => {
@@ -191,26 +180,24 @@ impl App {
         }
 
         self.state.push_nav();
+        self.fetcher.cancel_all_pending(&mut self.state);
         self.state.status_msg = Some(format!("Loading {}…", playlist.name));
         self.state.loading = true;
         self.state.active_playlist_uri = Some(playlist.uri.clone());
         self.state.active_playlist_id = Some(playlist.id.clone());
         let spotify = Arc::clone(&self.spotify);
         let playlist_id = playlist.id;
-        let (tx, rx) = oneshot::channel();
-        self.fetcher.pending_fetch = Some(rx);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.fetcher.stream_rx = Some(rx);
         tokio::spawn(async move {
-            let result = spotify
-                .fetch_playlist_tracks(&playlist_id, 0)
-                .await
-                .map_err(|e| e.to_string());
-            let _ = tx.send(FetchResult::PlaylistTracks(result));
+            let _ = spotify.stream_playlist_tracks(&playlist_id, tx).await;
         });
         false
     }
 
     pub async fn load_local_folder(&mut self, playlist: &PlaylistSummary) {
         self.state.push_nav();
+        self.fetcher.cancel_all_pending(&mut self.state);
         self.state.status_msg = Some(format!("Loading {}…", playlist.name));
         self.state.loading = true;
         self.state.active_playlist_uri = Some(playlist.uri.clone());
@@ -232,8 +219,10 @@ impl App {
         let raw_dir = match cfg.local.music_dir {
             Some(d) => d,
             None => {
-                self.state.status_msg =
-                    Some("Set [local] music_dir in ~/.config/isi-music/config.toml".to_string());
+                let path = crate::config::config_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "config.toml".to_string());
+                self.state.status_msg = Some(format!("Set [local] music_dir in {}", path));
                 return;
             }
         };
@@ -273,34 +262,43 @@ impl App {
             None => return,
         };
 
-        if let Ok(nodes) = rx.try_recv() {
-            self.fetcher.local_scan_rx = None;
+        match rx.try_recv() {
+            Ok(nodes) => {
+                self.fetcher.local_scan_rx = None;
 
-            let track_count = nodes.iter().filter(|n| !n.is_folder()).count();
-            let tree = crate::ui::LocalFileTree::new(nodes);
-            let vis_len = tree.visible_len();
+                let track_count = nodes.iter().filter(|n| !n.is_folder()).count();
+                let tree = crate::ui::LocalFileTree::new(nodes);
+                let vis_len = tree.visible_len();
 
-            self.state.tracks = tree.all_tracks_flat();
-            self.state.tracks_total = track_count as u32;
-            self.state.tracks_offset = track_count as u32;
-            self.state.tracks_api_offset = track_count as u32;
-            self.state.local_tree = tree;
-            self.state
-                .local_tree_list
-                .select(if vis_len == 0 { None } else { Some(0) });
-            self.state.active_playlist_uri = Some("local_files".to_string());
-            self.state.active_playlist_id = Some("local_files".to_string());
+                self.state.tracks = tree.all_tracks_flat();
+                self.state.tracks_total = track_count as u32;
+                self.state.tracks_offset = track_count as u32;
+                self.state.tracks_api_offset = track_count as u32;
+                self.state.local_tree = tree;
+                self.state
+                    .local_tree_list
+                    .select(if vis_len == 0 { None } else { Some(0) });
+                self.state.active_playlist_uri = Some("local_files".to_string());
+                self.state.active_playlist_id = Some("local_files".to_string());
 
-            self.state.apply_quick_filter();
+                self.state.apply_quick_filter();
 
-            self.fetcher.local_scan_total = track_count;
+                self.fetcher.local_scan_total = track_count;
 
-            if track_count == 0 {
-                self.state.status_msg = Some("No audio files found".to_string());
-            } else {
-                self.state.status_msg = Some(format!("{track_count} local tracks loaded"));
+                if track_count == 0 {
+                    self.state.status_msg = Some("No audio files found".to_string());
+                } else {
+                    self.state.status_msg = Some(format!("{track_count} local tracks loaded"));
+                }
+                self.needs_redraw = true;
             }
-            self.needs_redraw = true;
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.fetcher.local_scan_rx = None;
+                self.state.loading = false;
+                self.state.status_msg = Some("Local scan failed".to_string());
+                self.needs_redraw = true;
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
         }
     }
 }

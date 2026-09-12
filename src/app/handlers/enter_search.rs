@@ -208,16 +208,16 @@ impl App {
             self.state.status_msg = Some("Failed to initialize local player".to_string());
             return;
         }
-        let track = self
+        let all_tracks = self
             .state
             .search_results
             .as_ref()
-            .and_then(|sr| sr.tracks.iter().find(|t| t.uri == track_uri))
-            .cloned();
+            .map(|sr| sr.tracks.clone())
+            .unwrap_or_default();
+        let track = all_tracks.iter().find(|t| t.uri == track_uri).cloned();
         let Some(track) = track else {
             return;
         };
-        let all_tracks = self.state.local_tree.all_tracks_flat();
         let start_idx = all_tracks
             .iter()
             .position(|t| t.uri == track_uri)

@@ -93,6 +93,7 @@ pub trait AudioPlayer: Send {
     fn shuffle(&self) -> bool;
     fn repeat(&self) -> RepeatMode;
     fn current_index(&self) -> Option<usize>;
+    fn current_track_summary(&self) -> Option<TrackSummary>;
 
     /// Remove already-played tracks from the front of the queue.
     /// Returns true if the queue was actually trimmed.
@@ -111,6 +112,9 @@ pub trait AudioPlayer: Send {
 
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (vec![], None)
+    }
+    fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        vec![]
     }
     fn set_visualizer_enabled(&mut self, _enabled: bool) {}
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
@@ -422,6 +426,10 @@ impl NativePlayer {
 
     pub fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (self.queue.clone(), self.current_index)
+    }
+
+    pub fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        self.user_queue.clone()
     }
 
     pub fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
@@ -933,6 +941,17 @@ impl AudioPlayer for NativePlayer {
     fn current_index(&self) -> Option<usize> {
         self.current_index()
     }
+    fn current_track_summary(&self) -> Option<TrackSummary> {
+        self.queue.get(self.current_index?).map(|uri| TrackSummary {
+            name: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: 0,
+            uri: uri.clone(),
+            cover_path: None,
+            added_at: None,
+        })
+    }
 
     fn trim_played(&mut self, keep_behind: usize) -> bool {
         self.trim_played(keep_behind)
@@ -986,6 +1005,10 @@ impl AudioPlayer for NativePlayer {
         self.snapshot_queue()
     }
 
+    fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        self.snapshot_user_queue()
+    }
+
     fn current_playback_state(&self) -> Option<PlaybackState> {
         let guard = self.server_position.lock().ok()?;
         let (base, recorded_at) = *guard;
@@ -1014,5 +1037,11 @@ impl AudioPlayer for NativePlayer {
         playlist_uri: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<TrackSummary>>> + Send + 'a>> {
         Box::pin(self.fetch_playlist_tracks_via_mercury(playlist_uri))
+    }
+}
+
+impl Drop for NativePlayer {
+    fn drop(&mut self) {
+        self.player.stop();
     }
 }

@@ -93,9 +93,9 @@ Invoke-Step "cargo test --locked (default features)" {
     cargo test --locked
 } -Skip:($SkipTest -or ($hasOnly -and -not $onlyTest))
 
-# 5. cargo test --locked --no-default-features -F spotify,discord (release.yml: minimal)
-Invoke-Step "cargo test --locked (minimal: spotify,discord)" {
-    cargo test --locked --no-default-features -F spotify,discord
+# 5. cargo test --locked --no-default-features -F discord (release.yml: minimal)
+Invoke-Step "cargo test --locked (minimal: discord)" {
+    cargo test --locked --no-default-features -F discord
 } -Skip:($SkipTest -or ($hasOnly -and -not $onlyTest))
 
 # 6. cargo build --release --locked (ci.yml)
@@ -108,9 +108,9 @@ Invoke-Step "cargo build --release --locked -F mpris (full)" {
     cargo build --release --locked -F mpris
 } -Skip:($SkipBuild -or ($hasOnly -and -not $onlyBuild))
 
-# 8. cargo build --release --locked --no-default-features -F spotify,discord (release.yml: minimal binary)
-Invoke-Step "cargo build --release --locked (minimal: spotify,discord)" {
-    cargo build --release --locked --no-default-features -F spotify,discord
+# 8. cargo build --release --locked --no-default-features -F discord (release.yml: minimal binary)
+Invoke-Step "cargo build --release --locked (minimal: discord)" {
+    cargo build --release --locked --no-default-features -F discord
 } -Skip:($SkipBuild -or ($hasOnly -and -not $onlyBuild))
 
 # Summary

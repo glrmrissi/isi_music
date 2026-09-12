@@ -26,14 +26,15 @@ impl App {
                             player.play();
                         }
                         self.state.playback.is_playing = true;
+                        self.state.status_msg = None;
                     } else if self.spotify.authenticated {
                         let _ = self.spotify.toggle_playback().await;
                     }
                 }
             }
             A::NextTrack => {
-                if self.player_mgr.player.is_none() {
-                    self.ensure_spotify_player().await;
+                if self.player_mgr.player.is_none() && !self.ensure_spotify_player().await {
+                    self.ensure_local_player().await;
                 }
                 if let Some(player) = &mut self.player_mgr.player {
                     if player.next() {
@@ -45,8 +46,8 @@ impl App {
                 }
             }
             A::PrevTrack => {
-                if self.player_mgr.player.is_none() {
-                    self.ensure_spotify_player().await;
+                if self.player_mgr.player.is_none() && !self.ensure_spotify_player().await {
+                    self.ensure_local_player().await;
                 }
                 if let Some(player) = &mut self.player_mgr.player {
                     if player.prev() {
@@ -71,8 +72,60 @@ impl App {
                 }
                 self.player_mgr.saved_volume = self.state.playback.volume;
             }
-            A::SeekForward => {}
-            A::SeekBackward => {}
+            A::SeekForward => {
+                let now = Instant::now();
+                let is_held = self
+                    .last_seek_time
+                    .map(|t| t.elapsed() < std::time::Duration::from_millis(300))
+                    .unwrap_or(false);
+                if is_held {
+                    self.seek_hold_count += 1;
+                } else {
+                    self.seek_hold_count = 0;
+                }
+                self.last_seek_time = Some(now);
+
+                let step_ms = if self.seek_hold_count > 4 {
+                    10_000
+                } else {
+                    5_000
+                };
+                let d = self.state.playback.duration_ms;
+                let target = self.state.playback.progress_ms + step_ms;
+                let new_pos = if d > 0 { target.min(d) } else { target };
+                self.state.playback.progress_ms = new_pos;
+                self.player_mgr.progress_at_play_start = new_pos;
+                if self.state.playback.is_playing {
+                    self.player_mgr.playing_started_at = Some(Instant::now());
+                }
+                let _ = self.seek_tx.send(new_pos as u32);
+            }
+            A::SeekBackward => {
+                let now = Instant::now();
+                let is_held = self
+                    .last_seek_time
+                    .map(|t| t.elapsed() < std::time::Duration::from_millis(300))
+                    .unwrap_or(false);
+                if is_held {
+                    self.seek_hold_count += 1;
+                } else {
+                    self.seek_hold_count = 0;
+                }
+                self.last_seek_time = Some(now);
+
+                let step_ms = if self.seek_hold_count > 4 {
+                    10_000
+                } else {
+                    5_000
+                };
+                let new_pos = self.state.playback.progress_ms.saturating_sub(step_ms);
+                self.state.playback.progress_ms = new_pos;
+                self.player_mgr.progress_at_play_start = new_pos;
+                if self.state.playback.is_playing {
+                    self.player_mgr.playing_started_at = Some(Instant::now());
+                }
+                let _ = self.seek_tx.send(new_pos as u32);
+            }
             A::SeekMiddle => {
                 let new_pos = self.state.playback.duration_ms / 2;
                 self.state.playback.progress_ms = new_pos;
@@ -170,6 +223,9 @@ impl App {
                         );
                         self.state.status_msg = Some(format!("+ {name} added to queue"));
                         self.sync_queue_display();
+                    } else {
+                        self.state.status_msg =
+                            Some("Start playback first to add to queue".to_string());
                     }
                 }
             }
@@ -278,11 +334,13 @@ impl App {
                 } else if self.state.fullscreen_player {
                     self.state.fullscreen_player = false;
                 } else if self.state.search_results.is_some() {
+                    self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.search_results = None;
                     self.state.previous_search = None;
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
                 } else if let Some(entry) = self.state.pop_nav() {
+                    self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.active_content = entry.active_content;
                     self.state.focus = entry.focus;
                     self.state.active_playlist_uri = entry.active_playlist_uri;
@@ -358,7 +416,7 @@ impl App {
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
-                if self.state.show_lyrics {
+                if self.state.show_lyrics && self.enable_lyrics {
                     self.fetcher.ensure_lyrics(&self.debug_overlay);
                 }
                 self.state.status_msg = Some(if self.state.show_lyrics {
@@ -418,20 +476,32 @@ impl App {
                 self.state.command_buffer.clear();
             }
             A::DeletePlaylist => {
-                if !self.spotify.authenticated {
-                    self.state.status_msg =
-                        Some("Spotify not connected - run: isi-music setup-spotify".to_string());
-                } else if self.state.focus == crate::ui::Focus::Playlists {
+                if self.state.focus == crate::ui::Focus::Playlists {
                     let idx = self.state.playlist_list.selected();
-                    let name = idx
+                    let is_local_folder = idx
                         .and_then(|i| self.state.playlists.get(i))
-                        .map(|p| p.name.clone())
-                        .unwrap_or_default();
-                    if name.is_empty() {
-                        self.state.status_msg = Some("No playlist selected".to_string());
+                        .is_some_and(|p| p.uri.starts_with("local:folder:"));
+                    if is_local_folder {
+                        return;
+                    }
+                    if !self.spotify_enabled {
+                        self.state.status_msg =
+                            Some("Spotify is disabled in config.toml".to_string());
+                    } else if !self.spotify.authenticated {
+                        self.state.status_msg = Some(
+                            "Spotify not connected - run: isi-music setup-spotify".to_string(),
+                        );
                     } else {
-                        self.state.delete_playlist_confirm = true;
-                        self.state.delete_playlist_target = Some(name);
+                        let name = idx
+                            .and_then(|i| self.state.playlists.get(i))
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
+                        if name.is_empty() {
+                            self.state.status_msg = Some("No playlist selected".to_string());
+                        } else {
+                            self.state.delete_playlist_confirm = true;
+                            self.state.delete_playlist_target = Some(name);
+                        }
                     }
                 } else {
                     self.state.status_msg = Some("Focus on Playlists tab to delete".to_string());

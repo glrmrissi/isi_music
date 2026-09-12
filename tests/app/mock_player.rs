@@ -148,6 +148,19 @@ impl AudioPlayer for MockPlayer {
     fn current_index(&self) -> Option<usize> {
         self.current_index
     }
+    fn current_track_summary(&self) -> Option<crate::spotify::TrackSummary> {
+        self.queue
+            .get(self.current_index?)
+            .map(|uri| crate::spotify::TrackSummary {
+                name: String::new(),
+                artist: String::new(),
+                album: String::new(),
+                duration_ms: 0,
+                uri: uri.clone(),
+                cover_path: None,
+                added_at: None,
+            })
+    }
     fn try_recv_event(&mut self) -> Option<crate::player::PlayerNotification> {
         None
     }

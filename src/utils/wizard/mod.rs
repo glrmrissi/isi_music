@@ -85,9 +85,16 @@ async fn quick_start(term: &Term) -> Result<(AppConfig, Option<Theme>)> {
             style("!").yellow(),
             style("Could not auto-detect music directory.").dim()
         );
+        let config_path_str = crate::config::config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "config.toml".to_string());
         println!(
             "      {}",
-            style("Set [local] music_dir in ~/.config/isi-music/config.toml later.").dim()
+            style(format!(
+                "Set [local] music_dir in {} later.",
+                config_path_str
+            ))
+            .dim()
         );
     }
 

@@ -55,9 +55,15 @@ impl SpotifyClient {
         let mut seed_artist_ids: Vec<&str> = Vec::new();
 
         for uri in seed_uris.iter().take(5) {
-            if let Some(id) = uri.strip_prefix("spotify:track:") {
+            if let Some(id) = uri.strip_prefix("spotify:track:")
+                && !id.is_empty()
+                && id.chars().all(|c| c.is_ascii_alphanumeric())
+            {
                 seed_track_ids.push(id);
-            } else if let Some(id) = uri.strip_prefix("spotify:artist:") {
+            } else if let Some(id) = uri.strip_prefix("spotify:artist:")
+                && !id.is_empty()
+                && id.chars().all(|c| c.is_ascii_alphanumeric())
+            {
                 seed_artist_ids.push(id);
             }
         }
@@ -163,12 +169,12 @@ impl SpotifyClient {
                     seed_artists.push((id.to_string(), String::new()));
                 }
             } else if let Some(track_id) = uri.strip_prefix("spotify:track:")
-                && let Ok(resp) = self
-                    .http
-                    .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
-                    .bearer_auth(&token)
-                    .send()
-                    .await
+                && let Ok(resp) = super::send_with_retry(
+                    &token,
+                    self.http
+                        .get(format!("https://api.spotify.com/v1/tracks/{track_id}")),
+                )
+                .await
                 && let Ok(json) = resp.json::<serde_json::Value>().await
                 && let (Some(a_id), Some(a_name)) = (
                     json["artists"]
@@ -200,15 +206,15 @@ impl SpotifyClient {
                 ("include_groups", "album,single"),
                 ("market", "from_token"),
             ];
-            if let Ok(resp) = self
-                .http
-                .get(format!(
-                    "https://api.spotify.com/v1/artists/{artist_id}/albums"
-                ))
-                .bearer_auth(&token)
-                .query(&album_query)
-                .send()
-                .await
+            if let Ok(resp) = super::send_with_retry(
+                &token,
+                self.http
+                    .get(format!(
+                        "https://api.spotify.com/v1/artists/{artist_id}/albums"
+                    ))
+                    .query(&album_query),
+            )
+            .await
                 && let Ok(json) = resp.json::<serde_json::Value>().await
             {
                 let album_ids: Vec<String> = json["items"]
@@ -223,15 +229,15 @@ impl SpotifyClient {
                 for album_id in &album_ids {
                     let track_query: Vec<(&str, &str)> =
                         vec![("limit", "10"), ("market", "from_token")];
-                    if let Ok(resp2) = self
-                        .http
-                        .get(format!(
-                            "https://api.spotify.com/v1/albums/{album_id}/tracks"
-                        ))
-                        .bearer_auth(&token)
-                        .query(&track_query)
-                        .send()
-                        .await
+                    if let Ok(resp2) = super::send_with_retry(
+                        &token,
+                        self.http
+                            .get(format!(
+                                "https://api.spotify.com/v1/albums/{album_id}/tracks"
+                            ))
+                            .query(&track_query),
+                    )
+                    .await
                         && let Ok(json2) = resp2.json::<serde_json::Value>().await
                         && let Some(items) = json2["items"].as_array()
                     {
@@ -279,13 +285,13 @@ impl SpotifyClient {
                 ("offset", offset_str.as_str()),
                 ("market", "from_token"),
             ];
-            if let Ok(resp) = self
-                .http
-                .get("https://api.spotify.com/v1/search")
-                .bearer_auth(&token)
-                .query(&search_query)
-                .send()
-                .await
+            if let Ok(resp) = super::send_with_retry(
+                &token,
+                self.http
+                    .get("https://api.spotify.com/v1/search")
+                    .query(&search_query),
+            )
+            .await
                 && let Ok(json) = resp.json::<serde_json::Value>().await
                 && let Some(tracks) = json["tracks"]["items"].as_array()
             {

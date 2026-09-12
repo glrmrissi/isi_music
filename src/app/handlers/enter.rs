@@ -62,19 +62,16 @@ impl App {
                         let id = album.id.clone();
                         let name = album.name.clone();
                         self.state.push_nav();
+                        self.fetcher.cancel_all_pending(&mut self.state);
                         self.state.status_msg = Some(format!("Loading {name}…"));
                         self.state.loading = true;
                         self.state.active_playlist_uri = Some(format!("album:{id}"));
                         self.state.active_playlist_id = Some(format!("album:{id}"));
                         let spotify = Arc::clone(&self.spotify);
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        self.fetcher.pending_fetch = Some(rx);
+                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                        self.fetcher.stream_rx = Some(rx);
                         tokio::spawn(async move {
-                            let result = spotify
-                                .fetch_album_tracks(&id, 0)
-                                .await
-                                .map_err(|e| e.to_string());
-                            let _ = tx.send(FetchResult::AlbumTracks(result));
+                            let _ = spotify.stream_album_tracks(&id, tx).await;
                         });
                     }
                 }
@@ -85,6 +82,7 @@ impl App {
                         let id = artist.uri.trim_start_matches("spotify:artist:").to_string();
                         let name = artist.name.clone();
                         self.state.push_nav();
+                        self.fetcher.cancel_all_pending(&mut self.state);
                         self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
                         self.state.loading = true;
                         self.state.active_artist_name = Some(name.clone());

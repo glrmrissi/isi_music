@@ -243,7 +243,7 @@ impl Session {
             .username
             .as_ref()
             .map_or("UNKNOWN", |s| s.as_str());
-        info!("Authenticated as '{username}' !");
+        info!("Authenticated successfully!");
         self.set_username(username);
         self.set_auth_data(&reusable_credentials.auth_data);
         if let Some(cache) = self.cache() {
@@ -364,7 +364,7 @@ impl Session {
     fn check_catalogue(attributes: &UserAttributes) {
         if let Some(account_type) = attributes.get("type") {
             if account_type != "premium" {
-                error!("librespot does not support {account_type:?} accounts.");
+                error!("librespot does not support this account type.");
                 info!("Please support Spotify and your artists and sign up for a premium account.");
 
                 // TODO: logout instead of exiting

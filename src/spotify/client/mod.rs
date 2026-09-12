@@ -49,6 +49,43 @@ pub(super) async fn spotify_rate_limit() {
     *last_request = Instant::now();
 }
 
+const MAX_429_RETRIES: u32 = 3;
+
+pub(super) async fn send_with_retry(
+    token: &str,
+    req_builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response> {
+    let mut attempt = 0u32;
+    loop {
+        let resp = req_builder
+            .try_clone()
+            .ok_or_else(|| anyhow::anyhow!("Request cannot be retried"))?
+            .bearer_auth(token)
+            .send()
+            .await?;
+        if resp.status().as_u16() != 429 {
+            return Ok(resp);
+        }
+        attempt += 1;
+        if attempt >= MAX_429_RETRIES {
+            return Ok(resp);
+        }
+        let retry_after = resp
+            .headers()
+            .get("Retry-After")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(2);
+        tracing::warn!(
+            "Spotify 429 rate limited, retrying after {}s (attempt {}/{})",
+            retry_after,
+            attempt,
+            MAX_429_RETRIES
+        );
+        sleep(Duration::from_secs(retry_after.min(30))).await;
+    }
+}
+
 pub struct SpotifyClient {
     pub(super) token_manager: TokenManager,
     pub http: reqwest::Client,
@@ -146,13 +183,13 @@ impl SpotifyClient {
             .get_access_token()
             .await
             .ok_or_else(|| anyhow::anyhow!("No access token"))?;
-        let resp = self
-            .http
-            .get("https://api.spotify.com/v1/me/library/contains")
-            .bearer_auth(&token)
-            .query(&[("uris", &format!("spotify:track:{}", track_id))])
-            .send()
-            .await?;
+        let resp = send_with_retry(
+            &token,
+            self.http
+                .get("https://api.spotify.com/v1/me/library/contains")
+                .query(&[("uris", &format!("spotify:track:{}", track_id))]),
+        )
+        .await?;
         let status = resp.status();
         let text = resp.text().await?;
         if status.is_success() {
@@ -168,13 +205,13 @@ pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &s
     spotify_rate_limit().await;
 
     let uri = format!("spotify:track:{}", track_id);
-    let resp = http
-        .delete("https://api.spotify.com/v1/me/library")
-        .bearer_auth(token)
-        .query(&[("uris", &uri)])
-        .header("Content-Length", "0")
-        .send()
-        .await?;
+    let resp = send_with_retry(
+        token,
+        http.delete("https://api.spotify.com/v1/me/library")
+            .query(&[("uris", &uri)])
+            .header("Content-Length", "0"),
+    )
+    .await?;
 
     let status = resp.status();
     if status.is_success() {
@@ -190,13 +227,13 @@ pub async fn save_track_http(http: &reqwest::Client, token: &str, track_id: &str
     spotify_rate_limit().await;
 
     let uri = format!("spotify:track:{}", track_id);
-    let resp = http
-        .put("https://api.spotify.com/v1/me/library")
-        .bearer_auth(token)
-        .query(&[("uris", &uri)])
-        .header("Content-Length", "0")
-        .send()
-        .await?;
+    let resp = send_with_retry(
+        token,
+        http.put("https://api.spotify.com/v1/me/library")
+            .query(&[("uris", &uri)])
+            .header("Content-Length", "0"),
+    )
+    .await?;
 
     let status = resp.status();
     if status.is_success() {

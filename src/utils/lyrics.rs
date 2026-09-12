@@ -191,11 +191,13 @@ fn parse_timestamp(s: &str) -> Option<u64> {
         3 => {
             let min: u64 = parts[0].parse().ok()?;
             let sec: u64 = parts[1].parse().ok()?;
-            let cs: u64 = parts[2].parse().ok()?;
-            let ms = if parts[2].len() == 1 {
-                cs * 100
-            } else {
-                cs * 10
+            let frac_str = parts[2];
+            let frac_val: u64 = frac_str.parse().ok()?;
+            let ms = match frac_str.len() {
+                1 => frac_val * 100,
+                2 => frac_val * 10,
+                3 => frac_val,
+                _ => frac_str[..3].parse().ok()?,
             };
             Some(min * 60_000 + sec * 1_000 + ms)
         }
@@ -469,27 +471,31 @@ async fn fetch_from_musixmatch(
         format!("lyrics: fetching from musixmatch -> {} - {}", artist, title),
     );
 
-    let search_url = format!(
-        "https://api.musixmatch.com/ws/1.1/track.search?q_track={}&q_artist={}&f_has_lyrics=true&apikey={}",
-        urlencoding::encode(title),
-        urlencoding::encode(artist),
-        api_key
-    );
-
-    let search_resp =
-        match tokio::time::timeout(Duration::from_secs(5), http.get(&search_url).send()).await {
-            Ok(Ok(r)) => {
-                if r.status() == reqwest::StatusCode::UNAUTHORIZED {
-                    debug_overlay.log(
-                        LogLevel::Error,
-                        "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string(),
-                    );
-                    return None;
-                }
-                r
+    let search_resp = match tokio::time::timeout(
+        Duration::from_secs(5),
+        http.get("https://api.musixmatch.com/ws/1.1/track.search")
+            .query(&[
+                ("q_track", title),
+                ("q_artist", artist),
+                ("f_has_lyrics", "true"),
+                ("apikey", api_key),
+            ])
+            .send(),
+    )
+    .await
+    {
+        Ok(Ok(r)) => {
+            if r.status() == reqwest::StatusCode::UNAUTHORIZED {
+                debug_overlay.log(
+                    LogLevel::Error,
+                    "lyrics: Musixmatch HTTP 401 - Unauthorized".to_string(),
+                );
+                return None;
             }
-            _ => return None,
-        };
+            r
+        }
+        _ => return None,
+    };
 
     let search_json: MusixmatchResponse = match search_resp.json().await {
         Ok(j) => j,
@@ -540,16 +546,21 @@ async fn fetch_from_musixmatch(
     }
 
     let track_id = track.track.track_id;
-    let lyrics_url = format!(
-        "https://api.musixmatch.com/ws/1.1/track.lyrics.get?track_id={}&apikey={}",
-        track_id, api_key
-    );
 
-    let lyrics_resp =
-        match tokio::time::timeout(Duration::from_secs(5), http.get(&lyrics_url).send()).await {
-            Ok(Ok(r)) => r,
-            _ => return None,
-        };
+    let lyrics_resp = match tokio::time::timeout(
+        Duration::from_secs(5),
+        http.get("https://api.musixmatch.com/ws/1.1/track.lyrics.get")
+            .query(&[
+                ("track_id", track_id.to_string()),
+                ("apikey", api_key.to_string()),
+            ])
+            .send(),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        _ => return None,
+    };
 
     let lyrics_json: serde_json::Value = match lyrics_resp.json().await {
         Ok(j) => j,
@@ -814,5 +825,20 @@ impl LyricsHandle {
 
     pub fn is_loading(&self) -> bool {
         lock_or_recover(&self.inner).pending.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_timestamp_formats() {
+        assert_eq!(parse_timestamp("01:23"), Some(83_000));
+        assert_eq!(parse_timestamp("01:23.4"), Some(83_400));
+        assert_eq!(parse_timestamp("01:23.45"), Some(83_450));
+        assert_eq!(parse_timestamp("01:23.456"), Some(83_456));
+        assert_eq!(parse_timestamp("00:00.000"), Some(0));
+        assert_eq!(parse_timestamp("invalid"), None);
     }
 }

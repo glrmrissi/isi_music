@@ -155,7 +155,13 @@ impl SettingsPanel {
                     count
                 }
             }
-            SettingsSection::Account => 4,
+            SettingsSection::Account => {
+                if self.config.spotify_enabled() {
+                    4
+                } else {
+                    3
+                }
+            }
             SettingsSection::Cache => 8,
             SettingsSection::QuickAccess => 1,
             SettingsSection::Help => 1,
@@ -252,18 +258,22 @@ impl SettingsPanel {
                     7 => SettingsAction::RefreshPlaylists,
                     _ => SettingsAction::None,
                 },
-                SettingsSection::Account => match self.selected_item {
-                    0 => SettingsAction::SetupSpotify,
-                    1 => SettingsAction::SetupLastfm,
-                    2 => {
-                        self.music_dir_editing = true;
-                        self.music_dir_input =
-                            self.config.local.music_dir.clone().unwrap_or_default();
-                        SettingsAction::EditMusicDir
+                SettingsSection::Account => {
+                    let spotify_offset = if self.config.spotify_enabled() { 0 } else { 1 };
+                    let adjusted = self.selected_item + spotify_offset;
+                    match adjusted {
+                        0 => SettingsAction::SetupSpotify,
+                        1 => SettingsAction::SetupLastfm,
+                        2 => {
+                            self.music_dir_editing = true;
+                            self.music_dir_input =
+                                self.config.local.music_dir.clone().unwrap_or_default();
+                            SettingsAction::EditMusicDir
+                        }
+                        3 => SettingsAction::ToggleItem,
+                        _ => SettingsAction::None,
                     }
-                    3 => SettingsAction::ToggleItem,
-                    _ => SettingsAction::None,
-                },
+                }
                 _ => SettingsAction::ToggleItem,
             },
             KeyCode::Char('c') | KeyCode::Char('C')
@@ -763,15 +773,17 @@ impl SettingsPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let content = vec![
-            Line::from("  Configure quick access search for:"),
+        let mut content = vec![
+            Line::from("  Quick access search supports:"),
             Line::from(""),
-            Line::from("  \u{2022} Playlists (Spotify)"),
-            Line::from("  \u{2022} Albums (Spotify)"),
-            Line::from("  \u{2022} Artists (Spotify)"),
-            Line::from("  \u{2022} Liked Songs (Spotify)"),
-            Line::from("  \u{2022} Local Files"),
         ];
+        if self.config.spotify_enabled() {
+            content.push(Line::from("  \u{2022} Playlists (Spotify)"));
+            content.push(Line::from("  \u{2022} Albums (Spotify)"));
+            content.push(Line::from("  \u{2022} Artists (Spotify)"));
+            content.push(Line::from("  \u{2022} Liked Songs (Spotify)"));
+        }
+        content.push(Line::from("  \u{2022} Local Files"));
 
         frame.render_widget(
             Paragraph::new(content)

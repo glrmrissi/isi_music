@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::App;
+use crate::app::fetcher::StreamEvent;
 use crate::spotify::FullSearchResults;
 use crate::ui::{Focus, SearchResults};
 
@@ -32,31 +35,29 @@ impl App {
                     self.state.search_active = false;
                 } else {
                     self.state.status_msg = Some(format!("Searching \"{query}\"..."));
-                    match self.spotify.search_all(&query).await {
-                        Ok(results) => {
-                            let total = results.tracks.len()
-                                + results.artists.len()
-                                + results.albums.len()
-                                + results.playlists.len();
-                            self.state.search_results =
-                                Some(SearchResults::new(query.clone(), results));
-                            self.state.tracks.clear();
-                            self.state.rebuild_sort_indices();
-                            self.state.active_playlist_uri = None;
-                            self.state.search_active = false;
-                            self.state.focus = Focus::Search;
-                            self.state.status_msg = if total == 0 {
-                                Some(format!("No results for \"{query}\""))
-                            } else {
-                                Some(format!("{total} results for \"{query}\""))
-                            };
+                    self.state.search_active = false;
+                    self.state.loading = true;
+                    let spotify = Arc::clone(&self.spotify);
+                    let q = query.clone();
+                    self.fetcher.cancel_all_pending(&mut self.state);
+                    self.state.loading = true;
+                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                    self.fetcher.stream_rx = Some(rx);
+                    tokio::spawn(async move {
+                        match spotify.search_all(&q).await {
+                            Ok(results) => {
+                                let _ = tx.send(StreamEvent::SearchInitial {
+                                    query: q,
+                                    results: Box::new(results),
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Search failed for \"{q}\": {e:#}");
+                                let _ = tx.send(StreamEvent::Error(format!("{e:#}")));
+                            }
                         }
-                        Err(e) => {
-                            self.state.status_msg = Some(format!("Search error: {e:#}"));
-                            self.state.search_active = false;
-                            tracing::error!("Search failed for \"{query}\": {e:#}");
-                        }
-                    }
+                        let _ = tx.send(StreamEvent::Done);
+                    });
                 }
             }
             KeyCode::Up => self.state.nav_up(),
@@ -156,18 +157,6 @@ impl App {
                         return;
                     }
                 };
-
-                if self
-                    .state
-                    .playlists
-                    .iter()
-                    .any(|p| p.id == playlist_id && p.uri.starts_with("local:folder:"))
-                {
-                    self.state.delete_playlist_confirm = false;
-                    self.state.delete_playlist_target = None;
-                    self.state.status_msg = Some("Local folders cannot be deleted".to_string());
-                    return;
-                }
 
                 self.state.status_msg = Some("Deleting playlist...".to_string());
                 match self.spotify.unfollow_playlist(&playlist_id).await {
