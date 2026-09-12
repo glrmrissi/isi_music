@@ -150,21 +150,15 @@ impl App {
         {
             p.pause();
         }
-        self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
-        if self.player_mgr.parked_player.is_some() {
-            std::mem::swap(
-                &mut self.player_mgr.player,
-                &mut self.player_mgr.parked_player,
-            );
-            self.player_mgr.local_active = true;
-            self.player_mgr.band_energies = self
-                .player_mgr
-                .player
-                .as_ref()
-                .and_then(|p| p.band_energies());
-        } else {
-            self.player_mgr.local_active = true;
+        std::mem::swap(
+            &mut self.player_mgr.player,
+            &mut self.player_mgr.parked_player,
+        );
+        self.player_mgr.local_active = true;
+        if let Some(ref mut p) = self.player_mgr.player {
+            p.set_visualizer_enabled(self.state.show_visualizer);
+            self.player_mgr.band_energies = p.band_energies();
         }
     }
 
@@ -177,21 +171,15 @@ impl App {
         {
             p.pause();
         }
-        self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
-        if self.player_mgr.parked_player.is_some() {
-            std::mem::swap(
-                &mut self.player_mgr.player,
-                &mut self.player_mgr.parked_player,
-            );
-            self.player_mgr.local_active = false;
-            self.player_mgr.band_energies = self
-                .player_mgr
-                .player
-                .as_ref()
-                .and_then(|p| p.band_energies());
-        } else {
-            self.player_mgr.local_active = false;
+        std::mem::swap(
+            &mut self.player_mgr.player,
+            &mut self.player_mgr.parked_player,
+        );
+        self.player_mgr.local_active = false;
+        if let Some(ref mut p) = self.player_mgr.player {
+            p.set_visualizer_enabled(self.state.show_visualizer);
+            self.player_mgr.band_energies = p.band_energies();
         }
     }
 
@@ -407,12 +395,37 @@ impl App {
             .as_ref()
             .map(|p| p.snapshot_queue())
             .unwrap_or_default();
+        let saved_user_queue = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.snapshot_user_queue())
+            .unwrap_or_default();
         let saved_volume = self
             .player_mgr
             .player
             .as_ref()
             .map(|p| p.volume())
             .unwrap_or(50);
+        let saved_shuffle = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.shuffle())
+            .unwrap_or(false);
+        let saved_repeat = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.repeat())
+            .unwrap_or(crate::player::RepeatMode::Off);
+        let saved_progress = self.state.playback.progress_ms;
+        let saved_is_playing = self
+            .player_mgr
+            .player
+            .as_ref()
+            .map(|p| p.is_playing())
+            .unwrap_or(false);
 
         self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
@@ -433,6 +446,36 @@ impl App {
                     let start = saved_index.unwrap_or(0);
                     p.set_queue(saved_queue, start);
                 }
+                for qt in &saved_user_queue {
+                    p.add_to_queue(
+                        qt.uri.clone(),
+                        qt.name.clone(),
+                        qt.artist.clone(),
+                        qt.album.clone(),
+                        qt.duration_ms,
+                        qt.cover_path.clone(),
+                    );
+                }
+                if saved_shuffle {
+                    p.toggle_shuffle();
+                }
+                match saved_repeat {
+                    crate::player::RepeatMode::Queue => {
+                        p.cycle_repeat();
+                    }
+                    crate::player::RepeatMode::Track => {
+                        p.cycle_repeat();
+                        p.cycle_repeat();
+                    }
+                    crate::player::RepeatMode::Off => {}
+                }
+                if saved_progress > 1000 {
+                    p.seek(saved_progress as u32);
+                }
+                if !saved_is_playing {
+                    p.pause();
+                }
+                p.set_visualizer_enabled(self.state.show_visualizer);
                 self.player_mgr.band_energies = p.band_energies();
                 self.player_mgr.player = Some(Box::new(p));
                 self.state.status_msg = Some("Reconnected!".to_string());
