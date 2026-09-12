@@ -41,6 +41,8 @@ impl App {
                     let q = query.clone();
                     self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.loading = true;
+                    self.state.active_playlist_id = None;
+                    self.state.active_playlist_uri = None;
                     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                     self.fetcher.stream_rx = Some(rx);
                     tokio::spawn(async move {
@@ -129,6 +131,7 @@ impl App {
         }
         self.state.tracks.clear();
         self.state.rebuild_sort_indices();
+        self.state.active_playlist_id = None;
         self.state.active_playlist_uri = None;
         self.state.search_active = false;
         self.state.focus = Focus::Search;

@@ -126,6 +126,8 @@ impl App {
                 self.fetcher.cancel_all_pending(&mut self.state);
                 self.state.status_msg = Some("Loading Liked Songs…".to_string());
                 self.state.loading = true;
+                self.state.active_playlist_uri = Some("liked_songs".to_string());
+                self.state.active_playlist_id = Some("liked_songs".to_string());
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 self.fetcher.stream_rx = Some(rx);
@@ -138,6 +140,8 @@ impl App {
                 self.fetcher.cancel_all_pending(&mut self.state);
                 self.state.status_msg = Some("Loading saved albums…".to_string());
                 self.state.loading = true;
+                self.state.active_playlist_uri = None;
+                self.state.active_playlist_id = None;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 self.fetcher.stream_rx = Some(rx);
@@ -150,6 +154,8 @@ impl App {
                 self.fetcher.cancel_all_pending(&mut self.state);
                 self.state.status_msg = Some("Loading followed artists…".to_string());
                 self.state.loading = true;
+                self.state.active_playlist_uri = None;
+                self.state.active_playlist_id = None;
                 let spotify = Arc::clone(&self.spotify);
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 self.fetcher.stream_rx = Some(rx);
