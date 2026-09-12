@@ -420,3 +420,16 @@ async fn dispatch_play_pause_without_player_does_not_panic() {
 
     app.dispatch(Action::PlayPause).await;
 }
+
+#[tokio::test]
+async fn dispatch_seek_forward_and_backward() {
+    let mut app = App::new_for_test().await;
+    app.state.playback.duration_ms = 100_000;
+    app.state.playback.progress_ms = 20_000;
+
+    app.dispatch(Action::SeekForward).await;
+    assert_eq!(app.state.playback.progress_ms, 25_000);
+
+    app.dispatch(Action::SeekBackward).await;
+    assert_eq!(app.state.playback.progress_ms, 20_000);
+}

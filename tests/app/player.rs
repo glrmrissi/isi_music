@@ -134,9 +134,8 @@ async fn activate_local_player_swaps_with_parked() {
 
     app.activate_local_player();
 
-    // player = None before swap, so parked moves to player, parked becomes None
     assert!(app.player_mgr.local_active);
-    assert!(app.player_mgr.parked_player.is_none());
+    assert!(app.player_mgr.parked_player.is_some());
     assert!(app.player_mgr.player.is_some());
 }
 
@@ -151,7 +150,7 @@ async fn activate_local_player_pauses_current_before_swap() {
 
     app.activate_local_player();
 
-    assert!(!app.player_mgr.player.as_ref().unwrap().is_playing());
+    assert!(!app.player_mgr.parked_player.as_ref().unwrap().is_playing());
 }
 
 #[tokio::test]
@@ -165,6 +164,7 @@ async fn activate_local_player_no_parked_sets_flag() {
 
     assert!(app.player_mgr.local_active);
     assert!(app.player_mgr.player.is_none());
+    assert!(app.player_mgr.parked_player.is_some());
 }
 
 #[tokio::test]
@@ -187,10 +187,9 @@ async fn activate_spotify_player_swaps_with_parked() {
 
     app.activate_spotify_player();
 
-    // player = None before swap, so parked moves to player, parked becomes None
     assert!(!app.player_mgr.local_active);
     assert!(app.player_mgr.player.is_some());
-    assert!(app.player_mgr.parked_player.is_none());
+    assert!(app.player_mgr.parked_player.is_some());
 }
 
 #[tokio::test]
@@ -205,6 +204,7 @@ async fn activate_spotify_player_no_parked_clears_player() {
 
     assert!(!app.player_mgr.local_active);
     assert!(app.player_mgr.player.is_none());
+    assert!(app.player_mgr.parked_player.is_some());
 }
 
 #[tokio::test]
