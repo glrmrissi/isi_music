@@ -143,7 +143,7 @@ if ($Mode -eq "pre-push" -or $Mode -eq "ci") {
     }
 
     Run-Step "win" "cargo build --release (minimal)" {
-        cargo build --release --locked --no-default-features -F spotify,discord
+        cargo build --release --locked --no-default-features -F discord
     }
 }
 
