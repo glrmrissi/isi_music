@@ -45,7 +45,7 @@ async fn connect() -> Result<tokio::net::UnixStream> {
 async fn connect() -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
-    const ERROR_PIPE_BUSY: i32 = 109;
+    const ERROR_PIPE_BUSY: i32 = 231;
 
     for attempt in 0..20 {
         match ClientOptions::new().open(PIPE_NAME) {
@@ -60,7 +60,9 @@ async fn connect() -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
             }
         }
     }
-    unreachable!()
+    Err(anyhow::anyhow!(
+        "Daemon pipe busy — timed out waiting for connection"
+    ))
 }
 
 #[cfg(unix)]

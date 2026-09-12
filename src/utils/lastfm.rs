@@ -51,7 +51,9 @@ impl LastfmClient {
     }
 
     pub async fn get_auth_token(api_key: &str) -> Result<String> {
-        let http = Client::new();
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
         let url = format!(
             "https://ws.audioscrobbler.com/2.0/?method=auth.getToken&api_key={}&format=json",
             api_key
@@ -62,8 +64,23 @@ impl LastfmClient {
             token: String,
         }
 
-        let resp: TokenResp = http.get(url).send().await?.json().await?;
-        Ok(resp.token)
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 0..3u32 {
+            let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let resp = http.get(&url).send().await?;
+                resp.json::<TokenResp>().await
+            })
+            .await;
+            match result {
+                Ok(Ok(resp)) => return Ok(resp.token),
+                Ok(Err(e)) => last_err = Some(e.into()),
+                Err(_) => last_err = Some(anyhow::anyhow!("Last.fm auth token request timed out")),
+            }
+            if attempt < 2 {
+                tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Last.fm auth token failed")))
     }
 
     pub async fn get_session(api_key: &str, api_secret: &str, token: &str) -> Result<String> {
@@ -76,32 +93,57 @@ impl LastfmClient {
         params.insert("api_sig", api_sig);
         params.insert("format", "json".to_string());
 
-        let http = Client::new();
-        let resp = http
-            .get("https://ws.audioscrobbler.com/2.0/")
-            .query(&params)
-            .send()
-            .await?;
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
 
-        let text = resp.text().await?;
-
-        if text.contains("\"error\":") {
-            return Err(anyhow::anyhow!("Last.fm API returned error"));
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 0..3u32 {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                http.get("https://ws.audioscrobbler.com/2.0/")
+                    .query(&params)
+                    .send(),
+            )
+            .await;
+            match result {
+                Ok(Ok(resp)) => {
+                    let text = match resp.text().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            last_err = Some(e.into());
+                            if attempt < 2 {
+                                tokio::time::sleep(std::time::Duration::from_secs(
+                                    2u64.pow(attempt),
+                                ))
+                                .await;
+                            }
+                            continue;
+                        }
+                    };
+                    if text.contains("\"error\":") {
+                        return Err(anyhow::anyhow!("Last.fm API returned error"));
+                    }
+                    #[derive(Deserialize)]
+                    struct SessionResp {
+                        session: Session,
+                    }
+                    #[derive(Deserialize)]
+                    struct Session {
+                        key: String,
+                    }
+                    let session_resp: SessionResp = serde_json::from_str(&text)
+                        .with_context(|| "Failed to parse Last.fm session response")?;
+                    return Ok(session_resp.session.key);
+                }
+                Ok(Err(e)) => last_err = Some(e.into()),
+                Err(_) => last_err = Some(anyhow::anyhow!("Last.fm session request timed out")),
+            }
+            if attempt < 2 {
+                tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+            }
         }
-
-        #[derive(Deserialize)]
-        struct SessionResp {
-            session: Session,
-        }
-        #[derive(Deserialize)]
-        struct Session {
-            key: String,
-        }
-
-        let session_resp: SessionResp = serde_json::from_str(&text)
-            .with_context(|| "Failed to parse Last.fm session response")?;
-
-        Ok(session_resp.session.key)
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Last.fm session failed")))
     }
 
     pub async fn authenticate_with_browser(api_key: &str, api_secret: &str) -> Result<String> {
@@ -166,22 +208,8 @@ impl LastfmClient {
         params.insert("api_sig", api_sig);
         params.insert("format", "json".to_string());
 
-        match self
-            .http
-            .post("https://ws.audioscrobbler.com/2.0/")
-            .form(&params)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let text = resp.text().await.unwrap_or_default();
-                if text.contains("\"error\":") {
-                    // Don't log full response - may contain sensitive params
-                    warn!("Last.fm: updateNowPlaying error response received");
-                } else {
-                    info!("Last.fm: updated now playing: {} - {}", artist, track);
-                }
-            }
+        match self.send_with_retry(&params).await {
+            Ok(()) => info!("Last.fm: updated now playing: {} - {}", artist, track),
             Err(e) => warn!("Last.fm: failed to update now playing: {e}"),
         }
     }
@@ -217,22 +245,48 @@ impl LastfmClient {
         params.insert("api_sig", api_sig);
         params.insert("format", "json".to_string());
 
-        match self
-            .http
-            .post("https://ws.audioscrobbler.com/2.0/")
-            .form(&params)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let text = resp.text().await.unwrap_or_default();
-                if text.contains("\"error\":") {
-                    warn!("Last.fm: scrobble error response received");
-                } else {
-                    info!("Last.fm: scrobbled: {} - {}", artist, track);
+        match self.send_with_retry(&params).await {
+            Ok(()) => info!("Last.fm: scrobbled: {} - {}", artist, track),
+            Err(e) => warn!("Last.fm: failed to scrobble: {e}"),
+        }
+    }
+
+    async fn send_with_retry(&self, params: &BTreeMap<&str, String>) -> Result<(), String> {
+        const MAX_RETRIES: u32 = 3;
+        let mut attempt = 0u32;
+        loop {
+            let result = self
+                .http
+                .post("https://ws.audioscrobbler.com/2.0/")
+                .form(params)
+                .send()
+                .await;
+            match result {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        return Err(format!("Last.fm HTTP {}", resp.status().as_u16()));
+                    }
+                    let text = resp.text().await.unwrap_or_default();
+                    if text.contains("\"error\":") {
+                        return Err("Last.fm API error response".to_string());
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= MAX_RETRIES {
+                        return Err(e.to_string());
+                    }
+                    let delay = std::time::Duration::from_secs(2u64.pow(attempt));
+                    tracing::warn!(
+                        "Last.fm: retrying in {:?} (attempt {}/{})",
+                        delay,
+                        attempt,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(delay).await;
                 }
             }
-            Err(e) => warn!("Last.fm: failed to scrobble: {e}"),
         }
     }
 }

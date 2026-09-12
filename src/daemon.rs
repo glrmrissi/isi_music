@@ -131,6 +131,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     let mut progress_ms: u64 = 0;
     let mut track_start_unix: u64 = 0;
     let mut scrobble_sent = false;
+    let mut listened_ms: u64 = 0;
+    let mut last_progress_ms: u64 = 0;
+    let mut last_track_idx: Option<usize> = None;
     let mut last_tick = Instant::now();
     let autoplay_enabled = cfg.autoplay_enabled();
     let mut recent_track_uris: std::collections::VecDeque<String> =
@@ -141,9 +144,14 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
             accept = listener.accept() => {
                 let Ok(stream) = accept else { continue };
                 let (r, mut w) = tokio::io::split(stream);
-                let mut reader = BufReader::new(r);
+                let limited = tokio::io::AsyncReadExt::take(r, 4096);
+                let mut reader = BufReader::new(limited);
                 let mut line = String::new();
-                if reader.read_line(&mut line).await.is_err() { continue }
+                match reader.read_line(&mut line).await {
+                    Ok(_) if line.len() > 4096 => { continue }
+                    Ok(_) => {}
+                    Err(_) => { continue }
+                }
 
                 let cmd = line.trim().to_string();
 
@@ -442,28 +450,39 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                         progress_ms += delta;
                     }
 
+                    let cur_idx = player.current_index();
+                    if cur_idx != last_track_idx || last_progress_ms > progress_ms + 2_000 {
+                        listened_ms = 0;
+                    }
+                    last_track_idx = cur_idx;
+                    let pdelta = progress_ms.saturating_sub(last_progress_ms);
+                    if pdelta > 0 && pdelta <= 2_000 {
+                        listened_ms += pdelta;
+                    }
+                    last_progress_ms = progress_ms;
+
                     if !scrobble_sent
                         && let Some(idx) = player.current_index()
                         && let Some(t) = track_list.get(idx)
-                        && t.duration_ms >= 30_000
+                        && t.duration_ms > 30_000
                     {
                         let threshold = (t.duration_ms / 2).min(4 * 60 * 1000);
-                        if progress_ms >= threshold {
-                            if let Some(lfm) = lastfm.clone() {
-                                let artist = t.artist.clone();
-                                let title  = t.name.clone();
-                                let album  = t.album.clone();
-                                let now = unix_now();
-                                let ts = if track_start_unix > 0 {
-                                    track_start_unix
-                                } else {
-                                    now.saturating_sub(progress_ms / 1000)
-                                };
-                                let dur = t.duration_ms;
-                                tokio::spawn(async move {
-                                    lfm.scrobble(&artist, &title, &album, ts, dur).await;
-                                });
-                            }
+                        if listened_ms >= threshold
+                            && let Some(lfm) = lastfm.clone()
+                        {
+                            let artist = t.artist.clone();
+                            let title  = t.name.clone();
+                            let album  = t.album.clone();
+                            let now = unix_now();
+                            let ts = if track_start_unix > 0 {
+                                track_start_unix
+                            } else {
+                                now.saturating_sub(progress_ms / 1000)
+                            };
+                            let dur = t.duration_ms;
+                            tokio::spawn(async move {
+                                lfm.scrobble(&artist, &title, &album, ts, dur).await;
+                            });
                             scrobble_sent = true;
                         }
                     }
