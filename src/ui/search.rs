@@ -20,6 +20,10 @@ pub struct SearchResults {
     pub artists_total: u32,
     pub albums_total: u32,
     pub playlists_total: u32,
+    pub tracks_api_offset: u32,
+    pub artists_api_offset: u32,
+    pub albums_api_offset: u32,
+    pub playlists_api_offset: u32,
     pub loading: bool,
     pub local_only: bool,
 }
@@ -31,6 +35,10 @@ impl SearchResults {
             tl.select(Some(0));
         }
         Self {
+            tracks_api_offset: r.tracks.len() as u32,
+            artists_api_offset: r.artists.len() as u32,
+            albums_api_offset: r.albums.len() as u32,
+            playlists_api_offset: r.playlists.len() as u32,
             tracks: r.tracks,
             artists: r.artists,
             albums: r.albums,

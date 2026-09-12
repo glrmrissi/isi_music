@@ -1,5 +1,6 @@
 use crate::App;
 use crate::app::FetchResult;
+use crate::app::fetcher::StreamEvent;
 use crate::ui::{ActiveContent, Focus, SearchPanel};
 use std::sync::Arc;
 
@@ -10,74 +11,67 @@ impl App {
                 if sr.loading {
                     return None;
                 }
-                let (selected, len, total, stype) = match sr.panel {
+                let (selected, len, total, api_offset, stype) = match sr.panel {
                     SearchPanel::Tracks => (
                         sr.track_list.selected().unwrap_or(0),
                         sr.tracks.len(),
                         sr.tracks_total,
+                        sr.tracks_api_offset,
                         "track",
                     ),
                     SearchPanel::Artists => (
                         sr.artist_list.selected().unwrap_or(0),
                         sr.artists.len(),
                         sr.artists_total,
+                        sr.artists_api_offset,
                         "artist",
                     ),
                     SearchPanel::Albums => (
                         sr.album_list.selected().unwrap_or(0),
                         sr.albums.len(),
                         sr.albums_total,
+                        sr.albums_api_offset,
                         "album",
                     ),
                     SearchPanel::Playlists => (
                         sr.playlist_list.selected().unwrap_or(0),
                         sr.playlists.len(),
                         sr.playlists_total,
+                        sr.playlists_api_offset,
                         "playlist",
                     ),
                 };
-                if len == 0 || selected < len.saturating_sub(3) || len >= total as usize {
+                if len == 0 || selected < len.saturating_sub(3) || api_offset >= total {
                     return None;
                 }
-                Some((sr.query.clone(), len as u32, stype))
+                Some((sr.query.clone(), api_offset, stype))
             });
 
             if let Some((query, offset, stype)) = should_load {
+                if self.fetcher.stream_rx.is_some() {
+                    return;
+                }
                 if let Some(sr) = self.state.search_results.as_mut() {
                     sr.loading = true;
                 }
-                match self.spotify.search_more(&query, stype, offset).await {
-                    Ok(more) => {
-                        if let Some(sr) = self.state.search_results.as_mut() {
-                            match stype {
-                                "track" => {
-                                    sr.tracks_total = more.tracks_total;
-                                    sr.tracks.extend(more.tracks);
-                                }
-                                "artist" => {
-                                    sr.artists_total = more.artists_total;
-                                    sr.artists.extend(more.artists);
-                                }
-                                "album" => {
-                                    sr.albums_total = more.albums_total;
-                                    sr.albums.extend(more.albums);
-                                }
-                                "playlist" => {
-                                    sr.playlists_total = more.playlists_total;
-                                    sr.playlists.extend(more.playlists);
-                                }
-                                _ => {}
-                            }
-                            sr.loading = false;
+                let spotify = Arc::clone(&self.spotify);
+                let stype_owned = stype.to_string();
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
+                tokio::spawn(async move {
+                    match spotify.search_more(&query, &stype_owned, offset).await {
+                        Ok(results) => {
+                            let _ = tx.send(StreamEvent::SearchMore {
+                                stype: stype_owned,
+                                results: Box::new(results),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(StreamEvent::Error(format!("{e:#}")));
                         }
                     }
-                    Err(e) => {
-                        if let Some(sr) = self.state.search_results.as_mut() {
-                            sr.loading = false;
-                        }
-                        self.state.status_msg = Some(format!("Load more error: {e}"));
-                    }
-                }
+                    let _ = tx.send(StreamEvent::Done);
+                });
             }
             return;
         }
@@ -125,10 +119,6 @@ impl App {
         }
         let selected = self.state.track_list.selected().unwrap_or(0);
 
-        if self.state.tracks_loading {
-            return;
-        }
-
         let display_len = self.state.sorted_track_indices.len();
 
         if display_len == 0 || selected < display_len.saturating_sub(3) {
@@ -136,10 +126,8 @@ impl App {
         }
 
         let track_len = self.state.tracks.len();
-        if (self.state.tracks_offset as usize) >= track_len
-            && track_len < self.state.tracks_total as usize
-        {
-            if self.fetcher.pending_pagination.is_some() {
+        if track_len < self.state.tracks_total as usize {
+            if self.fetcher.pending_pagination.is_some() || self.fetcher.stream_rx.is_some() {
                 return;
             }
 
@@ -205,7 +193,11 @@ impl App {
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
                 }
-                None => (),
+                None => {
+                    self.state.tracks_loading = false;
+                    self.state.status_msg = None;
+                    self.fetcher.pending_pagination = None;
+                }
             }
         }
     }

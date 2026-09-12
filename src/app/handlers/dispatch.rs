@@ -72,8 +72,60 @@ impl App {
                 }
                 self.player_mgr.saved_volume = self.state.playback.volume;
             }
-            A::SeekForward => {}
-            A::SeekBackward => {}
+            A::SeekForward => {
+                let now = Instant::now();
+                let is_held = self
+                    .last_seek_time
+                    .map(|t| t.elapsed() < std::time::Duration::from_millis(300))
+                    .unwrap_or(false);
+                if is_held {
+                    self.seek_hold_count += 1;
+                } else {
+                    self.seek_hold_count = 0;
+                }
+                self.last_seek_time = Some(now);
+
+                let step_ms = if self.seek_hold_count > 4 {
+                    10_000
+                } else {
+                    5_000
+                };
+                let d = self.state.playback.duration_ms;
+                let target = self.state.playback.progress_ms + step_ms;
+                let new_pos = if d > 0 { target.min(d) } else { target };
+                self.state.playback.progress_ms = new_pos;
+                self.player_mgr.progress_at_play_start = new_pos;
+                if self.state.playback.is_playing {
+                    self.player_mgr.playing_started_at = Some(Instant::now());
+                }
+                let _ = self.seek_tx.send(new_pos as u32);
+            }
+            A::SeekBackward => {
+                let now = Instant::now();
+                let is_held = self
+                    .last_seek_time
+                    .map(|t| t.elapsed() < std::time::Duration::from_millis(300))
+                    .unwrap_or(false);
+                if is_held {
+                    self.seek_hold_count += 1;
+                } else {
+                    self.seek_hold_count = 0;
+                }
+                self.last_seek_time = Some(now);
+
+                let step_ms = if self.seek_hold_count > 4 {
+                    10_000
+                } else {
+                    5_000
+                };
+                let new_pos = self.state.playback.progress_ms.saturating_sub(step_ms);
+                self.state.playback.progress_ms = new_pos;
+                self.player_mgr.progress_at_play_start = new_pos;
+                if self.state.playback.is_playing {
+                    self.player_mgr.playing_started_at = Some(Instant::now());
+                }
+                let _ = self.seek_tx.send(new_pos as u32);
+            }
             A::SeekMiddle => {
                 let new_pos = self.state.playback.duration_ms / 2;
                 self.state.playback.progress_ms = new_pos;
@@ -282,11 +334,13 @@ impl App {
                 } else if self.state.fullscreen_player {
                     self.state.fullscreen_player = false;
                 } else if self.state.search_results.is_some() {
+                    self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.search_results = None;
                     self.state.previous_search = None;
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
                 } else if let Some(entry) = self.state.pop_nav() {
+                    self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.active_content = entry.active_content;
                     self.state.focus = entry.focus;
                     self.state.active_playlist_uri = entry.active_playlist_uri;

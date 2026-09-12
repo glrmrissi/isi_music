@@ -39,7 +39,13 @@ impl UiState {
                 "library" => Focus::Library,
                 "playlists" => Focus::Playlists,
                 "tracks" => Focus::Tracks,
-                "search" => Focus::Search,
+                "search" => {
+                    if self.search_results.is_some() {
+                        Focus::Search
+                    } else {
+                        Focus::Library
+                    }
+                }
                 "queue" => Focus::Queue,
                 _ => Focus::Library,
             };

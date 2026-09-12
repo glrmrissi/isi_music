@@ -1,6 +1,5 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
-use std::time::{Duration, Instant};
 
 use crate::App;
 
@@ -298,47 +297,6 @@ impl App {
                 SettingsAction::None => {}
             }
             return Ok(());
-        }
-
-        match code {
-            KeyCode::Left | KeyCode::Right => {
-                let now = Instant::now();
-                let is_held = self
-                    .last_seek_time
-                    .map(|t| t.elapsed() < Duration::from_millis(300))
-                    .unwrap_or(false);
-
-                if is_held {
-                    self.seek_hold_count += 1;
-                } else {
-                    self.seek_hold_count = 0;
-                }
-                self.last_seek_time = Some(now);
-
-                let step_ms = if self.seek_hold_count > 4 {
-                    10_000
-                } else {
-                    5_000
-                };
-
-                let new_pos = match code {
-                    KeyCode::Right => {
-                        let d = self.state.playback.duration_ms;
-                        let target = self.state.playback.progress_ms + step_ms;
-                        if d > 0 { target.min(d) } else { target }
-                    }
-                    _ => self.state.playback.progress_ms.saturating_sub(step_ms),
-                };
-
-                self.state.playback.progress_ms = new_pos;
-                self.player_mgr.progress_at_play_start = new_pos;
-                if self.state.playback.is_playing {
-                    self.player_mgr.playing_started_at = Some(Instant::now());
-                }
-                let _ = self.seek_tx.send(new_pos as u32);
-                return Ok(());
-            }
-            _ => {}
         }
 
         if let Some(action) = self.keybinds.lookup(code, modifiers) {
