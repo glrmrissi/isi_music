@@ -72,6 +72,7 @@ pub struct MusixMatchConfig {
 pub struct AppOptionsConfig {
     pub show_cover_images: Option<bool>,
     pub enable_lyrics: Option<bool>,
+    pub show_lyrics: Option<bool>,
     pub show_visualizer: Option<bool>,
     pub default_layout: Option<String>,
     pub compact_mode_default: Option<bool>,
@@ -93,6 +94,8 @@ pub struct UiConfig {
     pub show_cover_images: Option<bool>,
     #[serde(default)]
     pub enable_lyrics: Option<bool>,
+    #[serde(default)]
+    pub show_lyrics: Option<bool>,
     #[serde(default)]
     pub show_visualizer: Option<bool>,
     #[serde(default)]
@@ -200,6 +203,13 @@ impl AppConfig {
             .unwrap_or(true)
     }
 
+    pub fn show_lyrics(&self) -> bool {
+        self.ui
+            .show_lyrics
+            .or(self.options.show_lyrics)
+            .unwrap_or(false)
+    }
+
     pub fn show_visualizer(&self) -> bool {
         self.ui
             .show_visualizer
@@ -243,6 +253,9 @@ impl AppConfig {
         }
         if self.ui.enable_lyrics.is_none() {
             self.ui.enable_lyrics = self.options.enable_lyrics;
+        }
+        if self.ui.show_lyrics.is_none() {
+            self.ui.show_lyrics = self.options.show_lyrics;
         }
         if self.ui.show_visualizer.is_none() {
             self.ui.show_visualizer = self.options.show_visualizer;
@@ -395,4 +408,32 @@ pub fn waveform_cache_dir() -> Result<PathBuf> {
     let dir = base.join("isi-music").join("waveforms");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn show_lyrics_defaults_to_false() {
+        assert!(!AppConfig::default().show_lyrics());
+    }
+
+    #[test]
+    fn show_lyrics_reads_ui_then_options() {
+        let mut cfg = AppConfig::default();
+        cfg.options.show_lyrics = Some(true);
+        assert!(cfg.show_lyrics());
+
+        cfg.ui.show_lyrics = Some(false);
+        assert!(!cfg.show_lyrics());
+    }
+
+    #[test]
+    fn normalize_copies_options_show_lyrics_into_ui() {
+        let mut cfg = AppConfig::default();
+        cfg.options.show_lyrics = Some(true);
+        cfg.normalize();
+        assert_eq!(cfg.ui.show_lyrics, Some(true));
+    }
 }

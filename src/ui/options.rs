@@ -135,15 +135,15 @@ impl SettingsPanel {
                 let count = {
                     #[cfg(all(feature = "album-art", feature = "palette"))]
                     {
-                        8
+                        9
                     }
                     #[cfg(all(feature = "album-art", not(feature = "palette")))]
                     {
-                        7
+                        8
                     }
                     #[cfg(not(feature = "album-art"))]
                     {
-                        6
+                        7
                     }
                 };
                 #[cfg(windows)]
@@ -532,6 +532,7 @@ impl SettingsPanel {
             #[cfg(feature = "album-art")]
             ("Cover Images", "", state.show_album_art),
             ("Lyrics Fetching", "", self.config.enable_lyrics()),
+            ("Lyrics Display", "", state.show_lyrics),
             ("Visualizer Display", "", state.show_visualizer),
             ("Compact Mode", "", state.compact_mode),
             ("Breadcrumb", "", state.show_breadcrumb),

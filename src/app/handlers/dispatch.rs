@@ -431,6 +431,10 @@ impl App {
             }
             A::ToggleLyrics => {
                 self.state.show_lyrics = !self.state.show_lyrics;
+                if let Some(panel) = &mut self.settings_panel {
+                    panel.config.ui.show_lyrics = Some(self.state.show_lyrics);
+                    panel.save_config();
+                }
                 if self.state.show_lyrics && self.enable_lyrics {
                     self.fetcher.ensure_lyrics(&self.debug_overlay);
                 }
