@@ -157,6 +157,7 @@ impl App {
         let mut state = UiState::new();
         state.show_album_art = cfg.show_cover_images();
         state.show_visualizer = cfg.show_visualizer();
+        state.show_lyrics = cfg.show_lyrics();
         state.show_breadcrumb = cfg.show_breadcrumb();
         state.compact_mode = cfg.compact_mode_default();
         state.reactive_theme_enabled = theme.reactive_theme;
@@ -352,6 +353,7 @@ impl App {
             let cfg = lock_or_recover(&*settings).config.clone();
             state.show_album_art = cfg.show_cover_images();
             state.show_visualizer = cfg.show_visualizer();
+            state.show_lyrics = cfg.show_lyrics();
             state.show_breadcrumb = cfg.show_breadcrumb();
             state.compact_mode = cfg.compact_mode_default();
         }

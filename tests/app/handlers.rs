@@ -124,10 +124,102 @@ async fn dispatch_toggle_lyrics_toggles_and_sets_status() {
     app.dispatch(Action::ToggleLyrics).await;
     assert!(app.state.show_lyrics);
     assert_eq!(app.state.status_msg.as_deref(), Some("Lyrics panel on"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_lyrics),
+        Some(true)
+    );
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.settings.lock().ok())
+            .and_then(|s| s.config.ui.show_lyrics),
+        Some(true)
+    );
 
     app.dispatch(Action::ToggleLyrics).await;
     assert!(!app.state.show_lyrics);
     assert_eq!(app.state.status_msg.as_deref(), Some("Lyrics panel off"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_lyrics),
+        Some(false)
+    );
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.settings.lock().ok())
+            .and_then(|s| s.config.ui.show_lyrics),
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn settings_lyrics_display_toggle_persists() {
+    let mut app = App::new_for_test().await;
+    app.state.show_lyrics = false;
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::General;
+        #[cfg(feature = "album-art")]
+        {
+            panel.selected_item = 2;
+        }
+        #[cfg(not(feature = "album-art"))]
+        {
+            panel.selected_item = 1;
+        }
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert!(app.state.show_lyrics);
+    assert_eq!(app.state.status_msg.as_deref(), Some("Lyrics panel on"));
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.config.ui.show_lyrics),
+        Some(true)
+    );
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.settings.lock().ok())
+            .and_then(|s| s.config.ui.show_lyrics),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn settings_general_renders_lyrics_display() {
+    let mut app = App::new_for_test().await;
+    let panel = app.settings_panel.as_mut().unwrap();
+    panel.visible = true;
+    panel.focused_section = crate::ui::options::SettingsSection::General;
+
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).expect("test terminal");
+    let theme = crate::utils::theme::Theme::default();
+    terminal
+        .draw(|frame| panel.render(frame, &app.state, &theme, true))
+        .expect("render settings");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("Lyrics Display"));
 }
 
 #[tokio::test]

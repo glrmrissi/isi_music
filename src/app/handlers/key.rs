@@ -7,15 +7,15 @@ fn smtc_toggle_index() -> usize {
     let base = {
         #[cfg(all(feature = "album-art", feature = "palette"))]
         {
-            7
+            8
         }
         #[cfg(all(feature = "album-art", not(feature = "palette")))]
         {
-            6
+            7
         }
         #[cfg(not(feature = "album-art"))]
         {
-            5
+            6
         }
     };
     #[cfg(windows)]
@@ -107,6 +107,21 @@ impl App {
                                 });
                             }
                             1 => {
+                                self.state.show_lyrics = !self.state.show_lyrics;
+                                panel.config.ui.show_lyrics = Some(self.state.show_lyrics);
+                                panel.save_config();
+                                if self.state.show_lyrics && self.enable_lyrics {
+                                    self.fetcher.ensure_lyrics(&self.debug_overlay);
+                                }
+                                self.state.status_msg = Some(if !self.state.show_lyrics {
+                                    "Lyrics panel off".to_string()
+                                } else if self.enable_lyrics {
+                                    "Lyrics panel on".to_string()
+                                } else {
+                                    "Lyrics panel on (fetching disabled in Settings)".to_string()
+                                });
+                            }
+                            2 => {
                                 self.state.show_visualizer = !self.state.show_visualizer;
                                 panel.config.ui.show_visualizer = Some(self.state.show_visualizer);
                                 panel.save_config();
@@ -119,7 +134,7 @@ impl App {
                                     "Visualizer disabled".to_string()
                                 });
                             }
-                            2 => {
+                            3 => {
                                 self.state.compact_mode = !self.state.compact_mode;
                                 panel.config.ui.compact_mode_default =
                                     Some(self.state.compact_mode);
@@ -130,7 +145,7 @@ impl App {
                                     "Compact mode off".to_string()
                                 });
                             }
-                            3 => {
+                            4 => {
                                 self.state.show_breadcrumb = !self.state.show_breadcrumb;
                                 panel.config.ui.show_breadcrumb = Some(self.state.show_breadcrumb);
                                 panel.save_config();
@@ -140,10 +155,10 @@ impl App {
                                     "Breadcrumb off".to_string()
                                 });
                             }
-                            4 => {
+                            5 => {
                                 self.toggle_lastfm_scrobbling().await;
                             }
-                            5 => {
+                            6 => {
                                 let v = !panel.config.autoplay_enabled();
                                 panel.config.ui.autoplay = Some(v);
                                 self.player_mgr.autoplay_enabled = v;
@@ -155,7 +170,7 @@ impl App {
                                 });
                             }
                             #[cfg(all(feature = "album-art", feature = "palette"))]
-                            6 => {
+                            7 => {
                                 let enabled = !self.theme_mgr.reactive_theme_enabled();
                                 if let Err(e) = self.theme_mgr.toggle_reactive(enabled) {
                                     self.state.status_msg =
