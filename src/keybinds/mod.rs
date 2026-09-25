@@ -271,6 +271,10 @@ enum KeySpec {
 }
 
 fn name_to_action(name: &str) -> Option<Action> {
+    let name = match name {
+        "get_recommendations" => "recommendations",
+        other => other,
+    };
     Action::all()
         .iter()
         .find(|(n, _, _)| *n == name)
