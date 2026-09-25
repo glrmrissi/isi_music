@@ -11,7 +11,8 @@ use crate::config::{AppConfig, LastfmConfig};
 use crate::utils::theme::Theme;
 
 use helpers::{confirm_overwrite, detect_music_dir, header, optional_input, theme as dialog_theme};
-use layouts::{apply_layout_to_theme, pick_layout};
+pub use layouts::apply_layout_to_theme;
+use layouts::pick_layout;
 use presets::PRESETS;
 use spotify::configure_spotify;
 

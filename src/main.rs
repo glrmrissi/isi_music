@@ -176,7 +176,7 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         }
         cfg.spotify.client_id = Some(trimmed);
         cfg.save()?;
-        let saved_path = crate::config::config_path()
+        let saved_path = config::config_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "config.toml".to_string());
         println!("  {GREEN}[OK]{RESET}  Saved to {saved_path}\n");
@@ -208,10 +208,10 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
         if has_web_api_client {
             if let Some(cid) = cfg.get_client_id() {
                 println!("  Starting authorization (2 steps: Web API + streaming)\n");
-                match crate::spotify::auth::SpotifyAuth::authenticate_both(&cid).await {
+                match spotify::auth::SpotifyAuth::authenticate_both(&cid).await {
                     Ok((web_api_refresh, streaming_refresh)) => {
-                        crate::config::save_refresh_token(&web_api_refresh);
-                        crate::config::save_streaming_refresh_token(&streaming_refresh);
+                        config::save_refresh_token(&web_api_refresh);
+                        config::save_streaming_refresh_token(&streaming_refresh);
                         println!("\n  {GREEN}[OK]{RESET}  Web API + Streaming authenticated.\n");
                     }
                     Err(e) => {
@@ -224,14 +224,13 @@ async fn run_spotify_setup(cfg: &mut config::AppConfig) -> Result<()> {
                 }
             }
         } else {
-            let result = crate::spotify::auth::SpotifyAuth::authenticate_with_client_id(
-                config::OFFICIAL_CLIENT_ID,
-            )
-            .await;
+            let result =
+                spotify::auth::SpotifyAuth::authenticate_with_client_id(config::OFFICIAL_CLIENT_ID)
+                    .await;
 
             match result {
                 Ok((_access_token, refresh_token, _expires_in)) => {
-                    crate::config::save_streaming_refresh_token(&refresh_token);
+                    config::save_streaming_refresh_token(&refresh_token);
                     println!("  {GREEN}[OK]{RESET}  Streaming authenticated.\n");
                 }
                 Err(e) => {
@@ -270,10 +269,10 @@ TUI KEYBINDINGS"
         }
     }
 
-    let config_path_str = crate::config::config_path()
+    let config_path_str = config::config_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "config.toml".to_string());
-    let log_path_str = crate::config::log_path()
+    let log_path_str = config::log_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "isi-music.log".to_string());
 
@@ -578,9 +577,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let config_missing = crate::config::config_path()
-        .map(|p| !p.exists())
-        .unwrap_or(true);
+    let config_missing = config::config_path().map(|p| !p.exists()).unwrap_or(true);
 
     let mut first_run = false;
     if config_missing {
@@ -647,7 +644,10 @@ fn main() -> Result<()> {
                 )
                 .init();
 
-            let theme = utils::theme::Theme::load();
+            let mut theme = utils::theme::Theme::load();
+            if let Some(ref layout_name) = cfg.ui.default_layout {
+                utils::wizard::apply_layout_to_theme(&mut theme, layout_name);
+            }
             let theme_rx = if cfg.hot_reload() {
                 utils::theme::Theme::watch()?
             } else {
@@ -665,7 +665,7 @@ fn main() -> Result<()> {
             enable_raw_mode()?;
             let mut stdout = io::stdout();
             execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-            let backend = crate::backend::StableCrosstermBackend::new(stdout);
+            let backend = backend::StableCrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
             terminal.clear()?;
 
