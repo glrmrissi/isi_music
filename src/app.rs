@@ -66,6 +66,9 @@ pub struct App {
     #[cfg(target_os = "linux")]
     trim_counter: u64,
     audio: crate::config::AudioConfig,
+    cache_manager: crate::utils::cache::CacheManager,
+    cache_cleanup_interval_hours: u32,
+    last_cache_cleanup: Instant,
     needs_redraw: bool,
     force_clear: bool,
     last_click_time: Option<Instant>,
@@ -272,14 +275,15 @@ impl App {
             None
         };
 
-        let cache_manager = crate::utils::cache::CacheManager::new()?;
-        {
+        let cache_manager = crate::utils::cache::CacheManager::new(&cfg)?;
+        if cfg.cache.auto_cleanup.unwrap_or(true) {
             let cm = cache_manager.clone();
             tokio::spawn(async move {
                 let _ = cm.cleanup_expired().await;
             });
         }
-        let settings_panel = crate::ui::SettingsPanel::new(cache_manager, Arc::clone(&settings));
+        let settings_panel =
+            crate::ui::SettingsPanel::new(cache_manager.clone(), Arc::clone(&settings));
 
         state.lastfm_connected = lastfm.is_some();
 
@@ -332,6 +336,9 @@ impl App {
             #[cfg(target_os = "linux")]
             trim_counter: 0,
             audio: cfg.audio.clone(),
+            cache_manager,
+            cache_cleanup_interval_hours: cfg.cache.cleanup_interval_hours.unwrap_or(24),
+            last_cache_cleanup: Instant::now(),
             needs_redraw: true,
             force_clear: false,
             last_click_time: None,
@@ -346,7 +353,9 @@ impl App {
             .await
             .expect("test client init");
         let debug_overlay = Arc::new(DebugOverlay::new());
-        let cache_manager = crate::utils::cache::CacheManager::new().expect("test cache init");
+        let cache_manager =
+            crate::utils::cache::CacheManager::new(&crate::config::AppConfig::default())
+                .expect("test cache init");
         let settings = Arc::new(Mutex::new(crate::settings::Settings::default()));
         let mut state = crate::ui::UiState::new();
         {
@@ -400,6 +409,12 @@ impl App {
                 Arc::clone(&settings),
             )),
             audio: crate::config::AudioConfig::default(),
+            cache_manager: crate::utils::cache::CacheManager::new(
+                &crate::config::AppConfig::default(),
+            )
+            .expect("test cache init"),
+            cache_cleanup_interval_hours: 24,
+            last_cache_cleanup: Instant::now(),
             needs_redraw: true,
             force_clear: false,
             last_click_time: None,
@@ -502,6 +517,16 @@ impl App {
                 if reconnect {
                     self.player_mgr.session_reconnecting = true;
                 }
+            }
+
+            let cleanup_interval =
+                Duration::from_secs(self.cache_cleanup_interval_hours as u64 * 3600);
+            if now.duration_since(self.last_cache_cleanup) >= cleanup_interval {
+                self.last_cache_cleanup = now;
+                let cm = self.cache_manager.clone();
+                tokio::spawn(async move {
+                    let _ = cm.cleanup_expired().await;
+                });
             }
 
             if let Some(player) = &self.player_mgr.player

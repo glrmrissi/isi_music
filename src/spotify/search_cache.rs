@@ -18,10 +18,10 @@ pub(super) struct SearchCache {
 }
 
 impl SearchCache {
-    pub(super) fn new(ttl_seconds: u64) -> anyhow::Result<Self> {
+    pub(super) fn new(ttl_seconds: u64, enabled: bool) -> anyhow::Result<Self> {
         let ttl = Duration::from_secs(ttl_seconds);
 
-        let conn = if cfg!(test) {
+        let conn = if cfg!(test) || !enabled {
             rusqlite::Connection::open_in_memory()
         } else {
             let db_path = crate::config::get_local_db_path();

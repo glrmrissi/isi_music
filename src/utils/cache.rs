@@ -54,17 +54,36 @@ impl Default for CacheOptions {
 }
 
 impl CacheManager {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(cfg: &config::AppConfig) -> anyhow::Result<Self> {
         let db_path = if cfg!(test) {
             ":memory:".to_string()
         } else {
             config::get_local_db_path()
         };
-        Self::new_with_path(&db_path)
+        Self::new_with_path_and_config(&db_path, cfg)
     }
 
+    #[allow(dead_code)]
     pub fn new_with_path(db_path: &str) -> anyhow::Result<Self> {
         let options = CacheOptions::default();
+        Self::new_with_options(db_path, options)
+    }
+
+    pub fn new_with_path_and_config(
+        db_path: &str,
+        cfg: &config::AppConfig,
+    ) -> anyhow::Result<Self> {
+        let options = CacheOptions {
+            enabled: cfg.cache.enabled.unwrap_or(true),
+            auto_cleanup: cfg.cache.auto_cleanup.unwrap_or(true),
+            max_size_mb: cfg.cache.max_size_mb.unwrap_or(500),
+            cleanup_interval_hours: cfg.cache.cleanup_interval_hours.unwrap_or(24),
+            keep_days: cfg.cache.keep_days.unwrap_or(60),
+        };
+        Self::new_with_options(db_path, options)
+    }
+
+    fn new_with_options(db_path: &str, options: CacheOptions) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open(db_path)
             .with_context(|| format!("failed to open cache db at {}", db_path))?;
         conn.execute_batch(
@@ -185,6 +204,9 @@ impl CacheManager {
     }
 
     pub async fn cleanup_expired(&self) -> Result<()> {
+        if !self.options.enabled {
+            return Ok(());
+        }
         let keep_seconds = self.options.keep_days * 24 * 3600;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

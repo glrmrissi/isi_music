@@ -8,6 +8,7 @@ pub const CUSTOM_REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
+    #[serde(default)]
     pub spotify: SpotifyConfig,
     #[serde(default)]
     pub lastfm: LastfmConfig,

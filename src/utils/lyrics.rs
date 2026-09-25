@@ -43,8 +43,12 @@ pub struct LyricsCache {
 }
 
 impl LyricsCache {
-    pub fn open(db_path: &PathBuf) -> Result<Self> {
-        let conn = Connection::open(db_path)?;
+    pub fn open(db_path: &PathBuf, enabled: bool) -> Result<Self> {
+        let conn = if enabled {
+            Connection::open(db_path)?
+        } else {
+            Connection::open_in_memory()?
+        };
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -704,10 +708,12 @@ impl LyricsHandle {
         http: Arc<reqwest::Client>,
         debug_overlay: Arc<DebugOverlay>,
     ) -> Result<Self> {
-        let cache = LyricsCache::open(&db_path)?;
-        let musixmatch_api_key = crate::config::AppConfig::load()
-            .ok()
-            .and_then(|cfg| cfg.get_musixmatch_api_key());
+        let cfg = crate::config::AppConfig::load().ok();
+        let cache = LyricsCache::open(
+            &db_path,
+            cfg.as_ref().and_then(|c| c.cache.enabled).unwrap_or(true),
+        )?;
+        let musixmatch_api_key = cfg.and_then(|cfg| cfg.get_musixmatch_api_key());
 
         if musixmatch_api_key.is_none() {
             debug_overlay.log(
