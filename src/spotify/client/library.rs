@@ -644,7 +644,11 @@ impl SpotifyClient {
             .http
             .get("https://api.spotify.com/v1/me/shows")
             .bearer_auth(&token)
-            .query(&[("limit", "20"), ("offset", &offset_str)])
+            .query(&[
+                ("limit", "20"),
+                ("offset", &offset_str),
+                ("market", "from_token"),
+            ])
             .send()
             .await?;
 
@@ -852,7 +856,11 @@ impl SpotifyClient {
             .http
             .get("https://api.spotify.com/v1/me/episodes")
             .bearer_auth(&token)
-            .query(&[("limit", "20"), ("offset", &offset_str)])
+            .query(&[
+                ("limit", "20"),
+                ("offset", &offset_str),
+                ("market", "from_token"),
+            ])
             .send()
             .await?;
 
