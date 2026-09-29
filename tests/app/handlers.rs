@@ -1072,3 +1072,17 @@ async fn playlist_item_parser_keeps_episodes() {
         .expect("legacy track field must still parse");
     assert_eq!(track.name, "Legacy");
 }
+
+#[tokio::test]
+async fn on_track_started_skips_lyrics_fetch_for_episodes() {
+    let mut app = App::new_for_test().await;
+    app.enable_lyrics = true;
+    app.current_track_uri = "spotify:episode:ep1".to_string();
+    app.state.playback.title = "Episode 1".to_string();
+    app.state.playback.artist = "Podcast".to_string();
+
+    app.on_track_started();
+
+    assert!(!app.state.playback.lyrics_loading);
+    assert!(app.fetcher.lyrics.is_none());
+}

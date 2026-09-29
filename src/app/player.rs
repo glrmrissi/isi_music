@@ -66,7 +66,11 @@ impl App {
         let artist = self.state.playback.artist.clone();
         let uri = self.current_track_uri.clone();
 
-        if !title.is_empty() && !artist.is_empty() && self.enable_lyrics {
+        if !title.is_empty()
+            && !artist.is_empty()
+            && self.enable_lyrics
+            && !uri.starts_with("spotify:episode:")
+        {
             self.fetcher.ensure_lyrics(&self.debug_overlay);
             self.state.playback.lyrics_loading = true;
             if let Some(lyrics) = &self.fetcher.lyrics {

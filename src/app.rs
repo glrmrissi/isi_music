@@ -558,19 +558,20 @@ impl App {
                             }
                         }
 
-                        if self.enable_lyrics {
+                        let is_episode = self.current_track_uri.starts_with("spotify:episode:");
+                        if self.enable_lyrics && !is_episode {
                             self.fetcher.ensure_lyrics(&self.debug_overlay);
-                        }
-                        if let Some(lyrics) = &self.fetcher.lyrics {
-                            lyrics.request(
-                                &self.state.playback.title,
-                                &self.state.playback.artist,
-                                &self.current_track_uri,
-                            );
+                            if let Some(lyrics) = &self.fetcher.lyrics {
+                                lyrics.request(
+                                    &self.state.playback.title,
+                                    &self.state.playback.artist,
+                                    &self.current_track_uri,
+                                );
+                            }
                         }
 
                         self.state.playback.lyrics = None;
-                        self.state.playback.lyrics_loading = true;
+                        self.state.playback.lyrics_loading = !is_episode && self.enable_lyrics;
                     }
                 } else {
                     self.state.playback.volume = pb.volume;
