@@ -5,7 +5,9 @@ mod search_cache;
 mod token;
 mod types;
 
-pub use client::{SpotifyClient, save_track_http, unlike_track_http};
+#[cfg(test)]
+pub(crate) use client::playlist_item_to_track;
+pub use client::{SpotifyClient, remove_uri_http, save_uri_http};
 pub use types::{
     AlbumSummary, ArtistSummary, Device, FullSearchResults, PlaylistSummary, ShowSummary,
     TrackSummary,

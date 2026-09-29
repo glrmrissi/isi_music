@@ -17,6 +17,9 @@ mod playlists;
 mod recommendations;
 mod search;
 
+#[cfg(test)]
+pub(crate) use playlists::playlist_item_to_track;
+
 /// Build a reqwest client with a sane timeout so network drops don't hang the TUI.
 pub(super) fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -177,7 +180,7 @@ impl SpotifyClient {
         })
     }
 
-    pub async fn check_track_saved(&self, track_id: &str) -> Result<bool> {
+    pub async fn check_uri_saved(&self, uri: &str) -> Result<bool> {
         spotify_rate_limit().await;
         let token = self
             .get_access_token()
@@ -187,7 +190,7 @@ impl SpotifyClient {
             &token,
             self.http
                 .get("https://api.spotify.com/v1/me/library/contains")
-                .query(&[("uris", &format!("spotify:track:{}", track_id))]),
+                .query(&[("uris", uri)]),
         )
         .await?;
         let status = resp.status();
@@ -201,10 +204,9 @@ impl SpotifyClient {
     }
 }
 
-pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
+pub async fn remove_uri_http(http: &reqwest::Client, token: &str, uri: &str) -> Result<()> {
     spotify_rate_limit().await;
 
-    let uri = format!("spotify:track:{}", track_id);
     let resp = send_with_retry(
         token,
         http.delete("https://api.spotify.com/v1/me/library")
@@ -223,10 +225,9 @@ pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &s
     }
 }
 
-pub async fn save_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
+pub async fn save_uri_http(http: &reqwest::Client, token: &str, uri: &str) -> Result<()> {
     spotify_rate_limit().await;
 
-    let uri = format!("spotify:track:{}", track_id);
     let resp = send_with_retry(
         token,
         http.put("https://api.spotify.com/v1/me/library")
