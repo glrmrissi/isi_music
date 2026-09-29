@@ -1,0 +1,31 @@
+# Maintainer: Guilherme Rissi <guilhermerissi04112006@gmail.com>
+pkgname=isi-music-bin
+pkgver=2.0.5
+pkgrel=1
+pkgdesc="Terminal music player for Spotify streaming and local file playback"
+arch=('x86_64' 'aarch64')
+url="https://github.com/glrmrissi/isi_music"
+license=('MIT')
+provides=('isi-music')
+conflicts=('isi-music')
+depends=('alsa-lib' 'libpulse' 'dbus' 'hicolor-icon-theme' 'glibc' 'gcc-libs')
+options=('!strip')
+
+source=("isi-music.desktop::https://raw.githubusercontent.com/glrmrissi/isi_music/v${pkgver}/assets/isi-music.desktop"
+        "isi-music.png::https://raw.githubusercontent.com/glrmrissi/isi_music/v${pkgver}/assets/icons/hicolor/256x256/apps/isi-music.png"
+        "LICENSE::https://raw.githubusercontent.com/glrmrissi/isi_music/v${pkgver}/LICENSE")
+source_x86_64=("isi-music-linux-x86_64.tar.gz::https://github.com/glrmrissi/isi_music/releases/download/v${pkgver}/isi-music-linux-x86_64.tar.gz")
+source_aarch64=("isi-music-linux-arm64.tar.gz::https://github.com/glrmrissi/isi_music/releases/download/v${pkgver}/isi-music-linux-arm64.tar.gz")
+
+sha256sums=('8cb92966f3d7c3bddb5daef4672d06e6d7ac0c74b972f3a7a9cad26ab80461c0'
+            '2920434215df05ad30c3375cf45d1fd14485ac3f366cf04c826b34f10edbc129'
+            'cb09d994546e8d025928dd9e69b93be30446d7c26e0d6ac00abe9c2d965d004b')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    install -Dm755 -t "${pkgdir}/usr/bin/" isi-music
+    install -Dm644 -t "${pkgdir}/usr/share/applications/" isi-music.desktop
+    install -Dm644 -t "${pkgdir}/usr/share/icons/hicolor/256x256/apps/" isi-music.png
+    install -Dm644 -t "${pkgdir}/usr/share/licenses/${pkgname}/" LICENSE
+}
