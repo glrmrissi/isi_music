@@ -190,6 +190,7 @@ impl App {
                         .iter()
                         .find(|s| s.id == show_id)
                         .map(|s| s.name.clone())
+                        .or_else(|| self.state.tracks.first().map(|t| t.artist.clone()))
                         .unwrap_or_default();
                     tokio::spawn(async move {
                         let result = spotify
