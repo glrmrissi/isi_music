@@ -28,19 +28,25 @@ impl App {
                 self.state.status_msg = Some("Like failed: no token".to_string());
                 return;
             };
-            let track_id = self
-                .current_track_uri
-                .rsplit(':')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            if track_id.is_empty() {
-                self.state.status_msg = Some("Like failed: empty track ID".to_string());
+            let uri = self.current_track_uri.clone();
+            if !uri.starts_with("spotify:") {
+                self.state.status_msg = Some("Like failed: invalid URI".to_string());
                 return;
             }
-            match crate::spotify::save_track_http(&self.spotify.http, &token, &track_id).await {
+            let is_episode = uri.starts_with("spotify:episode:");
+            match crate::spotify::save_uri_http(&self.spotify.http, &token, &uri).await {
                 Ok(_) => {
-                    self.state.status_msg = Some("Liked".to_string());
+                    self.state.status_msg = Some(
+                        if is_episode {
+                            "Saved to Your Episodes"
+                        } else {
+                            "Liked"
+                        }
+                        .to_string(),
+                    );
+                    if is_episode {
+                        return;
+                    }
                     let new_track = crate::spotify::TrackSummary {
                         name: self.state.playback.title.clone(),
                         artist: self.state.playback.artist.clone(),
@@ -78,6 +84,11 @@ impl App {
             .current_track_uri
             .strip_prefix("spotify:track:")
             .map(|id| format!("https://open.spotify.com/track/{id}"))
+            .or_else(|| {
+                self.current_track_uri
+                    .strip_prefix("spotify:episode:")
+                    .map(|id| format!("https://open.spotify.com/episode/{id}"))
+            })
             .unwrap_or_default();
         if url.is_empty() {
             self.state.status_msg = Some("No track playing".to_string());
@@ -217,37 +228,30 @@ impl App {
                 self.state.status_msg = Some("No track playing".to_string());
             } else {
                 // Not a playlist — check if track is liked
-                let track_id = self
-                    .current_track_uri
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                if track_id.is_empty() {
+                let uri = self.current_track_uri.clone();
+                if !uri.starts_with("spotify:") {
                     self.state.status_msg = Some("Invalid track".to_string());
                     return;
                 }
 
                 self.state.status_msg = Some("Checking...".to_string());
-                match self.spotify.check_track_saved(&track_id).await {
+                match self.spotify.check_uri_saved(&uri).await {
                     Ok(true) => {
                         let Some(token) = self.spotify.get_access_token().await else {
                             self.state.status_msg = Some("Unlike failed: no token".to_string());
                             return;
                         };
-                        match crate::spotify::unlike_track_http(
-                            &self.spotify.http,
-                            &token,
-                            &track_id,
-                        )
-                        .await
+                        match crate::spotify::remove_uri_http(&self.spotify.http, &token, &uri)
+                            .await
                         {
                             Ok(_) => {
                                 self.state.status_msg = Some("Unliked".to_string());
                                 let uri = self.current_track_uri.clone();
-                                if self.state.active_playlist_id.as_deref() == Some("liked_songs")
-                                    && let Some(pos) =
-                                        self.state.tracks.iter().position(|t| t.uri == uri)
+                                if matches!(
+                                    self.state.active_playlist_id.as_deref(),
+                                    Some("liked_songs") | Some("saved_episodes")
+                                ) && let Some(pos) =
+                                    self.state.tracks.iter().position(|t| t.uri == uri)
                                 {
                                     self.state.tracks.remove(pos);
                                     self.state.tracks_offset =

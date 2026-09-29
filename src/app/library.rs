@@ -113,7 +113,7 @@ impl App {
             self.load_local_files().await;
             return false;
         }
-        if idx != 4 && !self.spotify.authenticated {
+        if idx != 5 && !self.spotify.authenticated {
             self.state.status_msg = Some(
                 "Spotify not connected - only Local Files available. Run: isi-music setup-spotify"
                     .to_string(),
@@ -164,9 +164,34 @@ impl App {
                 });
             }
             3 => {
-                self.state.status_msg = Some("Podcasts: coming soon".to_string());
+                self.state.push_nav();
+                self.fetcher.cancel_all_pending(&mut self.state);
+                self.state.status_msg = Some("Loading saved shows…".to_string());
+                self.state.loading = true;
+                self.state.active_playlist_uri = None;
+                self.state.active_playlist_id = None;
+                let spotify = Arc::clone(&self.spotify);
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
+                tokio::spawn(async move {
+                    let _ = spotify.stream_saved_shows(tx).await;
+                });
             }
             4 => {
+                self.state.push_nav();
+                self.fetcher.cancel_all_pending(&mut self.state);
+                self.state.status_msg = Some("Loading saved episodes…".to_string());
+                self.state.loading = true;
+                self.state.active_playlist_uri = Some("saved_episodes".to_string());
+                self.state.active_playlist_id = Some("saved_episodes".to_string());
+                let spotify = Arc::clone(&self.spotify);
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
+                tokio::spawn(async move {
+                    let _ = spotify.stream_saved_episodes(tx).await;
+                });
+            }
+            5 => {
                 self.load_local_files().await;
             }
             _ => {}

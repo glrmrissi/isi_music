@@ -396,6 +396,45 @@ impl SpotifyClient {
         Ok(all_artists)
     }
 
+    pub async fn fetch_artist_name(&self, artist_id: &str) -> Option<String> {
+        if !self.authenticated {
+            return None;
+        }
+        let token = self.get_access_token().await?;
+        super::spotify_rate_limit().await;
+        let json: serde_json::Value = self
+            .http
+            .get(format!("https://api.spotify.com/v1/artists/{artist_id}"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        json["name"].as_str().map(|s| s.to_string())
+    }
+
+    pub async fn fetch_show_name(&self, show_id: &str) -> Option<String> {
+        if !self.authenticated {
+            return None;
+        }
+        let token = self.get_access_token().await?;
+        super::spotify_rate_limit().await;
+        let json: serde_json::Value = self
+            .http
+            .get(format!("https://api.spotify.com/v1/shows/{show_id}"))
+            .bearer_auth(&token)
+            .query(&[("market", "from_token")])
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        json["name"].as_str().map(|s| s.to_string())
+    }
+
     pub async fn fetch_artist_tracks(
         &self,
         artist_name: &str,
@@ -496,6 +535,100 @@ impl SpotifyClient {
         Ok((tracks, total))
     }
 
+    pub async fn stream_saved_shows(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let (first_shows, total) = self.fetch_saved_shows(0).await?;
+        if tx
+            .send(crate::app::fetcher::StreamEvent::ShowsInitial {
+                shows: first_shows,
+                total,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut offset = 20;
+        while offset < total {
+            super::spotify_rate_limit().await;
+            match self.fetch_saved_shows(offset).await {
+                Ok((batch, new_total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    offset += batch.len() as u32;
+                    if tx
+                        .send(crate::app::fetcher::StreamEvent::ShowsBatch {
+                            shows: batch,
+                            total: new_total,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("stream_saved_shows: failed at offset {offset}: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
+    pub async fn stream_show_episodes(
+        &self,
+        show_id: &str,
+        show_name: &str,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let (first_tracks, total) = self.fetch_show_episodes(show_id, show_name, 0).await?;
+        if tx
+            .send(crate::app::fetcher::StreamEvent::ShowTracksInitial {
+                show_id: show_id.to_string(),
+                tracks: first_tracks,
+                total,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut offset = 50;
+        while offset < total {
+            super::spotify_rate_limit().await;
+            match self.fetch_show_episodes(show_id, show_name, offset).await {
+                Ok((batch, new_total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    offset += batch.len() as u32;
+                    if tx
+                        .send(crate::app::fetcher::StreamEvent::ShowTracksBatch {
+                            show_id: show_id.to_string(),
+                            tracks: batch,
+                            total: new_total,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("stream_show_episodes: failed at offset {offset}: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
     pub async fn fetch_saved_shows(&self, offset: u32) -> Result<(Vec<ShowSummary>, u32)> {
         if !self.authenticated {
             return Ok((Vec::new(), 0));
@@ -567,6 +700,7 @@ impl SpotifyClient {
     pub async fn fetch_show_episodes(
         &self,
         show_id: &str,
+        show_name: &str,
         offset: u32,
     ) -> Result<(Vec<TrackSummary>, u32)> {
         if !self.authenticated {
@@ -629,14 +763,16 @@ impl SpotifyClient {
         if let Some(items) = json["items"].as_array() {
             for item in items {
                 let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                let description = item["description"].as_str().unwrap_or("").to_string();
-                let artist = {
+                let artist = if show_name.is_empty() {
+                    let description = item["description"].as_str().unwrap_or("");
                     let chars: Vec<char> = description.chars().collect();
                     if chars.len() > 60 {
                         format!("{}…", chars[..60].iter().collect::<String>())
                     } else {
-                        description
+                        description.to_string()
                     }
+                } else {
+                    show_name.to_string()
                 };
                 let duration_ms = item["duration_ms"].as_u64().unwrap_or(0);
                 let uri = item["uri"].as_str().unwrap_or("").to_string();
@@ -649,6 +785,119 @@ impl SpotifyClient {
                     uri,
                     cover_path,
                     added_at: None,
+                });
+            }
+        }
+
+        Ok((tracks, total))
+    }
+
+    pub async fn stream_saved_episodes(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
+    ) -> Result<()> {
+        let (first_tracks, total) = self.fetch_saved_episodes(0).await?;
+        if tx
+            .send(crate::app::fetcher::StreamEvent::EpisodesInitial {
+                tracks: first_tracks,
+                total,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut offset = 20;
+        while offset < total {
+            super::spotify_rate_limit().await;
+            match self.fetch_saved_episodes(offset).await {
+                Ok((batch, new_total)) => {
+                    if batch.is_empty() {
+                        break;
+                    }
+                    offset += batch.len() as u32;
+                    if tx
+                        .send(crate::app::fetcher::StreamEvent::EpisodesBatch {
+                            tracks: batch,
+                            total: new_total,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    warn!("stream_saved_episodes: failed at offset {offset}: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
+        Ok(())
+    }
+
+    pub async fn fetch_saved_episodes(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
+        if !self.authenticated {
+            return Ok((Vec::new(), 0));
+        }
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token available"))?;
+
+        let offset_str = offset.to_string();
+        super::spotify_rate_limit().await;
+        let response = self
+            .http
+            .get("https://api.spotify.com/v1/me/episodes")
+            .bearer_auth(&token)
+            .query(&[("limit", "20"), ("offset", &offset_str)])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+
+            if status.as_u16() == 401 {
+                warn!("Got 401 Unauthorized - token may have expired");
+                return Err(anyhow::anyhow!("SPOTIFY_UNAUTHORIZED"));
+            }
+
+            if status.as_u16() == 429 {
+                warn!("Rate limited on Spotify API");
+                return Err(anyhow::anyhow!("SPOTIFY_RATE_LIMITED"));
+            }
+
+            if status.as_u16() == 403 {
+                warn!("Got 403 Forbidden. Body: {body}");
+                return Err(anyhow::anyhow!("SPOTIFY_FORBIDDEN: {body}"));
+            }
+            return Err(anyhow::anyhow!(
+                "Spotify API error: status {} body: {}",
+                status,
+                body
+            ));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        let items_len = json["items"].as_array().map_or(0, |a| a.len());
+        let mut tracks = Vec::with_capacity(items_len);
+
+        if let Some(items) = json["items"].as_array() {
+            for item in items {
+                let ep = &item["episode"];
+                let show_name = ep["show"]["name"].as_str().unwrap_or("").to_string();
+                tracks.push(TrackSummary {
+                    name: ep["name"].as_str().unwrap_or("Unknown").to_string(),
+                    artist: show_name.clone(),
+                    album: show_name,
+                    duration_ms: ep["duration_ms"].as_u64().unwrap_or(0),
+                    uri: ep["uri"].as_str().unwrap_or("").to_string(),
+                    cover_path: None,
+                    added_at: item["added_at"].as_str().map(|s| s.to_string()),
                 });
             }
         }

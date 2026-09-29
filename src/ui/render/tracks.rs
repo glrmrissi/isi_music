@@ -85,10 +85,10 @@ impl Ui {
 
         let focused = state.focus == Focus::Tracks;
 
-        let title = if state.active_playlist_uri.as_deref() == Some("liked_songs") {
-            "Liked Songs"
-        } else {
-            "Tracks"
+        let title = match state.active_playlist_uri.as_deref() {
+            Some("liked_songs") => "Liked Songs",
+            Some("saved_episodes") => "Your Episodes",
+            _ => "Tracks",
         };
 
         let sort_label = format!("[Sort: {}]", state.track_sort_by.label());

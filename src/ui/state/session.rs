@@ -9,6 +9,9 @@ impl UiState {
             if uri == "liked_songs" {
                 return "Liked Songs".to_string();
             }
+            if uri == "saved_episodes" {
+                return "Your Episodes".to_string();
+            }
             if uri.starts_with("artist:") {
                 return self
                     .active_artist_name

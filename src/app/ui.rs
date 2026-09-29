@@ -171,6 +171,24 @@ impl App {
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
                 }
+                Some(id) if id.starts_with("show:") => {
+                    let show_id = id["show:".len()..].to_string();
+                    let show_name = self
+                        .state
+                        .shows
+                        .iter()
+                        .find(|s| s.id == show_id)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default();
+                    tokio::spawn(async move {
+                        let result = spotify
+                            .fetch_show_episodes(&show_id, &show_name, offset)
+                            .await
+                            .map(|(t, total)| (t, total, None, None))
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(FetchResult::MoreTracks(result));
+                    });
+                }
                 Some(id) if id.starts_with("artist:") => {
                     let name = self.state.active_artist_name.clone().unwrap_or_default();
                     tokio::spawn(async move {

@@ -54,6 +54,32 @@ pub enum StreamEvent {
     ArtistsInitial {
         artists: Vec<crate::spotify::ArtistSummary>,
     },
+    ShowsInitial {
+        shows: Vec<crate::spotify::ShowSummary>,
+        total: u32,
+    },
+    ShowsBatch {
+        shows: Vec<crate::spotify::ShowSummary>,
+        total: u32,
+    },
+    ShowTracksInitial {
+        show_id: String,
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
+    ShowTracksBatch {
+        show_id: String,
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
+    EpisodesInitial {
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
+    EpisodesBatch {
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
     AlbumTracksInitial {
         album_id: String,
         tracks: Vec<crate::spotify::TrackSummary>,
@@ -410,6 +436,182 @@ impl FetchCoordinator {
                             state.status_msg = None;
                             state.focus = crate::ui::Focus::Tracks;
                             needs_redraw = true;
+                        }
+                        StreamEvent::ShowsInitial { shows, total } => {
+                            state.loading = false;
+                            state.shows = shows;
+                            state.shows_total = total;
+                            state.shows_offset = state.shows.len() as u32;
+                            state.show_list.select(if state.shows.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            state.active_content = crate::ui::ActiveContent::Shows;
+                            state.search_results = None;
+                            state.status_msg = None;
+                            state.focus = crate::ui::Focus::Tracks;
+                            needs_redraw = true;
+                        }
+                        StreamEvent::ShowsBatch { mut shows, total } => {
+                            if state.active_content == crate::ui::ActiveContent::Shows {
+                                if state.shows.len() >= total as usize {
+                                    continue;
+                                }
+                                shows.retain(|s| {
+                                    !state.shows.iter().any(|existing| existing.id == s.id)
+                                });
+                                let remaining = (total as usize).saturating_sub(state.shows.len());
+                                if shows.len() > remaining {
+                                    shows.truncate(remaining);
+                                }
+                                if shows.is_empty() {
+                                    continue;
+                                }
+                                let selected = state.show_list.selected();
+                                state.shows.append(&mut shows);
+                                state.shows_total = total;
+                                state.shows_offset = state.shows.len() as u32;
+                                state.show_list.select(selected);
+                                needs_redraw = true;
+                            }
+                        }
+                        StreamEvent::ShowTracksInitial {
+                            show_id,
+                            tracks,
+                            total,
+                        } => {
+                            let expected = format!("show:{show_id}");
+                            if state.active_playlist_id.as_deref() != Some(&expected)
+                                && state.active_playlist_id.is_some()
+                            {
+                                continue;
+                            }
+                            state.loading = false;
+                            state.tracks = tracks;
+                            state.tracks_total = total;
+                            state.tracks_offset = state.tracks.len() as u32;
+                            state.tracks_api_offset = state.tracks.len() as u32;
+                            state.active_playlist_uri = Some(format!("show:{show_id}"));
+                            state.active_playlist_id = Some(format!("show:{show_id}"));
+                            state.track_list.select(if state.tracks.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            state.active_content = crate::ui::ActiveContent::Tracks;
+                            state.search_results = None;
+                            state.rebuild_sort_indices();
+                            state.status_msg = None;
+                            state.focus = crate::ui::Focus::Tracks;
+                            needs_redraw = true;
+                        }
+                        StreamEvent::ShowTracksBatch {
+                            show_id,
+                            mut tracks,
+                            total,
+                        } => {
+                            if state.active_playlist_id.as_deref()
+                                == Some(&format!("show:{show_id}"))
+                            {
+                                if state.tracks.len() >= total as usize {
+                                    continue;
+                                }
+                                tracks.retain(|t| {
+                                    !state.tracks.iter().any(|existing| existing.uri == t.uri)
+                                });
+                                let remaining = (total as usize).saturating_sub(state.tracks.len());
+                                if tracks.len() > remaining {
+                                    tracks.truncate(remaining);
+                                }
+                                if tracks.is_empty() {
+                                    continue;
+                                }
+                                let selected_raw = state
+                                    .track_list
+                                    .selected()
+                                    .and_then(|display_idx| {
+                                        state.sorted_track_indices.get(display_idx)
+                                    })
+                                    .copied();
+                                state.tracks.append(&mut tracks);
+                                state.tracks_total = total;
+                                state.tracks_offset = state.tracks.len() as u32;
+                                state.tracks_api_offset = state.tracks.len() as u32;
+                                state.rebuild_sort_indices();
+                                if let Some(raw_idx) = selected_raw
+                                    && let Some(pos) = state
+                                        .sorted_track_indices
+                                        .iter()
+                                        .position(|&idx| idx == raw_idx)
+                                {
+                                    state.track_list.select(Some(pos));
+                                }
+                                needs_redraw = true;
+                            }
+                        }
+                        StreamEvent::EpisodesInitial { tracks, total } => {
+                            if state.active_playlist_id.as_deref() != Some("saved_episodes")
+                                && state.active_playlist_id.is_some()
+                            {
+                                continue;
+                            }
+                            state.loading = false;
+                            state.tracks = tracks;
+                            state.tracks_total = total;
+                            state.tracks_offset = state.tracks.len() as u32;
+                            state.tracks_api_offset = state.tracks.len() as u32;
+                            state.active_playlist_uri = Some("saved_episodes".to_string());
+                            state.active_playlist_id = Some("saved_episodes".to_string());
+                            state.track_list.select(if state.tracks.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            state.active_content = crate::ui::ActiveContent::Tracks;
+                            state.search_results = None;
+                            state.rebuild_sort_indices();
+                            state.status_msg = None;
+                            state.focus = crate::ui::Focus::Tracks;
+                            needs_redraw = true;
+                        }
+                        StreamEvent::EpisodesBatch { mut tracks, total } => {
+                            if state.active_playlist_id.as_deref() == Some("saved_episodes") {
+                                if state.tracks.len() >= total as usize {
+                                    continue;
+                                }
+                                tracks.retain(|t| {
+                                    !state.tracks.iter().any(|existing| existing.uri == t.uri)
+                                });
+                                let remaining = (total as usize).saturating_sub(state.tracks.len());
+                                if tracks.len() > remaining {
+                                    tracks.truncate(remaining);
+                                }
+                                if tracks.is_empty() {
+                                    continue;
+                                }
+                                let selected_raw = state
+                                    .track_list
+                                    .selected()
+                                    .and_then(|display_idx| {
+                                        state.sorted_track_indices.get(display_idx)
+                                    })
+                                    .copied();
+                                state.tracks.append(&mut tracks);
+                                state.tracks_total = total;
+                                state.tracks_offset = state.tracks.len() as u32;
+                                state.tracks_api_offset = state.tracks.len() as u32;
+                                state.rebuild_sort_indices();
+                                if let Some(raw_idx) = selected_raw
+                                    && let Some(pos) = state
+                                        .sorted_track_indices
+                                        .iter()
+                                        .position(|&idx| idx == raw_idx)
+                                {
+                                    state.track_list.select(Some(pos));
+                                }
+                                needs_redraw = true;
+                            }
                         }
                         StreamEvent::AlbumTracksInitial {
                             album_id,
