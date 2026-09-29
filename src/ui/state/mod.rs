@@ -27,6 +27,7 @@ pub enum SearchPanel {
     Artists,
     Albums,
     Playlists,
+    Podcasts,
 }
 
 impl SearchPanel {
@@ -35,16 +36,18 @@ impl SearchPanel {
             Self::Tracks => Self::Artists,
             Self::Artists => Self::Albums,
             Self::Albums => Self::Playlists,
-            Self::Playlists => Self::Tracks,
+            Self::Playlists => Self::Podcasts,
+            Self::Podcasts => Self::Tracks,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Tracks => Self::Playlists,
+            Self::Tracks => Self::Podcasts,
             Self::Artists => Self::Tracks,
             Self::Albums => Self::Artists,
             Self::Playlists => Self::Albums,
+            Self::Podcasts => Self::Playlists,
         }
     }
 }

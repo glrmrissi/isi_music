@@ -40,8 +40,19 @@ impl App {
                         sr.playlists_api_offset,
                         "playlist",
                     ),
+                    SearchPanel::Podcasts => (
+                        sr.podcast_list.selected().unwrap_or(0),
+                        sr.shows.len() + sr.episodes.len(),
+                        sr.shows_total + sr.episodes_total,
+                        sr.podcasts_api_offset,
+                        "show,episode",
+                    ),
                 };
-                if len == 0 || selected < len.saturating_sub(3) || api_offset >= total {
+                if len == 0
+                    || selected < len.saturating_sub(3)
+                    || api_offset >= total
+                    || len >= total as usize
+                {
                     return None;
                 }
                 Some((sr.query.clone(), api_offset, stype))
@@ -134,7 +145,7 @@ impl App {
             self.state.tracks_loading = true;
             self.state.status_msg = Some("Loading more tracks…".to_string());
             // Use tracks_api_offset (raw API item count) for pagination, not
-            // tracks_offset (filtered track count) — they diverge when episodes are present
+            // tracks_offset (list length) — they diverge when items are deduped
             let offset = self.state.tracks_api_offset;
             let id = self.state.active_playlist_id.clone();
 
@@ -200,6 +211,16 @@ impl App {
                         let _ = tx.send(FetchResult::MoreTracks(result));
                     });
                 }
+                Some("saved_episodes") => {
+                    tokio::spawn(async move {
+                        let result = spotify
+                            .fetch_saved_episodes(offset)
+                            .await
+                            .map(|(t, total)| (t, total, None, None))
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(FetchResult::MoreTracks(result));
+                    });
+                }
                 Some(id) => {
                     let playlist_id = id.to_string();
                     tokio::spawn(async move {
@@ -236,6 +257,7 @@ impl App {
                         SearchPanel::Artists => sr.artist_list.selected(),
                         SearchPanel::Albums => sr.album_list.selected(),
                         SearchPanel::Playlists => sr.playlist_list.selected(),
+                        SearchPanel::Podcasts => sr.podcast_list.selected(),
                     };
                     at_end(selected, sr.current_len())
                 })

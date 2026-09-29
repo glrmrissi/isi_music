@@ -6,7 +6,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use super::types::{AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, TrackSummary};
+use super::types::{
+    AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary,
+};
 
 pub(super) const MAX_SEARCH_CACHE_ENTRIES: usize = 32;
 
@@ -157,10 +159,18 @@ pub(super) struct CachedSearch {
     artists: Vec<CachedArtist>,
     albums: Vec<CachedAlbum>,
     playlists: Vec<CachedPlaylist>,
+    #[serde(default)]
+    shows: Vec<CachedShow>,
+    #[serde(default)]
+    episodes: Vec<CachedTrack>,
     tracks_total: u32,
     artists_total: u32,
     albums_total: u32,
     playlists_total: u32,
+    #[serde(default)]
+    shows_total: u32,
+    #[serde(default)]
+    episodes_total: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -194,6 +204,13 @@ pub(super) struct CachedPlaylist {
     pub(super) uri: String,
     pub(super) total_tracks: u32,
     pub(super) art_url: Option<String>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct CachedShow {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) publisher: String,
+    pub(super) total_episodes: u32,
 }
 
 impl From<FullSearchResults> for CachedSearch {
@@ -243,10 +260,34 @@ impl From<FullSearchResults> for CachedSearch {
                     art_url: p.art_url,
                 })
                 .collect(),
+            shows: r
+                .shows
+                .into_iter()
+                .map(|s| CachedShow {
+                    id: s.id,
+                    name: s.name,
+                    publisher: s.publisher,
+                    total_episodes: s.total_episodes,
+                })
+                .collect(),
+            episodes: r
+                .episodes
+                .into_iter()
+                .map(|t| CachedTrack {
+                    name: t.name,
+                    artist: t.artist,
+                    album: t.album,
+                    duration_ms: t.duration_ms,
+                    uri: t.uri,
+                    cover_path: t.cover_path,
+                })
+                .collect(),
             tracks_total: r.tracks_total,
             artists_total: r.artists_total,
             albums_total: r.albums_total,
             playlists_total: r.playlists_total,
+            shows_total: r.shows_total,
+            episodes_total: r.episodes_total,
         }
     }
 }
@@ -299,10 +340,35 @@ impl From<CachedSearch> for FullSearchResults {
                     art_url: p.art_url,
                 })
                 .collect(),
+            shows: c
+                .shows
+                .into_iter()
+                .map(|s| ShowSummary {
+                    id: s.id,
+                    name: s.name,
+                    publisher: s.publisher,
+                    total_episodes: s.total_episodes,
+                })
+                .collect(),
+            episodes: c
+                .episodes
+                .into_iter()
+                .map(|t| TrackSummary {
+                    name: t.name,
+                    artist: t.artist,
+                    album: t.album,
+                    duration_ms: t.duration_ms,
+                    uri: t.uri,
+                    cover_path: t.cover_path,
+                    added_at: None,
+                })
+                .collect(),
             tracks_total: c.tracks_total,
             artists_total: c.artists_total,
             albums_total: c.albums_total,
             playlists_total: c.playlists_total,
+            shows_total: c.shows_total,
+            episodes_total: c.episodes_total,
         }
     }
 }

@@ -188,7 +188,8 @@ fn search_panel_next_cycles() {
     assert_eq!(Tracks.next(), Artists);
     assert_eq!(Artists.next(), Albums);
     assert_eq!(Albums.next(), Playlists);
-    assert_eq!(Playlists.next(), Tracks);
+    assert_eq!(Playlists.next(), Podcasts);
+    assert_eq!(Podcasts.next(), Tracks);
 }
 
 #[test]

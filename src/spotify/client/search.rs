@@ -2,25 +2,16 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use super::super::types::{
-    AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, TrackSummary,
+    AlbumSummary, ArtistSummary, FullSearchResults, PlaylistSummary, ShowSummary, TrackSummary,
 };
 use super::SpotifyClient;
 
 impl SpotifyClient {
     pub async fn search_all(&self, query: &str) -> Result<FullSearchResults> {
         if !self.authenticated {
-            return Ok(FullSearchResults {
-                tracks: vec![],
-                artists: vec![],
-                albums: vec![],
-                playlists: vec![],
-                tracks_total: 0,
-                artists_total: 0,
-                albums_total: 0,
-                playlists_total: 0,
-            });
+            return Ok(FullSearchResults::empty());
         }
-        self.search_internal(query, "track,artist,album,playlist", 0, 10)
+        self.search_internal(query, "track,artist,album,playlist,show,episode", 0, 10)
             .await
     }
 
@@ -31,16 +22,7 @@ impl SpotifyClient {
         offset: u32,
     ) -> Result<FullSearchResults> {
         if !self.authenticated {
-            return Ok(FullSearchResults {
-                tracks: vec![],
-                artists: vec![],
-                albums: vec![],
-                playlists: vec![],
-                tracks_total: 0,
-                artists_total: 0,
-                albums_total: 0,
-                playlists_total: 0,
-            });
+            return Ok(FullSearchResults::empty());
         }
         self.search_internal(query, search_type, offset, 10).await
     }
@@ -234,15 +216,57 @@ impl SpotifyClient {
             }
         }
 
+        let mut shows = Vec::new();
+        let mut shows_total = 0u32;
+        if let Some(obj) = json["shows"].as_object() {
+            shows_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                shows.reserve(items.len());
+                for item in items {
+                    shows.push(ShowSummary {
+                        id: item["id"].as_str().unwrap_or("").to_string(),
+                        name: item["name"].as_str().unwrap_or("Unknown").to_string(),
+                        publisher: item["publisher"].as_str().unwrap_or("").to_string(),
+                        total_episodes: item["total_episodes"].as_u64().unwrap_or(0) as u32,
+                    });
+                }
+            }
+        }
+
+        let mut episodes = Vec::new();
+        let mut episodes_total = 0u32;
+        if let Some(obj) = json["episodes"].as_object() {
+            episodes_total = obj.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Some(items) = obj.get("items").and_then(|v| v.as_array()) {
+                episodes.reserve(items.len());
+                for item in items {
+                    let show_name = item["show"]["name"].as_str().unwrap_or("").to_string();
+                    episodes.push(TrackSummary {
+                        name: item["name"].as_str().unwrap_or("Unknown").to_string(),
+                        artist: show_name.clone(),
+                        album: show_name,
+                        duration_ms: item["duration_ms"].as_u64().unwrap_or(0),
+                        uri: item["uri"].as_str().unwrap_or("").to_string(),
+                        cover_path: None,
+                        added_at: None,
+                    });
+                }
+            }
+        }
+
         let results = FullSearchResults {
             tracks,
             artists,
             albums,
             playlists,
+            shows,
+            episodes,
             tracks_total,
             artists_total,
             albums_total,
             playlists_total,
+            shows_total,
+            episodes_total,
         };
         self.search_cache.insert(cache_key, results.clone()).await;
         Ok(results)

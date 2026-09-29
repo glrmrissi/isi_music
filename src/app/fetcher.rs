@@ -695,7 +695,9 @@ impl FetchCoordinator {
                             let total = results.tracks.len()
                                 + results.artists.len()
                                 + results.albums.len()
-                                + results.playlists.len();
+                                + results.playlists.len()
+                                + results.shows.len()
+                                + results.episodes.len();
                             state.search_results =
                                 Some(crate::ui::SearchResults::new(query.clone(), *results));
                             state.tracks.clear();
@@ -755,6 +757,28 @@ impl FetchCoordinator {
                                         sr.playlists_api_offset =
                                             sr.playlists_api_offset.saturating_add(page_size);
                                         sr.playlists.append(&mut new_playlists);
+                                    }
+                                    "show,episode" => {
+                                        let page_size =
+                                            results.shows.len().max(results.episodes.len()) as u32;
+                                        let existing_shows: std::collections::HashSet<&str> =
+                                            sr.shows.iter().map(|s| s.id.as_str()).collect();
+                                        let mut new_shows = results.shows;
+                                        new_shows
+                                            .retain(|s| !existing_shows.contains(s.id.as_str()));
+                                        let existing_eps: std::collections::HashSet<&str> =
+                                            sr.episodes.iter().map(|t| t.uri.as_str()).collect();
+                                        let mut new_eps = results.episodes;
+                                        new_eps.retain(|t| !existing_eps.contains(t.uri.as_str()));
+                                        sr.shows_total = results.shows_total;
+                                        sr.episodes_total = results.episodes_total;
+                                        sr.podcasts_api_offset = if page_size == 0 {
+                                            results.shows_total + results.episodes_total
+                                        } else {
+                                            sr.podcasts_api_offset.saturating_add(page_size)
+                                        };
+                                        sr.shows.append(&mut new_shows);
+                                        sr.episodes.append(&mut new_eps);
                                     }
                                     _ => {}
                                 }

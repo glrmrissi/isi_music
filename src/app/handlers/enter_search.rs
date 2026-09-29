@@ -151,6 +151,76 @@ impl App {
                     self.state.focus = Focus::Tracks;
                 }
             }
+            Some(SearchPanel::Podcasts) => {
+                let selection = self.state.search_results.as_ref().and_then(|sr| {
+                    match sr.selected_podcast()? {
+                        crate::ui::PodcastSelection::Show(s) => {
+                            Some((s.id.clone(), s.name.clone(), String::new()))
+                        }
+                        crate::ui::PodcastSelection::Episode(t) => {
+                            Some((String::new(), String::new(), t.uri.clone()))
+                        }
+                    }
+                });
+                match selection {
+                    Some((id, name, _)) if !id.is_empty() => {
+                        self.state.push_nav();
+                        self.fetcher.cancel_all_pending(&mut self.state);
+                        self.state.status_msg = Some(format!("Loading {name}…"));
+                        self.state.loading = true;
+                        self.state.active_playlist_uri = Some(format!("show:{id}"));
+                        self.state.active_playlist_id = Some(format!("show:{id}"));
+                        self.state.previous_search = self.state.search_results.take();
+                        let spotify = std::sync::Arc::clone(&self.spotify);
+                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                        self.fetcher.stream_rx = Some(rx);
+                        tokio::spawn(async move {
+                            let _ = spotify.stream_show_episodes(&id, &name, tx).await;
+                        });
+                    }
+                    Some((_, _, episode_uri)) if !episode_uri.is_empty() => {
+                        if self.player_mgr.spotify_streaming_disabled {
+                            self.state.status_msg =
+                                Some("Spotify Premium required for streaming".to_string());
+                            return;
+                        }
+                        self.activate_spotify_player();
+                        self.ensure_spotify_player().await;
+                        if let Some(player) = &mut self.player_mgr.player {
+                            self.current_track_uri = episode_uri.clone();
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            player.set_queue(vec![episode_uri], 0);
+                            if let Some(sr) = &self.state.search_results
+                                && let Some(idx) = sr.podcast_list.selected()
+                                && let Some(ep) =
+                                    sr.episodes.get(idx.saturating_sub(sr.shows.len()))
+                            {
+                                self.state.playback.title = ep.name.clone();
+                                self.state.playback.artist = ep.artist.clone();
+                                self.state.playback.album = ep.album.clone();
+                                self.state.playback.duration_ms = ep.duration_ms;
+                                self.state.playback.progress_ms = 0;
+                                self.state.playback.is_playing = true;
+                                self.state.playback.is_local = false;
+                                self.player_mgr.playing_tracks =
+                                    vec![crate::spotify::TrackSummary {
+                                        uri: ep.uri.clone(),
+                                        name: ep.name.clone(),
+                                        artist: ep.artist.clone(),
+                                        album: ep.album.clone(),
+                                        duration_ms: ep.duration_ms,
+                                        cover_path: ep.cover_path.clone(),
+                                        added_at: None,
+                                    }];
+                                self.on_track_started();
+                            }
+                        } else if self.spotify.authenticated {
+                            let _ = self.spotify.play_track_uri(&episode_uri).await;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Some(SearchPanel::Artists) => {
                 let artist = self
                     .state

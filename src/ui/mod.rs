@@ -9,7 +9,7 @@ pub mod state;
 pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode, library_items};
 pub use options::SettingsPanel;
 pub use playback::PlaybackState;
-pub use search::SearchResults;
+pub use search::{PodcastSelection, SearchResults};
 pub use state::{ActiveContent, CompactItem, Focus, SearchPanel, UiState};
 
 use crate::utils::debug_overlay::DebugOverlay;

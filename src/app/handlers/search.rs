@@ -125,13 +125,8 @@ impl App {
         let total = matched.len() as u32;
         let results = FullSearchResults {
             tracks: matched,
-            artists: vec![],
-            albums: vec![],
-            playlists: vec![],
             tracks_total: total,
-            artists_total: 0,
-            albums_total: 0,
-            playlists_total: 0,
+            ..FullSearchResults::empty()
         };
         self.state.search_results = Some(SearchResults::new(query.to_string(), results));
         if let Some(sr) = &mut self.state.search_results {
