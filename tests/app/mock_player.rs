@@ -148,6 +148,9 @@ impl AudioPlayer for MockPlayer {
     fn current_index(&self) -> Option<usize> {
         self.current_index
     }
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
+        (self.queue.clone(), self.current_index)
+    }
     fn current_track_summary(&self) -> Option<crate::spotify::TrackSummary> {
         self.queue
             .get(self.current_index?)

@@ -268,16 +268,7 @@ async fn dispatch_back_clears_search_results() {
     let mut app = App::new_for_test().await;
     app.state.search_results = Some(crate::ui::SearchResults::new(
         "test".into(),
-        crate::spotify::FullSearchResults {
-            tracks: Vec::new(),
-            artists: Vec::new(),
-            albums: Vec::new(),
-            playlists: Vec::new(),
-            tracks_total: 0,
-            artists_total: 0,
-            albums_total: 0,
-            playlists_total: 0,
-        },
+        crate::spotify::FullSearchResults::empty(),
     ));
 
     app.dispatch(Action::Back).await;
@@ -602,4 +593,482 @@ async fn spotify_search_submit_clears_stale_playlist_context() {
         "search must clear stale playlist context or SearchInitial is dropped by the stale-id guard"
     );
     assert!(app.state.active_playlist_uri.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Podcasts / shows
+// ---------------------------------------------------------------------------
+
+fn show_summary(id: &str, name: &str) -> crate::spotify::ShowSummary {
+    crate::spotify::ShowSummary {
+        id: id.into(),
+        name: name.into(),
+        publisher: "Pub".into(),
+        total_episodes: 3,
+    }
+}
+
+fn episode_track(id: &str, name: &str) -> TrackSummary {
+    TrackSummary {
+        uri: format!("spotify:episode:{id}"),
+        name: name.into(),
+        artist: "Show".into(),
+        album: String::new(),
+        duration_ms: 1_800_000,
+        cover_path: None,
+        added_at: None,
+    }
+}
+
+#[tokio::test]
+async fn library_item_podcasts_streams_saved_shows() {
+    let mut app = App::new_for_test().await;
+    if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
+        spotify.authenticated = true;
+    }
+    app.spotify_enabled = true;
+    app.state.spotify_enabled = true;
+
+    app.handle_library_item(3).await;
+
+    assert!(
+        app.fetcher.stream_rx.is_some(),
+        "podcasts library item must spawn a saved-shows stream"
+    );
+    assert!(app.state.loading);
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Loading saved shows…")
+    );
+    assert!(app.state.active_playlist_id.is_none());
+}
+
+#[tokio::test]
+async fn shows_stream_events_populate_show_list() {
+    let mut app = App::new_for_test().await;
+    app.state.loading = true;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    tx.send(crate::app::fetcher::StreamEvent::ShowsInitial {
+        shows: vec![show_summary("s1", "Pod One")],
+        total: 2,
+    })
+    .unwrap();
+    tx.send(crate::app::fetcher::StreamEvent::ShowsBatch {
+        shows: vec![show_summary("s2", "Pod Two")],
+        total: 2,
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    assert_eq!(app.state.shows.len(), 2);
+    assert_eq!(app.state.shows_total, 2);
+    assert_eq!(app.state.shows_offset, 2);
+    assert_eq!(app.state.active_content, crate::ui::ActiveContent::Shows);
+    assert!(!app.state.loading);
+    assert_eq!(app.state.show_list.selected(), Some(0));
+}
+
+#[tokio::test]
+async fn show_tracks_initial_populates_episodes() {
+    let mut app = App::new_for_test().await;
+    app.state.active_playlist_id = Some("show:s1".to_string());
+    app.state.loading = true;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    tx.send(crate::app::fetcher::StreamEvent::ShowTracksInitial {
+        show_id: "s1".into(),
+        tracks: vec![episode_track("e1", "Episode 1")],
+        total: 1,
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    assert_eq!(app.state.tracks.len(), 1);
+    assert_eq!(app.state.tracks[0].uri, "spotify:episode:e1");
+    assert_eq!(app.state.active_playlist_id.as_deref(), Some("show:s1"));
+    assert_eq!(app.state.active_playlist_uri.as_deref(), Some("show:s1"));
+    assert_eq!(app.state.active_content, crate::ui::ActiveContent::Tracks);
+    assert!(!app.state.loading);
+}
+
+#[tokio::test]
+async fn show_tracks_initial_dropped_for_stale_context() {
+    let mut app = App::new_for_test().await;
+    app.state.active_playlist_id = Some("show:other".to_string());
+    app.state.loading = true;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    tx.send(crate::app::fetcher::StreamEvent::ShowTracksInitial {
+        show_id: "s1".into(),
+        tracks: vec![episode_track("e1", "Episode 1")],
+        total: 1,
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    assert!(app.state.tracks.is_empty());
+    assert_eq!(app.state.active_playlist_id.as_deref(), Some("show:other"));
+}
+
+#[tokio::test]
+async fn enter_on_episode_track_queues_all_tracks() {
+    let mut app = App::new_for_test().await;
+    let mock = Box::new(MockPlayer::new(Arc::default(), Arc::default()));
+    app.player_mgr.player = Some(mock);
+    app.state.focus = Focus::Tracks;
+    app.state.active_content = crate::ui::ActiveContent::Tracks;
+    app.state.tracks = vec![
+        TrackSummary {
+            uri: "spotify:track:t1".into(),
+            name: "Song".into(),
+            artist: "A".into(),
+            album: String::new(),
+            duration_ms: 200_000,
+            cover_path: None,
+            added_at: None,
+        },
+        episode_track("e1", "Episode 1"),
+        episode_track("e2", "Episode 2"),
+    ];
+    app.state.sorted_track_indices = vec![0, 1, 2];
+    app.state.track_list.select(Some(1));
+
+    app.dispatch(Action::Enter).await;
+
+    let player = app.player_mgr.player.as_ref().unwrap();
+    let (queue, idx) = player.snapshot_queue();
+    assert_eq!(queue.len(), 3);
+    assert_eq!(queue[1], "spotify:episode:e1");
+    assert_eq!(idx, Some(1));
+    assert_eq!(app.state.playback.title, "Episode 1");
+    assert_eq!(app.state.playback.artist, "Show");
+}
+
+// ---------------------------------------------------------------------------
+// Saved episodes (Your Episodes) + podcast search panel
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn library_item_your_episodes_streams_saved_episodes() {
+    let mut app = App::new_for_test().await;
+    if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
+        spotify.authenticated = true;
+    }
+    app.spotify_enabled = true;
+    app.state.spotify_enabled = true;
+
+    app.handle_library_item(4).await;
+
+    assert!(
+        app.fetcher.stream_rx.is_some(),
+        "your episodes library item must spawn a saved-episodes stream"
+    );
+    assert!(app.state.loading);
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Loading saved episodes…")
+    );
+    assert_eq!(
+        app.state.active_playlist_id.as_deref(),
+        Some("saved_episodes")
+    );
+}
+
+#[tokio::test]
+async fn episodes_stream_events_populate_tracks() {
+    let mut app = App::new_for_test().await;
+    app.state.active_playlist_id = Some("saved_episodes".to_string());
+    app.state.loading = true;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    tx.send(crate::app::fetcher::StreamEvent::EpisodesInitial {
+        tracks: vec![episode_track("e1", "Episode 1")],
+        total: 2,
+    })
+    .unwrap();
+    tx.send(crate::app::fetcher::StreamEvent::EpisodesBatch {
+        tracks: vec![
+            episode_track("e1", "Episode 1"),
+            episode_track("e2", "Episode 2"),
+        ],
+        total: 2,
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    assert_eq!(app.state.tracks.len(), 2, "batch must dedupe e1");
+    assert_eq!(app.state.tracks[1].uri, "spotify:episode:e2");
+    assert_eq!(
+        app.state.active_playlist_id.as_deref(),
+        Some("saved_episodes")
+    );
+    assert_eq!(app.state.active_content, crate::ui::ActiveContent::Tracks);
+    assert!(!app.state.loading);
+}
+
+#[tokio::test]
+async fn episodes_initial_dropped_for_stale_context() {
+    let mut app = App::new_for_test().await;
+    app.state.active_playlist_id = Some("show:s1".to_string());
+    app.state.loading = true;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    tx.send(crate::app::fetcher::StreamEvent::EpisodesInitial {
+        tracks: vec![episode_track("e1", "Episode 1")],
+        total: 1,
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    assert!(app.state.tracks.is_empty());
+    assert_eq!(app.state.active_playlist_id.as_deref(), Some("show:s1"));
+}
+
+#[tokio::test]
+async fn search_results_selected_podcast_splits_shows_and_episodes() {
+    use crate::ui::{PodcastSelection, SearchPanel, SearchResults};
+
+    let results = crate::spotify::FullSearchResults {
+        shows: vec![show_summary("s1", "Pod One"), show_summary("s2", "Pod Two")],
+        episodes: vec![episode_track("e1", "Episode 1")],
+        shows_total: 2,
+        episodes_total: 1,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    let mut sr = SearchResults::new("q".to_string(), results);
+    sr.panel = SearchPanel::Podcasts;
+
+    assert_eq!(sr.current_len(), 3);
+
+    sr.podcast_list.select(Some(0));
+    match sr.selected_podcast() {
+        Some(PodcastSelection::Show(s)) => assert_eq!(s.id, "s1"),
+        _ => panic!("index 0 must select a show"),
+    }
+
+    sr.podcast_list.select(Some(2));
+    match sr.selected_podcast() {
+        Some(PodcastSelection::Episode(t)) => assert_eq!(t.uri, "spotify:episode:e1"),
+        _ => panic!("index 2 must select an episode"),
+    }
+}
+
+#[tokio::test]
+async fn search_panel_cycle_includes_podcasts() {
+    use crate::ui::SearchPanel;
+
+    assert_eq!(SearchPanel::Playlists.next(), SearchPanel::Podcasts);
+    assert_eq!(SearchPanel::Podcasts.next(), SearchPanel::Tracks);
+    assert_eq!(SearchPanel::Tracks.prev(), SearchPanel::Podcasts);
+    assert_eq!(SearchPanel::Podcasts.prev(), SearchPanel::Playlists);
+}
+
+#[tokio::test]
+async fn search_more_show_episode_merges_and_dedupes() {
+    use crate::ui::{SearchPanel, SearchResults};
+
+    let mut app = App::new_for_test().await;
+    let initial = crate::spotify::FullSearchResults {
+        shows: vec![show_summary("s1", "Pod One")],
+        episodes: vec![episode_track("e1", "Episode 1")],
+        shows_total: 3,
+        episodes_total: 2,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    let mut sr = SearchResults::new("q".to_string(), initial);
+    sr.panel = SearchPanel::Podcasts;
+    app.state.search_results = Some(sr);
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    let page = crate::spotify::FullSearchResults {
+        shows: vec![show_summary("s1", "Pod One"), show_summary("s2", "Pod Two")],
+        episodes: vec![episode_track("e2", "Episode 2")],
+        shows_total: 3,
+        episodes_total: 2,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    tx.send(crate::app::fetcher::StreamEvent::SearchMore {
+        stype: "show,episode".to_string(),
+        results: Box::new(page),
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    let sr = app.state.search_results.as_ref().unwrap();
+    assert_eq!(sr.shows.len(), 2, "s1 duplicate must be dropped");
+    assert_eq!(sr.shows[1].id, "s2");
+    assert_eq!(sr.episodes.len(), 2);
+    assert_eq!(sr.episodes[1].uri, "spotify:episode:e2");
+    assert_eq!(sr.shows_total, 3);
+    assert_eq!(sr.episodes_total, 2);
+    assert_eq!(sr.podcasts_api_offset, 3);
+}
+
+#[tokio::test]
+async fn search_more_empty_page_marks_podcasts_done() {
+    use crate::ui::{SearchPanel, SearchResults};
+
+    let mut app = App::new_for_test().await;
+    let initial = crate::spotify::FullSearchResults {
+        shows: vec![show_summary("s1", "Pod One"), show_summary("s2", "Pod Two")],
+        episodes: vec![episode_track("e1", "Episode 1")],
+        shows_total: 2,
+        episodes_total: 1,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    let mut sr = SearchResults::new("q".to_string(), initial);
+    sr.panel = SearchPanel::Podcasts;
+    app.state.search_results = Some(sr);
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.fetcher.stream_rx = Some(rx);
+
+    let empty_page = crate::spotify::FullSearchResults {
+        shows_total: 2,
+        episodes_total: 1,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    tx.send(crate::app::fetcher::StreamEvent::SearchMore {
+        stype: "show,episode".to_string(),
+        results: Box::new(empty_page),
+    })
+    .unwrap();
+
+    app.fetcher.poll_pending_fetch(&mut app.state, &app.spotify);
+
+    let sr = app.state.search_results.as_ref().unwrap();
+    assert_eq!(
+        sr.podcasts_api_offset,
+        sr.shows_total + sr.episodes_total,
+        "empty page must snap the shared offset to the combined total"
+    );
+}
+
+#[tokio::test]
+async fn maybe_load_more_podcasts_does_not_fetch_when_all_loaded() {
+    use crate::ui::{SearchPanel, SearchResults};
+
+    let mut app = App::new_for_test().await;
+    let initial = crate::spotify::FullSearchResults {
+        shows: vec![show_summary("s1", "Pod One"), show_summary("s2", "Pod Two")],
+        episodes: vec![episode_track("e1", "Episode 1")],
+        shows_total: 2,
+        episodes_total: 1,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    let mut sr = SearchResults::new("q".to_string(), initial);
+    sr.panel = SearchPanel::Podcasts;
+    sr.podcast_list.select(Some(2));
+    app.state.search_results = Some(sr);
+    app.state.focus = Focus::Search;
+
+    app.maybe_load_more().await;
+
+    assert!(
+        app.fetcher.stream_rx.is_none(),
+        "all podcast items loaded: must not fire another search_more"
+    );
+}
+
+#[tokio::test]
+async fn maybe_load_more_podcasts_fetches_when_items_remain() {
+    use crate::ui::{SearchPanel, SearchResults};
+
+    let mut app = App::new_for_test().await;
+    if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
+        spotify.authenticated = true;
+    }
+    app.spotify_enabled = true;
+    app.state.spotify_enabled = true;
+    let initial = crate::spotify::FullSearchResults {
+        shows: vec![show_summary("s1", "Pod One")],
+        episodes: vec![episode_track("e1", "Episode 1")],
+        shows_total: 10,
+        episodes_total: 5,
+        ..crate::spotify::FullSearchResults::empty()
+    };
+    let mut sr = SearchResults::new("q".to_string(), initial);
+    sr.panel = SearchPanel::Podcasts;
+    sr.podcast_list.select(Some(1));
+    app.state.search_results = Some(sr);
+    app.state.focus = Focus::Search;
+
+    app.maybe_load_more().await;
+
+    assert!(
+        app.fetcher.stream_rx.is_some(),
+        "items remaining below total: scroll must trigger pagination"
+    );
+    app.fetcher.stream_rx = None;
+}
+
+// ---------------------------------------------------------------------------
+// Playlist items containing episodes
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn playlist_item_parser_keeps_episodes() {
+    let episode_wrapper = serde_json::json!({
+        "added_at": "2024-05-01T00:00:00Z",
+        "item": {
+            "type": "episode",
+            "name": "Ep 42",
+            "uri": "spotify:episode:ep42",
+            "duration_ms": 1_800_000,
+            "show": { "name": "Cool Podcast" }
+        }
+    });
+    let track = crate::spotify::playlist_item_to_track(&episode_wrapper)
+        .expect("episode must parse into a track row");
+    assert_eq!(track.uri, "spotify:episode:ep42");
+    assert_eq!(track.name, "Ep 42");
+    assert_eq!(track.artist, "Cool Podcast");
+    assert_eq!(track.album, "Cool Podcast");
+    assert_eq!(track.added_at.as_deref(), Some("2024-05-01T00:00:00Z"));
+
+    let track_wrapper = serde_json::json!({
+        "added_at": "2024-05-01T00:00:00Z",
+        "item": {
+            "type": "track",
+            "name": "Song",
+            "uri": "spotify:track:t1",
+            "duration_ms": 200_000,
+            "artists": [{ "name": "A" }, { "name": "B" }],
+            "album": { "name": "Album" }
+        }
+    });
+    let track = crate::spotify::playlist_item_to_track(&track_wrapper)
+        .expect("regular track must still parse");
+    assert_eq!(track.uri, "spotify:track:t1");
+    assert_eq!(track.artist, "A, B");
+    assert_eq!(track.album, "Album");
+
+    let null_wrapper = serde_json::json!({ "added_at": null, "item": null, "track": null });
+    assert!(crate::spotify::playlist_item_to_track(&null_wrapper).is_none());
+
+    let legacy_wrapper = serde_json::json!({
+        "track": {
+            "type": "track",
+            "name": "Legacy",
+            "uri": "spotify:track:legacy",
+            "duration_ms": 1
+        }
+    });
+    let track = crate::spotify::playlist_item_to_track(&legacy_wrapper)
+        .expect("legacy track field must still parse");
+    assert_eq!(track.name, "Legacy");
 }
