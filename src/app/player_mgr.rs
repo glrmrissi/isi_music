@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification};
 use crate::spotify::SpotifyClient;
@@ -27,6 +27,7 @@ pub struct PlayerManager {
     pub playing_started_at: Option<Instant>,
     pub progress_at_play_start: u64,
     pub initial_sync_done: bool,
+    pub last_failed_player_attempt: Option<Instant>,
 }
 
 impl PlayerManager {
@@ -57,13 +58,14 @@ impl PlayerManager {
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
+            last_failed_player_attempt: None,
         }
     }
 
     pub async fn ensure_spotify_player(
         &mut self,
         spotify: &SpotifyClient,
-        state: &UiState,
+        state: &mut UiState,
         debug_overlay: &DebugOverlay,
         audio: &crate::config::AudioConfig,
     ) -> bool {
@@ -76,6 +78,14 @@ impl PlayerManager {
             self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
             return true;
         }
+        if let Some(t) = self.last_failed_player_attempt
+            && t.elapsed() < Duration::from_secs(10)
+        {
+            state.status_msg =
+                Some("Spotify streaming unavailable — retry in a few seconds".to_string());
+            return false;
+        }
+        self.last_failed_player_attempt = Some(Instant::now());
         let token = spotify.get_access_token().await;
         match NativePlayer::new(token, false, audio.librespot_bitrate(), audio.gapless).await {
             Ok(mut p) => {
@@ -84,6 +94,7 @@ impl PlayerManager {
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = false;
+                self.last_failed_player_attempt = None;
                 true
             }
             Err(e) => {
@@ -98,6 +109,7 @@ impl PlayerManager {
                     } else {
                         format!("Failed to create Spotify player: {e:#}")
                     };
+                state.status_msg = Some(status.clone());
                 debug_overlay.log(LogLevel::Warn, format!("{status}: {e:#}"));
                 false
             }

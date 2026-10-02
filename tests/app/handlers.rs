@@ -1086,3 +1086,38 @@ async fn on_track_started_skips_lyrics_fetch_for_episodes() {
     assert!(!app.state.playback.lyrics_loading);
     assert!(app.fetcher.lyrics.is_none());
 }
+
+#[tokio::test]
+async fn report_remote_play_error_translates_no_active_device() {
+    let mut app = App::new_for_test().await;
+    let e = anyhow::anyhow!("API error: 404 no_active_device");
+    assert!(!app.report_remote_play_error(&e));
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some(
+            "No active Spotify device — streaming player unavailable or start Spotify on a device"
+        )
+    );
+}
+
+#[tokio::test]
+async fn report_remote_play_error_flags_401_for_reconnect() {
+    let mut app = App::new_for_test().await;
+    let e = anyhow::anyhow!("SPOTIFY_UNAUTHORIZED");
+    assert!(app.report_remote_play_error(&e));
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Authorization expired, reconnecting...")
+    );
+}
+
+#[tokio::test]
+async fn report_remote_play_error_shows_generic_message() {
+    let mut app = App::new_for_test().await;
+    let e = anyhow::anyhow!("some other failure");
+    assert!(!app.report_remote_play_error(&e));
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Error: some other failure")
+    );
+}

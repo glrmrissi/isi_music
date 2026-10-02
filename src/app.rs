@@ -424,19 +424,20 @@ impl App {
 
     async fn ensure_spotify_player(&mut self) -> bool {
         if !self.spotify_enabled {
-            return false;
-        }
-        let ok = self
-            .player_mgr
-            .ensure_spotify_player(&self.spotify, &self.state, &self.debug_overlay, &self.audio)
-            .await;
-        if !ok {
             self.state.status_msg = Some(
                 "Spotify streaming is not authenticated. Run `isi-music setup-spotify`."
                     .to_string(),
             );
+            return false;
         }
-        ok
+        self.player_mgr
+            .ensure_spotify_player(
+                &self.spotify,
+                &mut self.state,
+                &self.debug_overlay,
+                &self.audio,
+            )
+            .await
     }
 
     async fn ensure_local_player(&mut self) -> bool {

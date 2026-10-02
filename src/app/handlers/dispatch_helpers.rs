@@ -283,4 +283,22 @@ impl App {
             }
         }
     }
+
+    pub(crate) fn report_remote_play_error(&mut self, e: &anyhow::Error) -> bool {
+        let err_str = e.to_string();
+        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+            tracing::warn!("Got 401 - triggering reconnect");
+            self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+            true
+        } else if err_str.contains("no_active_device") || err_str.contains("No active device") {
+            self.state.status_msg = Some(
+                "No active Spotify device — streaming player unavailable or start Spotify on a device"
+                    .to_string(),
+            );
+            false
+        } else {
+            self.state.status_msg = Some(format!("Error: {e}"));
+            false
+        }
+    }
 }

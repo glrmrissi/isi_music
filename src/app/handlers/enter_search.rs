@@ -54,8 +54,11 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
-                            let _ = self.spotify.play_track_uri(&track_uri).await;
+                        } else if self.spotify.authenticated
+                            && let Err(e) = self.spotify.play_track_uri(&track_uri).await
+                            && self.report_remote_play_error(&e)
+                        {
+                            *needs_reconnect = true;
                         }
                     }
                 }
@@ -214,8 +217,11 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
-                            let _ = self.spotify.play_track_uri(&episode_uri).await;
+                        } else if self.spotify.authenticated
+                            && let Err(e) = self.spotify.play_track_uri(&episode_uri).await
+                            && self.report_remote_play_error(&e)
+                        {
+                            *needs_reconnect = true;
                         }
                     }
                     _ => {}

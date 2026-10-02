@@ -281,18 +281,10 @@ impl App {
                             } else {
                                 self.spotify.play_track_uri(&track_uri).await
                             };
-                            if let Err(e) = result {
-                                let err_str = e.to_string();
-                                if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                    || err_str.contains("401")
-                                {
-                                    warn!("Got 401 - triggering reconnect");
-                                    needs_reconnect = true;
-                                    self.state.status_msg =
-                                        Some("Authorization expired, reconnecting...".to_string());
-                                } else {
-                                    self.state.status_msg = Some(format!("Error: {e}"));
-                                }
+                            if let Err(e) = result
+                                && self.report_remote_play_error(&e)
+                            {
+                                needs_reconnect = true;
                             }
                         }
                     }
