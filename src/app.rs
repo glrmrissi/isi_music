@@ -177,6 +177,7 @@ impl App {
         state.show_album_art = cfg.show_cover_images();
         state.show_visualizer = cfg.show_visualizer();
         state.mono_audio = cfg.audio.mono;
+        state.eq_gains = cfg.audio.eq_gains;
         state.show_lyrics = cfg.show_lyrics();
         state.show_breadcrumb = cfg.show_breadcrumb();
         state.compact_mode = cfg.compact_mode_default();
@@ -381,6 +382,7 @@ impl App {
             state.show_album_art = cfg.show_cover_images();
             state.show_visualizer = cfg.show_visualizer();
             state.mono_audio = cfg.audio.mono;
+            state.eq_gains = cfg.audio.eq_gains;
             state.show_lyrics = cfg.show_lyrics();
             state.show_breadcrumb = cfg.show_breadcrumb();
             state.compact_mode = cfg.compact_mode_default();

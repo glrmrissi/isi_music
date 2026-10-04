@@ -269,6 +269,19 @@ impl App {
                     }
                     _ => {}
                 },
+                SettingsAction::EqChanged => {
+                    let gains = panel.config.audio.eq_gains;
+                    self.state.eq_gains = gains;
+                    if let Some(player) = &mut self.player_mgr.player {
+                        player.set_eq_gains(gains);
+                    }
+                    if let Some(player) = &mut self.player_mgr.parked_player {
+                        player.set_eq_gains(gains);
+                    }
+                    self.state.status_msg =
+                        Some(format!("EQ: {}", crate::audio::eq::preset_name(&gains)));
+                    self.needs_redraw = true;
+                }
                 SettingsAction::ClearAllCache => {
                     let _ = panel.cache_manager.clear_all().await;
                     self.spotify.library_cache.clear_all_library_cache();

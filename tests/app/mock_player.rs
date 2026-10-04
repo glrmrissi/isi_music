@@ -19,6 +19,7 @@ pub struct MockPlayer {
     pub notifications: std::collections::VecDeque<PlayerNotification>,
     pub current_index: Option<usize>,
     pub mono_enabled: Arc<AtomicBool>,
+    pub eq_gains: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl MockPlayer {
@@ -37,6 +38,7 @@ impl MockPlayer {
             notifications: std::collections::VecDeque::new(),
             current_index: None,
             mono_enabled: Arc::new(AtomicBool::new(false)),
+            eq_gains: Arc::default(),
         }
     }
 
@@ -55,6 +57,7 @@ impl MockPlayer {
             notifications: std::collections::VecDeque::new(),
             current_index: None,
             mono_enabled: Arc::new(AtomicBool::new(false)),
+            eq_gains: Arc::default(),
         }
     }
 
@@ -184,6 +187,10 @@ impl AudioPlayer for MockPlayer {
     }
     fn set_mono_enabled(&mut self, enabled: bool) {
         self.mono_enabled.store(enabled, Ordering::Relaxed);
+    }
+    fn set_eq_gains(&mut self, gains: [i8; crate::audio::eq::EQ_BANDS]) {
+        self.eq_gains
+            .store(crate::audio::eq::pack_gains(&gains), Ordering::Relaxed);
     }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None

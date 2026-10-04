@@ -167,6 +167,7 @@ impl PlayerManager {
                 }
                 p.set_visualizer_enabled(state.show_visualizer);
                 p.set_mono_enabled(state.mono_audio);
+                p.set_eq_gains(state.eq_gains);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = false;
@@ -210,6 +211,7 @@ impl PlayerManager {
             Ok(mut p) => {
                 p.set_visualizer_enabled(state.show_visualizer);
                 p.set_mono_enabled(state.mono_audio);
+                p.set_eq_gains(state.eq_gains);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = true;

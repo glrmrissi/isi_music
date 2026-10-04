@@ -128,6 +128,8 @@ pub struct AudioConfig {
     pub bitrate: u16,
     #[serde(default)]
     pub mono: bool,
+    #[serde(default)]
+    pub eq_gains: [i8; crate::audio::eq::EQ_BANDS],
 }
 
 fn default_true() -> bool {

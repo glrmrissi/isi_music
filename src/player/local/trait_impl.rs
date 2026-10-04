@@ -245,6 +245,11 @@ impl AudioPlayer for LocalPlayer {
         self.mono_enabled.store(enabled, Ordering::Relaxed);
     }
 
+    fn set_eq_gains(&mut self, gains: [i8; crate::audio::eq::EQ_BANDS]) {
+        self.eq_gains
+            .store(crate::audio::eq::pack_gains(&gains), Ordering::Relaxed);
+    }
+
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         self.analyzer.band_energies()
     }

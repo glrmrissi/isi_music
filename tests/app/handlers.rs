@@ -244,6 +244,146 @@ async fn settings_mono_audio_toggle_persists_and_reaches_player() {
 }
 
 #[tokio::test]
+async fn settings_equalizer_adjusts_band_and_reaches_player() {
+    let mut app = App::new_for_test().await;
+    let eq_flag = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let mut mock = MockPlayer::new(Arc::default(), Arc::default());
+    mock.eq_gains = Arc::clone(&eq_flag);
+    app.player_mgr.player = Some(Box::new(mock));
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::Equalizer;
+        panel.selected_item = 1;
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Right,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert_eq!(app.state.eq_gains[0], 1);
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .map(|p| p.config.audio.eq_gains[0]),
+        Some(1)
+    );
+    assert_eq!(
+        eq_flag.load(Ordering::Relaxed),
+        crate::audio::eq::pack_gains(&[1, 0, 0, 0, 0, 0])
+    );
+
+    app.handle_key(
+        crossterm::event::KeyCode::Left,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert_eq!(app.state.eq_gains[0], 0);
+    assert_eq!(eq_flag.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn settings_equalizer_preset_cycles_and_reset_restores_flat() {
+    let mut app = App::new_for_test().await;
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::Equalizer;
+        panel.selected_item = 0;
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert_eq!(app.state.eq_gains, crate::audio::eq::EQ_PRESETS[1].1);
+    assert_eq!(app.state.status_msg.as_deref(), Some("EQ: Bass Booster"));
+
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.selected_item = crate::audio::eq::EQ_BANDS + 1;
+    }
+    app.handle_key(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert_eq!(app.state.eq_gains, [0; crate::audio::eq::EQ_BANDS]);
+    assert_eq!(app.state.status_msg.as_deref(), Some("EQ: Flat"));
+}
+
+#[tokio::test]
+async fn settings_equalizer_preset_row_arrows_cycle_presets() {
+    let mut app = App::new_for_test().await;
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::Equalizer;
+        panel.selected_item = 0;
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Right,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+    assert_eq!(app.state.eq_gains, crate::audio::eq::EQ_PRESETS[1].1);
+
+    app.handle_key(
+        crossterm::event::KeyCode::Left,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+    assert_eq!(app.state.eq_gains, [0; crate::audio::eq::EQ_BANDS]);
+
+    app.handle_key(
+        crossterm::event::KeyCode::Left,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+    assert_eq!(
+        app.state.eq_gains,
+        crate::audio::eq::EQ_PRESETS[crate::audio::eq::EQ_PRESETS.len() - 1].1
+    );
+}
+
+#[tokio::test]
+async fn settings_equalizer_reset_row_arrows_are_noop() {
+    let mut app = App::new_for_test().await;
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::Equalizer;
+        panel.selected_item = crate::audio::eq::EQ_BANDS + 1;
+        panel.config.audio.eq_gains = [3; crate::audio::eq::EQ_BANDS];
+        app.state.eq_gains = [3; crate::audio::eq::EQ_BANDS];
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Left,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert_eq!(app.state.eq_gains, [3; crate::audio::eq::EQ_BANDS]);
+    assert!(app.state.status_msg.is_none());
+}
+
+#[tokio::test]
 async fn settings_general_renders_lyrics_display() {
     let mut app = App::new_for_test().await;
     let panel = app.settings_panel.as_mut().unwrap();

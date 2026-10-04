@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use super::LocalPlayer;
 use super::decoder::LocalDecoder;
 use crate::audio::audio_sink::AnalyzingSource;
+use crate::audio::eq::EqSource;
 use crate::audio::mono::MonoSource;
 use crate::player::PlayerNotification;
 use crate::utils::lock::lock_or_recover;
@@ -61,7 +62,10 @@ impl LocalPlayer {
         self.sink.stop();
 
         let decoder = match LocalDecoder::open(&path) {
-            Some(d) => MonoSource::new(d, Arc::clone(&self.mono_enabled)),
+            Some(d) => MonoSource::new(
+                EqSource::new(d, Arc::clone(&self.eq_gains)),
+                Arc::clone(&self.mono_enabled),
+            ),
             None => return false,
         };
 
@@ -114,7 +118,10 @@ impl LocalPlayer {
         }
 
         let decoder = match LocalDecoder::open(&path) {
-            Some(d) => MonoSource::new(d, Arc::clone(&self.mono_enabled)),
+            Some(d) => MonoSource::new(
+                EqSource::new(d, Arc::clone(&self.eq_gains)),
+                Arc::clone(&self.mono_enabled),
+            ),
             None => return false,
         };
 

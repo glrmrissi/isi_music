@@ -8,7 +8,7 @@ use librespot_playback::{
 use rodio::{OutputStream, OutputStreamBuilder, Sink as RodioSink, buffer::SamplesBuffer};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -66,12 +66,15 @@ pub(crate) struct SpotifyAudioSink {
     generation_lost: Arc<AtomicBool>,
     mono_enabled: Arc<AtomicBool>,
     mono_buf: Vec<f32>,
+    eq: crate::audio::eq::InterleavedEq,
+    eq_buf: Vec<f32>,
 }
 
 impl SpotifyAudioSink {
     pub(crate) fn open(
         output_loss: Arc<AudioOutputLoss>,
         mono_enabled: Arc<AtomicBool>,
+        eq_gains: Arc<AtomicU64>,
     ) -> Result<Self> {
         let generation_lost = Arc::new(AtomicBool::new(false));
         let loss_from_callback = Arc::clone(&output_loss);
@@ -96,14 +99,21 @@ impl SpotifyAudioSink {
             generation_lost,
             mono_enabled,
             mono_buf: Vec::new(),
+            eq: crate::audio::eq::InterleavedEq::new(eq_gains, NUM_CHANNELS as usize, SAMPLE_RATE),
+            eq_buf: Vec::new(),
         })
     }
 
     pub(crate) fn open_or_unavailable(
         output_loss: Arc<AudioOutputLoss>,
         mono_enabled: Arc<AtomicBool>,
+        eq_gains: Arc<AtomicU64>,
     ) -> Self {
-        match Self::open(Arc::clone(&output_loss), mono_enabled) {
+        match Self::open(
+            Arc::clone(&output_loss),
+            Arc::clone(&mono_enabled),
+            Arc::clone(&eq_gains),
+        ) {
             Ok(sink) => sink,
             Err(error) => {
                 tracing::warn!("Spotify audio output is unavailable: {error:#}");
@@ -113,8 +123,14 @@ impl SpotifyAudioSink {
                     _stream: None,
                     output_loss,
                     generation_lost: Arc::new(AtomicBool::new(true)),
-                    mono_enabled: Arc::new(AtomicBool::new(false)),
+                    mono_enabled,
                     mono_buf: Vec::new(),
+                    eq: crate::audio::eq::InterleavedEq::new(
+                        eq_gains,
+                        NUM_CHANNELS as usize,
+                        SAMPLE_RATE,
+                    ),
+                    eq_buf: Vec::new(),
                 }
             }
         }
@@ -124,6 +140,7 @@ impl SpotifyAudioSink {
         match Self::open(
             Arc::clone(&self.output_loss),
             Arc::clone(&self.mono_enabled),
+            self.eq.shared_gains(),
         ) {
             Ok(sink) => {
                 *self = sink;
@@ -191,6 +208,10 @@ impl Sink for SpotifyAudioSink {
             .samples()
             .map_err(|error| SinkError::OnWrite(error.to_string()))?;
         let samples_f32: &[f32] = &converter.f64_to_f32(samples);
+        self.eq_buf.clear();
+        self.eq_buf.extend_from_slice(samples_f32);
+        self.eq.process_interleaved(&mut self.eq_buf);
+        let samples_f32: &[f32] = &self.eq_buf;
         if self.mono_enabled.load(Ordering::Relaxed) {
             crate::audio::mono::mixdown_interleaved(
                 samples_f32,
