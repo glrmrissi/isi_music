@@ -127,7 +127,13 @@ fn cover_temp_path_from_url(url: &str) -> Option<PathBuf> {
     cache_cover_bytes(&bytes)
 }
 
-/// Writes raw cover bytes to a temp file named by the bytes' MD5 hash and
+fn cover_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .map(|d| d.join("isi-music").join("covers"))
+        .unwrap_or_else(|| std::env::temp_dir().join("isi-music").join("covers"))
+}
+
+/// Writes raw cover bytes to a cache file named by the bytes' MD5 hash and
 /// returns the path.  Used to feed the SMTC thumbnail for tracks whose cover
 /// is only available as in-memory bytes (e.g. Spotify tracks played via
 /// librespot, where `art_url`/`cover_path` are not populated by the player).
@@ -137,24 +143,36 @@ pub fn cache_cover_bytes(bytes: &[u8]) -> Option<PathBuf> {
     }
     let hash = md5_hex(bytes);
     let ext = guess_extension(bytes);
-    let path = std::env::temp_dir().join(format!("isi-music-cover-{hash}.{ext}"));
+    let dir = cover_cache_dir();
+    let path = dir.join(format!("{hash}.{ext}"));
     if !path.exists() {
+        let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(&path, bytes);
     }
     Some(path)
 }
 
 pub fn cleanup_cover_cache() {
-    let temp = std::env::temp_dir();
     let cutoff = std::time::SystemTime::now() - Duration::from_secs(86400 * 7);
+    remove_old_files(&cover_cache_dir(), cutoff);
+
+    let temp = std::env::temp_dir();
     if let Ok(entries) = std::fs::read_dir(&temp) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if !name.starts_with("isi-music-cover-") {
-                continue;
+            if name.starts_with("isi-music-cover-") {
+                let _ = std::fs::remove_file(entry.path());
             }
+        }
+    }
+}
+
+fn remove_old_files(dir: &std::path::Path, cutoff: std::time::SystemTime) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
             if let Ok(meta) = entry.metadata()
+                && meta.is_file()
                 && let Ok(modified) = meta.modified()
                 && modified < cutoff
             {
