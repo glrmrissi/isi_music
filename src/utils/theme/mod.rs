@@ -309,7 +309,7 @@ impl Theme {
             }
             let default_theme = Self::default();
             if let Ok(toml_str) = toml::to_string_pretty(&default_theme) {
-                let _ = fs::write(&path, toml_str);
+                let _ = crate::config::write_atomic(&path, &toml_str);
             }
             return default_theme;
         }
@@ -328,7 +328,7 @@ impl Theme {
                 if !has_new_fields {
                     let migrated = Self::migrate_from_legacy(&theme);
                     if let Ok(toml_str) = toml::to_string_pretty(&migrated) {
-                        let _ = fs::write(&path, toml_str);
+                        let _ = crate::config::write_atomic(&path, &toml_str);
                     }
                     return migrated;
                 }

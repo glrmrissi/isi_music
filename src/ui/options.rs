@@ -99,6 +99,9 @@ impl SettingsPanel {
 
     pub fn save_config(&self) {
         if let Ok(mut guard) = self.settings.lock() {
+            if guard.load_failed {
+                return;
+            }
             guard.config = self.config.clone();
             guard.mark_dirty();
             if !cfg!(test) {

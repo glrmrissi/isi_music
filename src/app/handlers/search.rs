@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::event::KeyCode;
+use tracing::warn;
 
 use crate::App;
 use crate::app::fetcher::StreamEvent;
@@ -94,12 +95,19 @@ impl App {
             return;
         };
 
-        let nodes = tokio::task::spawn_blocking(move || {
+        let nodes = match tokio::task::spawn_blocking(move || {
             let _scan_guard = scan_guard;
             crate::app::library::scan_local_files(&dir)
         })
         .await
-        .unwrap_or_default();
+        {
+            Ok(nodes) => nodes,
+            Err(e) => {
+                warn!("local file scan task failed; keeping existing tree: {e}");
+                self.state.status_msg = Some("Local file scan failed".to_string());
+                return;
+            }
+        };
 
         let tree = crate::ui::LocalFileTree::new(nodes);
         self.state.local_tree = tree;

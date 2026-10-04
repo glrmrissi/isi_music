@@ -320,7 +320,7 @@ impl Keybinds {
         if !path.exists() {
             let _ = std::fs::create_dir_all(path.parent().unwrap_or(&PathBuf::from(".")));
             if let Ok(toml_str) = toml::to_string_pretty(&KeybindsTomlOutput::from_defaults()) {
-                let _ = std::fs::write(&path, toml_str);
+                let _ = crate::config::write_atomic(&path, &toml_str);
             }
             return defaults;
         }

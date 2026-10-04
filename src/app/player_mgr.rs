@@ -1,10 +1,57 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification};
+use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification, QueuedTrack};
 use crate::spotify::SpotifyClient;
 use crate::ui::UiState;
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
+
+pub struct PlayerRestore {
+    pub queue: Vec<String>,
+    pub index: Option<usize>,
+    pub user_queue: Vec<QueuedTrack>,
+    pub volume: u8,
+    pub shuffle: bool,
+    pub repeat: crate::player::RepeatMode,
+    pub progress_ms: u64,
+    pub is_playing: bool,
+}
+
+impl PlayerRestore {
+    pub fn apply(&self, p: &mut dyn AudioPlayer) {
+        p.set_volume(self.volume);
+        if !self.queue.is_empty() {
+            p.set_queue(self.queue.clone(), self.index.unwrap_or(0));
+        }
+        for qt in &self.user_queue {
+            p.add_to_queue(
+                qt.uri.clone(),
+                qt.name.clone(),
+                qt.artist.clone(),
+                qt.album.clone(),
+                qt.duration_ms,
+                qt.cover_path.clone(),
+            );
+        }
+        if self.shuffle {
+            p.toggle_shuffle();
+        }
+        match self.repeat {
+            crate::player::RepeatMode::Queue => p.cycle_repeat(),
+            crate::player::RepeatMode::Track => {
+                p.cycle_repeat();
+                p.cycle_repeat();
+            }
+            crate::player::RepeatMode::Off => {}
+        }
+        if self.progress_ms > 1000 {
+            p.seek_mut(self.progress_ms as u32);
+        }
+        if !self.is_playing {
+            p.pause();
+        }
+    }
+}
 
 pub struct PlayerManager {
     pub player: Option<Box<dyn AudioPlayer>>,
@@ -28,6 +75,7 @@ pub struct PlayerManager {
     pub progress_at_play_start: u64,
     pub initial_sync_done: bool,
     pub last_failed_player_attempt: Option<Instant>,
+    pub pending_player_restore: Option<PlayerRestore>,
 }
 
 impl PlayerManager {
@@ -59,7 +107,27 @@ impl PlayerManager {
             progress_at_play_start: 0,
             initial_sync_done: false,
             last_failed_player_attempt: None,
+            pending_player_restore: None,
         }
+    }
+
+    pub fn take_restore_snapshot(&mut self, progress_ms: u64) -> Option<PlayerRestore> {
+        if let Some(r) = self.pending_player_restore.take() {
+            return Some(r);
+        }
+        self.player.as_ref().map(|p| {
+            let (queue, index) = p.snapshot_queue();
+            PlayerRestore {
+                queue,
+                index,
+                user_queue: p.snapshot_user_queue(),
+                volume: p.volume(),
+                shuffle: p.shuffle(),
+                repeat: p.repeat(),
+                progress_ms,
+                is_playing: p.is_playing(),
+            }
+        })
     }
 
     pub async fn ensure_spotify_player(
@@ -93,7 +161,10 @@ impl PlayerManager {
         let token = spotify.get_access_token().await;
         match NativePlayer::new(token, false, audio.librespot_bitrate(), audio.gapless).await {
             Ok(mut p) => {
-                p.set_volume(self.saved_volume);
+                match self.pending_player_restore.take() {
+                    Some(r) => r.apply(&mut p),
+                    None => p.set_volume(self.saved_volume),
+                }
                 p.set_visualizer_enabled(state.show_visualizer);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
@@ -343,3 +414,7 @@ pub struct NotificationResult {
     pub needs_radio_refill: bool,
     pub needs_product_check: bool,
 }
+
+#[cfg(test)]
+#[path = "../../tests/app/player_mgr.rs"]
+mod tests;

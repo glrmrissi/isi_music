@@ -21,6 +21,7 @@ pub struct MockPlayer {
 }
 
 impl MockPlayer {
+    #[allow(dead_code)]
     pub fn new(next_called: Arc<AtomicBool>, prev_called: Arc<AtomicBool>) -> Self {
         Self {
             is_playing: false,
@@ -106,9 +107,9 @@ impl AudioPlayer for MockPlayer {
     }
     fn cycle_repeat(&mut self) {
         self.repeat = match self.repeat {
-            RepeatMode::Off => RepeatMode::Track,
-            RepeatMode::Track => RepeatMode::Queue,
-            RepeatMode::Queue => RepeatMode::Off,
+            RepeatMode::Off => RepeatMode::Queue,
+            RepeatMode::Queue => RepeatMode::Track,
+            RepeatMode::Track => RepeatMode::Off,
         };
     }
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
@@ -158,6 +159,9 @@ impl AudioPlayer for MockPlayer {
     }
     fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
         (self.queue.clone(), self.current_index)
+    }
+    fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        self.user_queue.clone()
     }
     fn current_track_summary(&self) -> Option<crate::spotify::TrackSummary> {
         self.queue

@@ -83,9 +83,18 @@ impl App {
         keybinds_rx: crate::keybinds::KeybindsWatcher,
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
-        let settings = Arc::new(Mutex::new(
-            crate::settings::Settings::load().unwrap_or_default(),
-        ));
+        let mut settings_load_failed = false;
+        let settings = Arc::new(Mutex::new(match crate::settings::Settings::load() {
+            Ok(s) => s,
+            Err(e) => {
+                settings_load_failed = true;
+                warn!("config.toml failed to load; settings changes will not be saved: {e:#}");
+                crate::settings::Settings {
+                    load_failed: true,
+                    ..Default::default()
+                }
+            }
+        }));
         let cfg = lock_or_recover(&settings).config.clone();
         let autoplay_enabled = cfg.autoplay_enabled();
         let spotify_enabled = cfg.spotify_enabled();
@@ -107,6 +116,10 @@ impl App {
         debug_overlay.log(LogLevel::Info, "isi-music starting up");
 
         let mut startup_warning: Option<String> = None;
+        if settings_load_failed {
+            startup_warning =
+                Some("config.toml failed to load; settings changes will not be saved".to_string());
+        }
 
         let spotify = if spotify_enabled {
             match SpotifyClient::new().await {

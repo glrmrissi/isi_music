@@ -401,43 +401,9 @@ impl App {
             return;
         }
 
-        let (saved_queue, saved_index) = self
+        let saved = self
             .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.snapshot_queue())
-            .unwrap_or_default();
-        let saved_user_queue = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.snapshot_user_queue())
-            .unwrap_or_default();
-        let saved_volume = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.volume())
-            .unwrap_or(50);
-        let saved_shuffle = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.shuffle())
-            .unwrap_or(false);
-        let saved_repeat = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.repeat())
-            .unwrap_or(crate::player::RepeatMode::Off);
-        let saved_progress = self.state.playback.progress_ms;
-        let saved_is_playing = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.is_playing())
-            .unwrap_or(false);
+            .take_restore_snapshot(self.state.playback.progress_ms);
 
         self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
@@ -453,39 +419,9 @@ impl App {
         .await
         {
             Ok(mut p) => {
-                p.set_volume(saved_volume);
-                if !saved_queue.is_empty() {
-                    let start = saved_index.unwrap_or(0);
-                    p.set_queue(saved_queue, start);
-                }
-                for qt in &saved_user_queue {
-                    p.add_to_queue(
-                        qt.uri.clone(),
-                        qt.name.clone(),
-                        qt.artist.clone(),
-                        qt.album.clone(),
-                        qt.duration_ms,
-                        qt.cover_path.clone(),
-                    );
-                }
-                if saved_shuffle {
-                    p.toggle_shuffle();
-                }
-                match saved_repeat {
-                    crate::player::RepeatMode::Queue => {
-                        p.cycle_repeat();
-                    }
-                    crate::player::RepeatMode::Track => {
-                        p.cycle_repeat();
-                        p.cycle_repeat();
-                    }
-                    crate::player::RepeatMode::Off => {}
-                }
-                if saved_progress > 1000 {
-                    p.seek(saved_progress as u32);
-                }
-                if !saved_is_playing {
-                    p.pause();
+                match &saved {
+                    Some(r) => r.apply(&mut p),
+                    None => p.set_volume(50),
                 }
                 p.set_visualizer_enabled(self.state.show_visualizer);
                 self.player_mgr.band_energies = p.band_energies();
@@ -501,11 +437,25 @@ impl App {
                 self.player_mgr.session_reconnecting = false;
             }
             Err(e) => {
+                self.player_mgr.pending_player_restore = saved;
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("free") || msg.contains("premium") {
                     warn!("Spotify free account — disabling streaming permanently");
                     self.player_mgr
                         .disable_streaming(&mut self.state, &self.debug_overlay);
+                    self.player_mgr.session_reconnecting = false;
+                } else if msg.contains("setup-spotify") || msg.contains("not initialized") {
+                    warn!("Streaming authentication missing — cannot reconnect: {e:#}");
+                    self.debug_overlay.log(
+                        crate::utils::debug_overlay::LogLevel::Api,
+                        format!("Reconnect aborted, streaming auth missing: {e:#}"),
+                    );
+                    self.state.status_msg = Some(
+                        "Spotify streaming is not authenticated. Run `isi-music setup-spotify`."
+                            .to_string(),
+                    );
+                    self.player_mgr.reconnect_attempts = 0;
+                    self.player_mgr.last_reconnect_attempt = None;
                     self.player_mgr.session_reconnecting = false;
                 } else if msg.contains("401") || msg.contains("unauthorized") {
                     warn!(
