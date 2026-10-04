@@ -130,6 +130,7 @@ pub trait AudioPlayer: Send {
         vec![]
     }
     fn set_visualizer_enabled(&mut self, _enabled: bool) {}
+    fn set_mono_enabled(&mut self, _enabled: bool) {}
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None
     }
@@ -173,6 +174,7 @@ pub struct NativePlayer {
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     server_position: Arc<Mutex<(u64, Instant)>>,
     analyzer_enabled: Arc<AtomicBool>,
+    mono_enabled: Arc<AtomicBool>,
     audio_output_loss: Arc<AudioOutputLoss>,
     audio_output_lost: bool,
     play_history: VecDeque<usize>,
@@ -330,9 +332,11 @@ impl NativePlayer {
         info!("Librespot session established");
 
         let audio_output_loss = Arc::new(AudioOutputLoss::default());
+        let mono_enabled = Arc::new(AtomicBool::new(false));
         let loss_for_initial_sink = Arc::clone(&audio_output_loss);
+        let mono_for_initial_sink = Arc::clone(&mono_enabled);
         let initial_sink = tokio::task::spawn_blocking(move || {
-            SpotifyAudioSink::open_or_unavailable(loss_for_initial_sink)
+            SpotifyAudioSink::open_or_unavailable(loss_for_initial_sink, mono_for_initial_sink)
         })
         .await
         .context("failed to spawn audio output initialization")?;
@@ -349,10 +353,12 @@ impl NativePlayer {
         let session_for_player = session.clone();
         let server_position: Arc<Mutex<(u64, Instant)>> = Arc::new(Mutex::new((0, Instant::now())));
         let loss_for_sink_factory = Arc::clone(&audio_output_loss);
+        let mono_for_sink_factory = Arc::clone(&mono_enabled);
         let sink_factory: Box<dyn Fn() -> Box<dyn Sink> + Send> = Box::new(move || {
-            Box::new(SpotifyAudioSink::open_or_unavailable(Arc::clone(
-                &loss_for_sink_factory,
-            )))
+            Box::new(SpotifyAudioSink::open_or_unavailable(
+                Arc::clone(&loss_for_sink_factory),
+                Arc::clone(&mono_for_sink_factory),
+            ))
         });
 
         let player = LibrespotPlayer::new(
@@ -464,6 +470,7 @@ impl NativePlayer {
             band_energies: bands,
             server_position,
             analyzer_enabled,
+            mono_enabled,
             audio_output_loss,
             audio_output_lost: false,
             play_history: VecDeque::new(),
@@ -1056,6 +1063,10 @@ impl AudioPlayer for NativePlayer {
 
     fn set_visualizer_enabled(&mut self, enabled: bool) {
         self.analyzer_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    fn set_mono_enabled(&mut self, enabled: bool) {
+        self.mono_enabled.store(enabled, Ordering::Relaxed);
     }
 
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {

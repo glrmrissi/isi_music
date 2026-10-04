@@ -166,6 +166,7 @@ impl PlayerManager {
                     None => p.set_volume(self.saved_volume),
                 }
                 p.set_visualizer_enabled(state.show_visualizer);
+                p.set_mono_enabled(state.mono_audio);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = false;
@@ -208,6 +209,7 @@ impl PlayerManager {
         match LocalPlayer::new(self.saved_volume, &self.local_db_path) {
             Ok(mut p) => {
                 p.set_visualizer_enabled(state.show_visualizer);
+                p.set_mono_enabled(state.mono_audio);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = true;

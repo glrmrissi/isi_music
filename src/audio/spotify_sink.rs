@@ -64,10 +64,15 @@ pub(crate) struct SpotifyAudioSink {
     _stream: Option<OutputStream>,
     output_loss: Arc<AudioOutputLoss>,
     generation_lost: Arc<AtomicBool>,
+    mono_enabled: Arc<AtomicBool>,
+    mono_buf: Vec<f32>,
 }
 
 impl SpotifyAudioSink {
-    pub(crate) fn open(output_loss: Arc<AudioOutputLoss>) -> Result<Self> {
+    pub(crate) fn open(
+        output_loss: Arc<AudioOutputLoss>,
+        mono_enabled: Arc<AtomicBool>,
+    ) -> Result<Self> {
         let generation_lost = Arc::new(AtomicBool::new(false));
         let loss_from_callback = Arc::clone(&output_loss);
         let lost_from_callback = Arc::clone(&generation_lost);
@@ -89,11 +94,16 @@ impl SpotifyAudioSink {
             _stream: Some(stream),
             output_loss,
             generation_lost,
+            mono_enabled,
+            mono_buf: Vec::new(),
         })
     }
 
-    pub(crate) fn open_or_unavailable(output_loss: Arc<AudioOutputLoss>) -> Self {
-        match Self::open(Arc::clone(&output_loss)) {
+    pub(crate) fn open_or_unavailable(
+        output_loss: Arc<AudioOutputLoss>,
+        mono_enabled: Arc<AtomicBool>,
+    ) -> Self {
+        match Self::open(Arc::clone(&output_loss), mono_enabled) {
             Ok(sink) => sink,
             Err(error) => {
                 tracing::warn!("Spotify audio output is unavailable: {error:#}");
@@ -103,13 +113,18 @@ impl SpotifyAudioSink {
                     _stream: None,
                     output_loss,
                     generation_lost: Arc::new(AtomicBool::new(true)),
+                    mono_enabled: Arc::new(AtomicBool::new(false)),
+                    mono_buf: Vec::new(),
                 }
             }
         }
     }
 
     fn reopen(&mut self) -> SinkResult<()> {
-        match Self::open(Arc::clone(&self.output_loss)) {
+        match Self::open(
+            Arc::clone(&self.output_loss),
+            Arc::clone(&self.mono_enabled),
+        ) {
             Ok(sink) => {
                 *self = sink;
                 Ok(())
@@ -176,11 +191,24 @@ impl Sink for SpotifyAudioSink {
             .samples()
             .map_err(|error| SinkError::OnWrite(error.to_string()))?;
         let samples_f32: &[f32] = &converter.f64_to_f32(samples);
-        sink.append(SamplesBuffer::new(
-            NUM_CHANNELS as u16,
-            SAMPLE_RATE,
-            samples_f32,
-        ));
+        if self.mono_enabled.load(Ordering::Relaxed) {
+            crate::audio::mono::mixdown_interleaved(
+                samples_f32,
+                NUM_CHANNELS as usize,
+                &mut self.mono_buf,
+            );
+            sink.append(SamplesBuffer::new(
+                NUM_CHANNELS as u16,
+                SAMPLE_RATE,
+                self.mono_buf.as_slice(),
+            ));
+        } else {
+            sink.append(SamplesBuffer::new(
+                NUM_CHANNELS as u16,
+                SAMPLE_RATE,
+                samples_f32,
+            ));
+        }
 
         let result = wait_for_queue_drain(
             || sink.len(),

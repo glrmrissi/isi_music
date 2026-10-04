@@ -199,6 +199,51 @@ async fn settings_lyrics_display_toggle_persists() {
 }
 
 #[tokio::test]
+async fn settings_mono_audio_toggle_persists_and_reaches_player() {
+    let mut app = App::new_for_test().await;
+    app.state.mono_audio = false;
+    let mono_flag = Arc::new(AtomicBool::new(false));
+    let mut mock = MockPlayer::new(Arc::default(), Arc::default());
+    mock.mono_enabled = Arc::clone(&mono_flag);
+    app.player_mgr.player = Some(Box::new(mock));
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::General;
+        #[cfg(feature = "album-art")]
+        {
+            panel.selected_item = 4;
+        }
+        #[cfg(not(feature = "album-art"))]
+        {
+            panel.selected_item = 3;
+        }
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert!(app.state.mono_audio);
+    assert_eq!(app.state.status_msg.as_deref(), Some("Mono audio enabled"));
+    assert!(mono_flag.load(Ordering::Relaxed));
+    assert_eq!(
+        app.settings_panel.as_ref().map(|p| p.config.audio.mono),
+        Some(true)
+    );
+    assert_eq!(
+        app.settings_panel
+            .as_ref()
+            .and_then(|p| p.settings.lock().ok())
+            .map(|s| s.config.audio.mono),
+        Some(true)
+    );
+}
+
+#[tokio::test]
 async fn settings_general_renders_lyrics_display() {
     let mut app = App::new_for_test().await;
     let panel = app.settings_panel.as_mut().unwrap();

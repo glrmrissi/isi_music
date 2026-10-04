@@ -241,6 +241,10 @@ impl AudioPlayer for LocalPlayer {
         self.analyzer.set_enabled(enabled);
     }
 
+    fn set_mono_enabled(&mut self, enabled: bool) {
+        self.mono_enabled.store(enabled, Ordering::Relaxed);
+    }
+
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         self.analyzer.band_energies()
     }

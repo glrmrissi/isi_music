@@ -18,6 +18,7 @@ pub struct MockPlayer {
     pub playing_queued: Option<QueuedTrack>,
     pub notifications: std::collections::VecDeque<PlayerNotification>,
     pub current_index: Option<usize>,
+    pub mono_enabled: Arc<AtomicBool>,
 }
 
 impl MockPlayer {
@@ -35,6 +36,7 @@ impl MockPlayer {
             playing_queued: None,
             notifications: std::collections::VecDeque::new(),
             current_index: None,
+            mono_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -52,6 +54,7 @@ impl MockPlayer {
             playing_queued: None,
             notifications: std::collections::VecDeque::new(),
             current_index: None,
+            mono_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -178,6 +181,9 @@ impl AudioPlayer for MockPlayer {
     }
     fn try_recv_event(&mut self) -> Option<crate::player::PlayerNotification> {
         self.notifications.pop_front()
+    }
+    fn set_mono_enabled(&mut self, enabled: bool) {
+        self.mono_enabled.store(enabled, Ordering::Relaxed);
     }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None

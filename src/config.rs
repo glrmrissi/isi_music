@@ -126,6 +126,8 @@ pub struct AudioConfig {
     /// Spotify stream bitrate in kbps: 96, 160 or 320.
     #[serde(default = "default_bitrate")]
     pub bitrate: u16,
+    #[serde(default)]
+    pub mono: bool,
 }
 
 fn default_true() -> bool {
