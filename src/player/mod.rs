@@ -3,6 +3,7 @@ pub mod local;
 pub use local::LocalPlayer;
 
 use crate::audio::audio_sink::{AnalyzerSink, N_BANDS};
+use crate::audio::spotify_sink::{AudioOutputLoss, SpotifyAudioSink};
 use crate::config;
 use crate::spotify::TrackSummary;
 use crate::ui::PlaybackState;
@@ -16,8 +17,8 @@ use librespot_metadata::{
     playlist::list::SelectedListContent,
 };
 use librespot_playback::{
-    audio_backend::{self, Sink},
-    config::{AudioFormat, PlayerConfig},
+    audio_backend::Sink,
+    config::PlayerConfig,
     mixer::{self, Mixer, MixerConfig},
     player::{Player as LibrespotPlayer, PlayerEvent},
 };
@@ -25,6 +26,7 @@ use librespot_protocol::playlist4_external::SelectedListContent as SelectedListC
 use protobuf::Message as _;
 
 use rand::seq::SliceRandom;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -46,12 +48,23 @@ pub enum RepeatMode {
     Queue,
 }
 
+pub(crate) const MAX_PLAY_HISTORY: usize = 512;
+
+pub(crate) fn remember_play_history(history: &mut VecDeque<usize>, index: usize) {
+    if history.len() >= MAX_PLAY_HISTORY {
+        history.pop_front();
+    }
+    history.push_back(index);
+}
+
 pub enum PlayerNotification {
     TrackEnded,
     TrackUnavailable,
     Playing,
     Paused,
     SessionLost,
+    AudioOutputLost,
+    AudioOutputRestored,
     FreeAccountDetected,
     PreloadNextTrack,
 }
@@ -160,7 +173,9 @@ pub struct NativePlayer {
     pub band_energies: Arc<Mutex<Vec<f32>>>,
     server_position: Arc<Mutex<(u64, Instant)>>,
     analyzer_enabled: Arc<AtomicBool>,
-    play_history: Vec<usize>,
+    audio_output_loss: Arc<AudioOutputLoss>,
+    audio_output_lost: bool,
+    play_history: VecDeque<usize>,
 }
 
 pub async fn ensure_streaming_auth() -> Result<()> {
@@ -289,8 +304,13 @@ impl NativePlayer {
 
         info!("Librespot session established");
 
-        let audio_format = AudioFormat::default();
-        let backend = audio_backend::find(None).context("No audio backend found")?;
+        let audio_output_loss = Arc::new(AudioOutputLoss::default());
+        let loss_for_initial_sink = Arc::clone(&audio_output_loss);
+        let initial_sink = tokio::task::spawn_blocking(move || {
+            SpotifyAudioSink::open_or_unavailable(loss_for_initial_sink)
+        })
+        .await
+        .context("failed to spawn audio output initialization")?;
 
         let mixer_fn = mixer::find(None).context("No mixer found")?;
         let soft_mixer = mixer_fn(MixerConfig::default()).context("Failed to create mixer")?;
@@ -303,10 +323,12 @@ impl NativePlayer {
 
         let session_for_player = session.clone();
         let server_position: Arc<Mutex<(u64, Instant)>> = Arc::new(Mutex::new((0, Instant::now())));
-
-        // factory to recreate inner sink (drops queued audio)
-        let sink_factory: Box<dyn Fn() -> Box<dyn Sink> + Send> =
-            Box::new(move || backend(None, audio_format));
+        let loss_for_sink_factory = Arc::clone(&audio_output_loss);
+        let sink_factory: Box<dyn Fn() -> Box<dyn Sink> + Send> = Box::new(move || {
+            Box::new(SpotifyAudioSink::open_or_unavailable(Arc::clone(
+                &loss_for_sink_factory,
+            )))
+        });
 
         let player = LibrespotPlayer::new(
             PlayerConfig {
@@ -320,9 +342,8 @@ impl NativePlayer {
             session_for_player,
             volume_getter,
             move || {
-                let inner = backend(None, audio_format);
                 Box::new(AnalyzerSink::with_factory(
-                    inner,
+                    Box::new(initial_sink),
                     Arc::clone(&bands_for_sink),
                     Arc::clone(&analyzer_enabled_for_sink),
                     sink_factory,
@@ -418,7 +439,9 @@ impl NativePlayer {
             band_energies: bands,
             server_position,
             analyzer_enabled,
-            play_history: Vec::new(),
+            audio_output_loss,
+            audio_output_lost: false,
+            play_history: VecDeque::new(),
         };
         instance.apply_volume();
         Ok(instance)
@@ -640,10 +663,11 @@ impl NativePlayer {
                 info!("Loading URI: {uri}");
                 self.player.stop();
                 self.player.load(spotify_uri, true, 0);
-                if let Some(prev) = self.current_index
+                if self.shuffle
+                    && let Some(prev) = self.current_index
                     && prev != index
                 {
-                    self.play_history.push(prev);
+                    remember_play_history(&mut self.play_history, prev);
                 }
                 self.current_index = Some(index);
                 self.is_playing = true;
@@ -780,7 +804,7 @@ impl NativePlayer {
 
     pub fn prev(&mut self) -> bool {
         if self.shuffle {
-            if let Some(prev_idx) = self.play_history.pop() {
+            if let Some(prev_idx) = self.play_history.pop_back() {
                 self.load_index(prev_idx);
                 return true;
             }
@@ -976,13 +1000,29 @@ impl AudioPlayer for NativePlayer {
     }
 
     fn try_recv_event(&mut self) -> Option<PlayerNotification> {
-        let notif = self.event_rx.try_recv().ok()?;
-        match &notif {
-            PlayerNotification::Playing => self.is_playing = true,
-            PlayerNotification::Paused => self.is_playing = false,
-            _ => {}
+        while let Ok(notif) = self.event_rx.try_recv() {
+            match &notif {
+                PlayerNotification::Playing
+                    if self.audio_output_lost || self.audio_output_loss.is_lost() =>
+                {
+                    continue;
+                }
+                PlayerNotification::Playing => self.is_playing = true,
+                PlayerNotification::Paused => self.is_playing = false,
+                _ => {}
+            }
+            return Some(notif);
         }
-        Some(notif)
+        if self.audio_output_loss.take_notification() {
+            self.audio_output_lost = true;
+            return Some(PlayerNotification::AudioOutputLost);
+        }
+        if self.audio_output_loss.take_restored_notification() {
+            self.audio_output_lost = false;
+            self.is_playing = true;
+            return Some(PlayerNotification::AudioOutputRestored);
+        }
+        None
     }
 
     fn preload_next(&mut self) {

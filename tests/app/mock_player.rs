@@ -4,7 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use crate::player::{AudioPlayer, QueuedTrack, RepeatMode};
+use crate::player::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode};
 
 pub struct MockPlayer {
     pub is_playing: bool,
@@ -16,6 +16,7 @@ pub struct MockPlayer {
     pub queue: Vec<String>,
     pub user_queue: Vec<QueuedTrack>,
     pub playing_queued: Option<QueuedTrack>,
+    pub notifications: std::collections::VecDeque<PlayerNotification>,
     pub current_index: Option<usize>,
 }
 
@@ -31,6 +32,7 @@ impl MockPlayer {
             queue: Vec::new(),
             user_queue: Vec::new(),
             playing_queued: None,
+            notifications: std::collections::VecDeque::new(),
             current_index: None,
         }
     }
@@ -47,8 +49,14 @@ impl MockPlayer {
             queue: Vec::new(),
             user_queue: queue,
             playing_queued: None,
+            notifications: std::collections::VecDeque::new(),
             current_index: None,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn push_notification(&mut self, notification: PlayerNotification) {
+        self.notifications.push_back(notification);
     }
 }
 
@@ -165,7 +173,7 @@ impl AudioPlayer for MockPlayer {
             })
     }
     fn try_recv_event(&mut self) -> Option<crate::player::PlayerNotification> {
-        None
+        self.notifications.pop_front()
     }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None

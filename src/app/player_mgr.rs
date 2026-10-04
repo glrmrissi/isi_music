@@ -19,8 +19,8 @@ pub struct PlayerManager {
     pub autoplay_enabled: bool,
     pub recent_track_uris: std::collections::VecDeque<String>,
     pub playing_tracks: Vec<crate::spotify::TrackSummary>,
-    pub consecutive_unavailable: u32,
     pub spotify_streaming_disabled: bool,
+    pub product_check_pending: bool,
     pub reconnect_attempts: u32,
     pub last_reconnect_attempt: Option<Instant>,
     pub last_playback_health_check: Instant,
@@ -50,8 +50,8 @@ impl PlayerManager {
             autoplay_enabled,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
-            consecutive_unavailable: 0,
             spotify_streaming_disabled: false,
+            product_check_pending: false,
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
             last_playback_health_check: Instant::now(),
@@ -71,6 +71,10 @@ impl PlayerManager {
     ) -> bool {
         if self.player.is_some() && !self.local_active {
             return true;
+        }
+        if self.spotify_streaming_disabled {
+            state.status_msg = Some("Spotify Premium required for streaming".to_string());
+            return false;
         }
         if self.parked_player.is_some() && self.local_active {
             std::mem::swap(&mut self.player, &mut self.parked_player);
@@ -110,7 +114,7 @@ impl PlayerManager {
                         format!("Failed to create Spotify player: {e:#}")
                     };
                 state.status_msg = Some(status.clone());
-                debug_overlay.log(LogLevel::Warn, format!("{status}: {e:#}"));
+                debug_overlay.log(LogLevel::Api, format!("{status}: {e:#}"));
                 false
             }
         }
@@ -140,7 +144,7 @@ impl PlayerManager {
             }
             Err(e) => {
                 debug_overlay.log(
-                    LogLevel::Error,
+                    LogLevel::Audio,
                     format!("Failed to create local player: {e}"),
                 );
                 false
@@ -219,7 +223,6 @@ impl PlayerManager {
             while let Some(notif) = player.try_recv_event() {
                 match notif {
                     PlayerNotification::TrackEnded => {
-                        self.consecutive_unavailable = 0;
                         if player.next() {
                             result.needs_sync = true;
                         } else if parked_has_queue {
@@ -233,16 +236,40 @@ impl PlayerManager {
                         }
                     }
                     PlayerNotification::Playing => {
-                        self.consecutive_unavailable = 0;
                         state.playback.is_playing = true;
+                        if state
+                            .status_msg
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with("Audio output device lost"))
+                        {
+                            state.status_msg = None;
+                        }
                         if self.local_active && self.playing_started_at.is_none() {
                             self.playing_started_at = Some(Instant::now());
                             self.progress_at_play_start = state.playback.progress_ms;
                         }
                     }
                     PlayerNotification::Paused => state.playback.is_playing = false,
+                    PlayerNotification::AudioOutputLost => {
+                        state.playback.is_playing = false;
+                        debug_overlay.log(LogLevel::Audio, "Audio output device lost".to_string());
+                        state.status_msg = Some(
+                            "Audio output device lost. Reconnect the speaker, then press Play to resume."
+                                .to_string(),
+                        );
+                    }
+                    PlayerNotification::AudioOutputRestored => {
+                        state.playback.is_playing = true;
+                        debug_overlay.log(LogLevel::Audio, "Audio output restored".to_string());
+                        if state
+                            .status_msg
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with("Audio output device lost"))
+                        {
+                            state.status_msg = None;
+                        }
+                    }
                     PlayerNotification::TrackUnavailable => {
-                        self.consecutive_unavailable += 1;
                         state.status_msg = Some("Track unavailable, skipping...".to_string());
                         if player.next() {
                             result.needs_sync = true;
@@ -263,21 +290,17 @@ impl PlayerManager {
                         }
                     }
                     PlayerNotification::FreeAccountDetected => {
-                        if !self.spotify_streaming_disabled {
-                            tracing::warn!("Free account detected - switching to local-only mode");
-                            self.spotify_streaming_disabled = true;
-                            self.consecutive_unavailable = 0;
-
-                            debug_overlay.log(
-                                LogLevel::Warn,
-                                "Free account detected - switching to local-only mode".to_string(),
+                        if !self.spotify_streaming_disabled && !self.product_check_pending {
+                            tracing::warn!(
+                                "Consecutive unavailable tracks - verifying account product"
                             );
-                            state.status_msg = Some(
-                                "Spotify Premium required. Switched to local-only mode."
+                            debug_overlay.log(
+                                LogLevel::Api,
+                                "Consecutive unavailable tracks - verifying account product"
                                     .to_string(),
                             );
-
-                            result.needs_player_swap = true;
+                            self.product_check_pending = true;
+                            result.needs_product_check = true;
                         }
                     }
                     PlayerNotification::PreloadNextTrack => {
@@ -285,22 +308,30 @@ impl PlayerManager {
                     }
                 }
             }
-
-            if result.needs_player_swap {
-                self.player = None;
-                self.band_energies = None;
-                if self.parked_player.is_some() {
-                    std::mem::swap(&mut self.player, &mut self.parked_player);
-                    self.local_active = true;
-                    self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
-                    result.needs_sync = true;
-                } else {
-                    result.needs_sync = false;
-                }
-            }
         }
 
         result
+    }
+
+    pub fn disable_streaming(&mut self, state: &mut UiState, debug_overlay: &DebugOverlay) {
+        if self.spotify_streaming_disabled {
+            return;
+        }
+        tracing::warn!("Spotify free account confirmed - switching to local-only mode");
+        self.spotify_streaming_disabled = true;
+        debug_overlay.log(
+            LogLevel::Api,
+            "Free account confirmed - switched to local-only mode".to_string(),
+        );
+        state.status_msg =
+            Some("Spotify Premium required. Switched to local-only mode.".to_string());
+        self.player = None;
+        self.band_energies = None;
+        if self.parked_player.is_some() {
+            std::mem::swap(&mut self.player, &mut self.parked_player);
+            self.local_active = true;
+            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        }
     }
 }
 
@@ -310,5 +341,5 @@ pub struct NotificationResult {
     pub needs_reconnect: bool,
     pub needs_crossover: bool,
     pub needs_radio_refill: bool,
-    pub needs_player_swap: bool,
+    pub needs_product_check: bool,
 }
