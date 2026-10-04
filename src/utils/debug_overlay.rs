@@ -14,7 +14,6 @@ use ratatui::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum LogLevel {
     Info,
     Warn,

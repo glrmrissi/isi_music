@@ -36,7 +36,6 @@ impl UiState {
             active_playlist_id: self.active_playlist_id.clone(),
             active_artist_name: self.active_artist_name.clone(),
             search_results: std::mem::take(&mut self.search_results),
-            previous_search: std::mem::take(&mut self.previous_search),
             tracks: std::mem::take(&mut self.tracks),
             sorted_track_indices: std::mem::take(&mut self.sorted_track_indices),
             track_sort_by: self.track_sort_by,
