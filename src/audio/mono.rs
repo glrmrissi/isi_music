@@ -23,6 +23,7 @@ pub struct MonoSource<S> {
     inner: S,
     enabled: Arc<AtomicBool>,
     channels: usize,
+    frame_pos: usize,
     emit_remaining: usize,
     emit_value: f32,
 }
@@ -34,6 +35,7 @@ impl<S: Source<Item = f32>> MonoSource<S> {
             inner,
             enabled,
             channels,
+            frame_pos: 0,
             emit_remaining: 0,
             emit_value: 0.0,
         }
@@ -46,10 +48,13 @@ impl<S: Source<Item = f32>> Iterator for MonoSource<S> {
     fn next(&mut self) -> Option<f32> {
         if self.emit_remaining > 0 {
             self.emit_remaining -= 1;
+            self.frame_pos = (self.frame_pos + 1) % self.channels;
             return Some(self.emit_value);
         }
-        if !self.enabled.load(Ordering::Relaxed) || self.channels < 2 {
-            return self.inner.next();
+        if !self.enabled.load(Ordering::Relaxed) || self.channels < 2 || self.frame_pos != 0 {
+            let s = self.inner.next()?;
+            self.frame_pos = (self.frame_pos + 1) % self.channels;
+            return Some(s);
         }
         let mut sum = 0.0f32;
         let mut n = 0usize;
@@ -67,6 +72,7 @@ impl<S: Source<Item = f32>> Iterator for MonoSource<S> {
         }
         self.emit_value = sum / n as f32;
         self.emit_remaining = n - 1;
+        self.frame_pos = 1;
         Some(self.emit_value)
     }
 }
@@ -89,8 +95,10 @@ impl<S: Source<Item = f32>> Source for MonoSource<S> {
     }
 
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.inner.try_seek(pos)?;
         self.emit_remaining = 0;
-        self.inner.try_seek(pos)
+        self.frame_pos = 0;
+        Ok(())
     }
 }
 
@@ -161,5 +169,81 @@ mod tests {
         let src = MonoSource::new(stereo_source(vec![0.4, 0.8, 0.5]), enabled);
         let out: Vec<f32> = src.collect();
         assert_eq!(out, vec![0.6, 0.6, 0.5]);
+    }
+
+    struct NoSeek<S>(S);
+
+    impl<S: Source<Item = f32>> Iterator for NoSeek<S> {
+        type Item = f32;
+
+        fn next(&mut self) -> Option<f32> {
+            self.0.next()
+        }
+    }
+
+    impl<S: Source<Item = f32>> Source for NoSeek<S> {
+        fn current_span_len(&self) -> Option<usize> {
+            self.0.current_span_len()
+        }
+
+        fn channels(&self) -> u16 {
+            self.0.channels()
+        }
+
+        fn sample_rate(&self) -> u32 {
+            self.0.sample_rate()
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            self.0.total_duration()
+        }
+
+        fn try_seek(&mut self, _pos: Duration) -> Result<(), SeekError> {
+            Err(SeekError::NotSupported {
+                underlying_source: "NoSeek",
+            })
+        }
+    }
+
+    #[test]
+    fn mono_source_toggle_at_odd_position_stays_frame_aligned() {
+        let enabled = Arc::new(AtomicBool::new(false));
+        let mut src = MonoSource::new(
+            stereo_source(vec![1.0, 0.5, 0.8, 0.4]),
+            Arc::clone(&enabled),
+        );
+        assert_eq!(src.next(), Some(1.0));
+        enabled.store(true, Ordering::Relaxed);
+        assert_eq!(src.next(), Some(0.5));
+        assert_eq!(src.next(), Some(0.6));
+        assert_eq!(src.next(), Some(0.6));
+        assert_eq!(src.next(), None);
+    }
+
+    #[test]
+    fn mono_source_toggle_off_mid_emission_resumes_aligned() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let mut src = MonoSource::new(
+            stereo_source(vec![1.0, -1.0, 0.8, 0.4, 0.2, 0.6]),
+            Arc::clone(&enabled),
+        );
+        assert_eq!(src.next(), Some(0.0));
+        enabled.store(false, Ordering::Relaxed);
+        assert_eq!(src.next(), Some(0.0));
+        assert_eq!(src.next(), Some(0.8));
+        assert_eq!(src.next(), Some(0.4));
+        assert_eq!(src.next(), Some(0.2));
+        assert_eq!(src.next(), Some(0.6));
+        assert_eq!(src.next(), None);
+    }
+
+    #[test]
+    fn mono_source_failed_seek_preserves_pending_emission() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let mut src = MonoSource::new(NoSeek(stereo_source(vec![1.0, -1.0, 0.6, 0.2])), enabled);
+        assert_eq!(src.next(), Some(0.0));
+        assert!(src.try_seek(Duration::ZERO).is_err());
+        let out: Vec<f32> = std::iter::from_fn(|| src.next()).collect();
+        assert_eq!(out, vec![0.0, 0.4, 0.4]);
     }
 }
