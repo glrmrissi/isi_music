@@ -577,7 +577,7 @@ impl App {
                                 let (tx, rx) = tokio::sync::oneshot::channel();
                                 tokio::spawn(async move {
                                     if let Ok(bytes) = tokio::fs::read(&path).await {
-                                        let _ = tx.send(bytes);
+                                        let _ = tx.send((None, bytes));
                                     }
                                 });
                                 self.fetcher.album_art_pending = Some(rx);
@@ -985,8 +985,12 @@ impl App {
             #[cfg(feature = "album-art")]
             if let Some(rx) = &mut self.fetcher.album_art_pending {
                 match rx.try_recv() {
-                    Ok(bytes) => {
+                    Ok((url, bytes)) => {
                         self.fetcher.album_art_pending = None;
+
+                        if url.is_some() {
+                            self.state.playback.art_url = url;
+                        }
 
                         #[cfg(windows)]
                         if let Some(path) = crate::utils::smtc::cache_cover_bytes(&bytes)

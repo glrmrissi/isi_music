@@ -360,7 +360,7 @@ impl App {
             if let Ok(resp) = http.get(&url).send().await
                 && let Ok(bytes) = resp.bytes().await
             {
-                let _ = tx.send(bytes.to_vec());
+                let _ = tx.send((Some(url), bytes.to_vec()));
             }
         });
     }
@@ -382,7 +382,7 @@ impl App {
 
                 tokio::spawn(async move {
                     if let Ok(bytes) = tokio::fs::read(&path).await {
-                        let _ = tx.send(bytes);
+                        let _ = tx.send((None, bytes));
                     }
                 });
             }

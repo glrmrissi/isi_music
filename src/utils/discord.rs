@@ -8,6 +8,42 @@ pub const DEFAULT_APP_ID: &str = "1489692487541850324";
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use std::sync::mpsc;
 
+#[cfg(feature = "discord")]
+fn http_image(url: &str) -> Option<&str> {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        Some(url)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "discord")]
+fn build_playing_activity<'a>(
+    title: &'a str,
+    artist: &'a str,
+    album: &'a str,
+    image: Option<&'a str>,
+) -> activity::Activity<'a> {
+    let large_text = if album.is_empty() { title } else { album };
+    let mut assets = activity::Assets::new().large_text(large_text);
+    if let Some(img) = image {
+        assets = assets.large_image(img);
+    }
+    activity::Activity::new()
+        .activity_type(activity::ActivityType::Listening)
+        .details(title)
+        .state(artist)
+        .timestamps(
+            activity::Timestamps::new().start(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            ),
+        )
+        .assets(assets)
+}
+
 pub struct DiscordRpc {
     tx: mpsc::SyncSender<RpcUpdate>,
 }
@@ -45,16 +81,24 @@ impl DiscordRpc {
                 .name("discord-rpc".into())
                 .spawn(move || {
                     let Ok(mut client) = DiscordIpcClient::new(&app_id) else {
+                        tracing::warn!("Discord RPC: failed to create IPC client");
                         return;
                     };
-                    if client.connect().is_err() {
+                    if let Err(e) = client.connect() {
+                        tracing::warn!("Discord RPC: connect failed: {e}");
                         return;
                     }
+                    tracing::info!("Discord RPC: connected");
 
                     let mut backoff_secs = 1u64;
                     const MAX_BACKOFF_SECS: u64 = 60;
 
                     for update in rx {
+                        if let RpcUpdate::Playing { title, art_url, .. } = &update {
+                            tracing::info!(
+                                "Discord RPC: sending playing for '{title}' art={art_url:?}"
+                            );
+                        }
                         let result = match &update {
                             RpcUpdate::Playing {
                                 title,
@@ -62,34 +106,10 @@ impl DiscordRpc {
                                 album,
                                 art_url,
                             } => {
-                                let act = activity::Activity::new()
-                                    .activity_type(activity::ActivityType::Listening)
-                                    .details(title)
-                                    .state(artist)
-                                    .timestamps(
-                                        activity::Timestamps::new().start(
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs()
-                                                as i64,
-                                        ),
-                                    );
-
-                                let large_text = if album.is_empty() { title } else { album };
-                                let mut assets = activity::Assets::new().large_text(large_text);
-
-                                if let Some(url) = art_url.as_deref() {
-                                    if url.starts_with("http") {
-                                        assets = assets.large_image(url);
-                                    } else {
-                                        assets = assets.large_image("default_music_icon");
-                                    }
-                                } else {
-                                    assets = assets.large_image("default_music_icon");
-                                }
-
-                                client.set_activity(act.assets(assets))
+                                let image = art_url.as_deref().and_then(http_image);
+                                client.set_activity(build_playing_activity(
+                                    title, artist, album, image,
+                                ))
                             }
                             RpcUpdate::Paused { title, artist } => client.set_activity(
                                 activity::Activity::new()
@@ -100,7 +120,22 @@ impl DiscordRpc {
                             RpcUpdate::Clear => client.clear_activity(),
                         };
 
-                        if result.is_err() {
+                        if result.is_ok() {
+                            match client.recv() {
+                                Ok((_, v)) => {
+                                    let s = v.to_string();
+                                    tracing::info!("Discord RPC: resp {}", &s[..s.len().min(500)]);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Discord RPC: response read failed: {e}")
+                                }
+                            }
+                        }
+
+                        if let Err(e) = result {
+                            tracing::warn!(
+                                "Discord RPC: activity update failed: {e}; reconnecting"
+                            );
                             let mut reconnected = false;
                             for _ in 0..3 {
                                 std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
@@ -112,6 +147,7 @@ impl DiscordRpc {
                                 backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
                             }
                             if !reconnected {
+                                tracing::warn!("Discord RPC: reconnect failed, thread exiting");
                                 break;
                             }
                             let _ = match &update {
@@ -121,31 +157,10 @@ impl DiscordRpc {
                                     album,
                                     art_url,
                                 } => {
-                                    let act = activity::Activity::new()
-                                        .activity_type(activity::ActivityType::Listening)
-                                        .details(title)
-                                        .state(artist)
-                                        .timestamps(
-                                            activity::Timestamps::new().start(
-                                                std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs()
-                                                    as i64,
-                                            ),
-                                        );
-                                    let large_text = if album.is_empty() { title } else { album };
-                                    let mut assets = activity::Assets::new().large_text(large_text);
-                                    if let Some(url) = art_url.as_deref() {
-                                        if url.starts_with("http") {
-                                            assets = assets.large_image(url);
-                                        } else {
-                                            assets = assets.large_image("default_music_icon");
-                                        }
-                                    } else {
-                                        assets = assets.large_image("default_music_icon");
-                                    }
-                                    client.set_activity(act.assets(assets))
+                                    let image = art_url.as_deref().and_then(http_image);
+                                    client.set_activity(build_playing_activity(
+                                        title, artist, album, image,
+                                    ))
                                 }
                                 RpcUpdate::Paused { title, artist } => client.set_activity(
                                     activity::Activity::new()
@@ -196,5 +211,31 @@ impl DiscordRpc {
         if self.tx.try_send(RpcUpdate::Clear).is_err() {
             tracing::trace!("Discord RPC channel full, dropping clear");
         }
+    }
+}
+
+#[cfg(all(test, feature = "discord"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_image_passes_http_urls() {
+        assert_eq!(
+            http_image("https://i.scdn.co/image/abc123"),
+            Some("https://i.scdn.co/image/abc123")
+        );
+        assert_eq!(
+            http_image("http://img.example.com/a.png"),
+            Some("http://img.example.com/a.png")
+        );
+    }
+
+    #[test]
+    fn http_image_rejects_local_and_empty() {
+        assert_eq!(http_image("C:\\covers\\art.jpg"), None);
+        assert_eq!(http_image("/home/user/cover.jpg"), None);
+        assert_eq!(http_image("file:///tmp/art.jpg"), None);
+        assert_eq!(http_image("spotify:image:abc"), None);
+        assert_eq!(http_image(""), None);
     }
 }

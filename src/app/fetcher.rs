@@ -138,7 +138,7 @@ pub struct FetchCoordinator {
     local_scan_running: Arc<AtomicBool>,
     local_scan_cancelled: Arc<AtomicBool>,
     pub local_scan_total: usize,
-    pub album_art_pending: Option<tokio::sync::oneshot::Receiver<Vec<u8>>>,
+    pub album_art_pending: Option<tokio::sync::oneshot::Receiver<(Option<String>, Vec<u8>)>>,
     pub last_art_uri: String,
     pub lyrics: Option<LyricsHandle>,
 }

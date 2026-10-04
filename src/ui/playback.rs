@@ -62,7 +62,9 @@ impl PlaybackState {
         self.lyrics_loading = lyrics_loading;
         self.lyrics_scroll = lyrics_scroll;
         self.radio_mode = radio_mode;
-        self.art_url = art_url;
+        if self.art_url.is_none() {
+            self.art_url = art_url;
+        }
         self.waveform = waveform;
     }
 }

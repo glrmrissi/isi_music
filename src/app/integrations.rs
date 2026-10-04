@@ -25,6 +25,7 @@ pub struct IntegrationManager {
     pub discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
+    discord_last_art: Option<String>,
     discord_pending_since: Option<Instant>,
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     pub mpris: Option<MprisHandle>,
@@ -61,6 +62,7 @@ impl IntegrationManager {
             discord: None,
             discord_last_title: String::new(),
             discord_last_playing: false,
+            discord_last_art: None,
             discord_pending_since: None,
             #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris: None,
@@ -98,21 +100,17 @@ impl IntegrationManager {
         let pb = &state.playback;
         let title_changed = pb.title != self.discord_last_title;
         let playing_changed = pb.is_playing != self.discord_last_playing;
+        let art_changed = pb.art_url != self.discord_last_art;
 
         if title_changed {
             self.discord_pending_since = Some(Instant::now());
             self.discord_last_title = pb.title.clone();
             self.discord_last_playing = pb.is_playing;
-        } else if playing_changed {
+        } else if playing_changed || (art_changed && self.discord_pending_since.is_none()) {
             self.discord_last_playing = pb.is_playing;
             self.discord_pending_since = None;
-            if pb.title.is_empty() {
-                discord.clear();
-            } else if pb.is_playing {
-                discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
-            } else {
-                discord.update_paused(&pb.title, &pb.artist);
-            }
+            Self::send_discord(discord, pb);
+            self.discord_last_art = pb.art_url.clone();
         }
 
         if let Some(since) = self.discord_pending_since {
@@ -121,14 +119,19 @@ impl IntegrationManager {
             let timed_out = since.elapsed() >= Duration::from_secs(timeout_secs);
             if art_ready || timed_out {
                 self.discord_pending_since = None;
-                if pb.title.is_empty() {
-                    discord.clear();
-                } else if pb.is_playing {
-                    discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
-                } else {
-                    discord.update_paused(&pb.title, &pb.artist);
-                }
+                Self::send_discord(discord, pb);
+                self.discord_last_art = pb.art_url.clone();
             }
+        }
+    }
+
+    fn send_discord(discord: &DiscordRpc, pb: &crate::ui::PlaybackState) {
+        if pb.title.is_empty() {
+            discord.clear();
+        } else if pb.is_playing {
+            discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
+        } else {
+            discord.update_paused(&pb.title, &pb.artist);
         }
     }
 

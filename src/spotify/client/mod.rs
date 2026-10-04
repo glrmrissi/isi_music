@@ -123,7 +123,7 @@ impl SpotifyClient {
             .ok()?;
         json["album"]["images"]
             .as_array()?
-            .last()
+            .first()
             .and_then(|img| img["url"].as_str())
             .map(|s| s.to_string())
     }
