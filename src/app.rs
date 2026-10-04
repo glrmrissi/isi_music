@@ -67,7 +67,6 @@ pub struct App {
     trim_counter: u64,
     audio: crate::config::AudioConfig,
     cache_manager: crate::utils::cache::CacheManager,
-    cache_cleanup_interval_hours: u32,
     last_cache_cleanup: Instant,
     needs_redraw: bool,
     force_clear: bool,
@@ -119,7 +118,7 @@ impl App {
                             "Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit"
                         );
                         debug_overlay.log(
-                            LogLevel::Warn,
+                            LogLevel::Api,
                             "Spotify 403 — create your own app: isi-music setup-spotify",
                         );
                         startup_warning = Some(
@@ -127,7 +126,7 @@ impl App {
                         );
                     } else {
                         debug_overlay.log(
-                            LogLevel::Warn,
+                            LogLevel::Api,
                             format!("Spotify unavailable ({e:#}), starting in local-only mode"),
                         );
                     }
@@ -147,10 +146,14 @@ impl App {
 
         if spotify_enabled
             && (spotify.authenticated || crate::config::load_streaming_refresh_token().is_some())
+            && crate::player::ensure_streaming_auth().await.is_err()
         {
-            crate::player::ensure_streaming_auth()
-                .await
-                .map_err(|e| anyhow::anyhow!("Streaming authentication failed: {e}"))?;
+            let warning = "Spotify streaming authentication failed. Local playback remains available; run `isi-music setup-spotify` to retry.".to_string();
+            debug_overlay.log(LogLevel::Api, warning.clone());
+            startup_warning = Some(match startup_warning {
+                Some(existing) => format!("{existing}; {warning}"),
+                None => warning,
+            });
         }
 
         let volume = crate::config::load_volume();
@@ -276,10 +279,12 @@ impl App {
         };
 
         let cache_manager = crate::utils::cache::CacheManager::new(&cfg)?;
-        if cfg.cache.auto_cleanup.unwrap_or(true) {
+        if cache_manager.auto_cleanup_enabled() {
             let cm = cache_manager.clone();
             tokio::spawn(async move {
-                let _ = cm.cleanup_expired().await;
+                if let Err(e) = cm.cleanup_expired().await {
+                    tracing::warn!("Cache cleanup failed: {e:#}");
+                }
             });
         }
         let settings_panel =
@@ -337,7 +342,6 @@ impl App {
             trim_counter: 0,
             audio: cfg.audio.clone(),
             cache_manager,
-            cache_cleanup_interval_hours: cfg.cache.cleanup_interval_hours.unwrap_or(24),
             last_cache_cleanup: Instant::now(),
             needs_redraw: true,
             force_clear: false,
@@ -413,7 +417,6 @@ impl App {
                 &crate::config::AppConfig::default(),
             )
             .expect("test cache init"),
-            cache_cleanup_interval_hours: 24,
             last_cache_cleanup: Instant::now(),
             needs_redraw: true,
             force_clear: false,
@@ -520,13 +523,18 @@ impl App {
                 }
             }
 
-            let cleanup_interval =
-                Duration::from_secs(self.cache_cleanup_interval_hours as u64 * 3600);
-            if now.duration_since(self.last_cache_cleanup) >= cleanup_interval {
+            let cleanup_interval = Duration::from_secs(
+                u64::from(self.cache_manager.cleanup_interval_hours()).saturating_mul(3600),
+            );
+            if self.cache_manager.auto_cleanup_enabled()
+                && now.duration_since(self.last_cache_cleanup) >= cleanup_interval
+            {
                 self.last_cache_cleanup = now;
                 let cm = self.cache_manager.clone();
                 tokio::spawn(async move {
-                    let _ = cm.cleanup_expired().await;
+                    if let Err(e) = cm.cleanup_expired().await {
+                        tracing::warn!("Cache cleanup failed: {e:#}");
+                    }
                 });
             }
 
@@ -642,6 +650,7 @@ impl App {
             let needs_reconnect = notif_result.needs_reconnect;
             let needs_crossover = notif_result.needs_crossover;
             let needs_radio_refill = notif_result.needs_radio_refill;
+            let needs_product_check = notif_result.needs_product_check;
 
             {
                 self.debug_overlay.update_metrics();
@@ -700,6 +709,10 @@ impl App {
                 }
             }
 
+            if needs_product_check {
+                self.verify_streaming_product().await;
+            }
+
             if needs_reconnect && !self.player_mgr.session_reconnecting {
                 self.player_mgr.session_reconnecting = true;
                 self.reconnect_player().await;
@@ -755,11 +768,14 @@ impl App {
                 for cmd in cmds {
                     match cmd {
                         MprisCmd::Play => {
-                            self.ensure_spotify_player().await;
-                            if let Some(p) = &mut self.player_mgr.player {
+                            if self.ensure_spotify_player().await
+                                && let Some(p) = &mut self.player_mgr.player
+                            {
                                 p.play();
+                                self.state.playback.is_playing = true;
+                            } else {
+                                self.state.playback.is_playing = false;
                             }
-                            self.state.playback.is_playing = true;
                         }
                         MprisCmd::Pause => {
                             if let Some(p) = &mut self.player_mgr.player {
@@ -832,29 +848,37 @@ impl App {
                             }
                         }
                         SmtcCmd::Next => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.next() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.next_track().await;
+                                self.remote_next_track(player_error).await;
                             }
                         }
                         SmtcCmd::Previous => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.prev() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.prev_track().await;
+                                self.remote_prev_track(player_error).await;
                             }
                         }
                         SmtcCmd::Seek(ms) => {
@@ -886,8 +910,11 @@ impl App {
                                 p.play();
                                 self.state.playback.is_playing = true;
                             } else {
-                                self.ensure_spotify_player().await;
-                                if self.player_mgr.player.is_none() {
+                                let player_ready = self.ensure_spotify_player().await;
+                                let player_error = (!player_ready)
+                                    .then(|| self.state.status_msg.clone())
+                                    .flatten();
+                                if !player_ready {
                                     self.ensure_local_player().await;
                                 }
                                 if let Some(p) = &mut self.player_mgr.player {
@@ -896,34 +923,42 @@ impl App {
                                     }
                                     self.state.playback.is_playing = true;
                                 } else if self.spotify.authenticated {
-                                    let _ = self.spotify.toggle_playback().await;
+                                    self.remote_toggle_playback(player_error).await;
                                 }
                             }
                         }
                         MediaKey::Next => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.next() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.next_track().await;
+                                self.remote_next_track(player_error).await;
                             }
                         }
                         MediaKey::Previous => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.prev() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.prev_track().await;
+                                self.remote_prev_track(player_error).await;
                             }
                         }
                     }

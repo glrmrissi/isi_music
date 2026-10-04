@@ -202,6 +202,24 @@ impl SpotifyClient {
             anyhow::bail!("Check track saved failed ({}): {}", status.as_u16(), text);
         }
     }
+
+    pub async fn get_product(&self) -> Result<String> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let resp = send_with_retry(&token, self.http.get("https://api.spotify.com/v1/me")).await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("get_product failed ({}): {}", status.as_u16(), text);
+        }
+        let json: serde_json::Value = serde_json::from_str(&text)?;
+        json["product"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("no product field in /me response"))
+    }
 }
 
 pub async fn remove_uri_http(http: &reqwest::Client, token: &str, uri: &str) -> Result<()> {

@@ -362,7 +362,7 @@ impl App {
                     MAX_RECONNECT_ATTEMPTS
                 );
                 self.debug_overlay.log(
-                    crate::utils::debug_overlay::LogLevel::Warn,
+                    crate::utils::debug_overlay::LogLevel::Api,
                     format!(
                         "Max reconnect attempts ({}) reached",
                         MAX_RECONNECT_ATTEMPTS
@@ -385,7 +385,7 @@ impl App {
         );
 
         self.debug_overlay.log(
-            crate::utils::debug_overlay::LogLevel::Warn,
+            crate::utils::debug_overlay::LogLevel::Api,
             format!(
                 "Attempting librespot reconnection ({}/{})",
                 self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
@@ -493,7 +493,7 @@ impl App {
                 self.state.status_msg = Some("Reconnected!".to_string());
                 info!("Librespot session reconnected successfully");
                 self.debug_overlay.log(
-                    crate::utils::debug_overlay::LogLevel::Info,
+                    crate::utils::debug_overlay::LogLevel::Api,
                     "Librespot session reconnected successfully".to_string(),
                 );
                 self.player_mgr.reconnect_attempts = 0;
@@ -504,25 +504,8 @@ impl App {
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("free") || msg.contains("premium") {
                     warn!("Spotify free account — disabling streaming permanently");
-                    self.debug_overlay.log(
-                        crate::utils::debug_overlay::LogLevel::Warn,
-                        "Spotify free account — disabling streaming permanently".to_string(),
-                    );
-                    self.player_mgr.spotify_streaming_disabled = true;
-                    self.state.status_msg =
-                        Some("Spotify Premium required. Switched to local-only mode.".to_string());
-                    if self.player_mgr.parked_player.is_some() {
-                        std::mem::swap(
-                            &mut self.player_mgr.player,
-                            &mut self.player_mgr.parked_player,
-                        );
-                        self.player_mgr.local_active = true;
-                        self.player_mgr.band_energies = self
-                            .player_mgr
-                            .player
-                            .as_ref()
-                            .and_then(|p| p.band_energies());
-                    }
+                    self.player_mgr
+                        .disable_streaming(&mut self.state, &self.debug_overlay);
                     self.player_mgr.session_reconnecting = false;
                 } else if msg.contains("401") || msg.contains("unauthorized") {
                     warn!(
@@ -536,10 +519,47 @@ impl App {
                 } else {
                     warn!("Reconnect failed: {e:#}");
                     self.debug_overlay.log(
-                        crate::utils::debug_overlay::LogLevel::Warn,
+                        crate::utils::debug_overlay::LogLevel::Api,
                         format!("Reconnect failed: {e:#}"),
                     );
                     self.state.status_msg = Some(format!("Reconnect failed: {e}"));
+                }
+            }
+        }
+    }
+
+    pub async fn verify_streaming_product(&mut self) {
+        self.player_mgr.product_check_pending = false;
+        let product = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            self.spotify.get_product(),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+        match product.as_deref() {
+            Some("free") | Some("open") => {
+                self.player_mgr
+                    .disable_streaming(&mut self.state, &self.debug_overlay);
+                self.sync_track_selection();
+                self.sync_queue_display();
+            }
+            Some(product) => {
+                info!(
+                    "Spotify product={product}: consecutive unavailable tracks were transient errors"
+                );
+                self.state.status_msg =
+                    Some("Streaming errors detected, reconnecting...".to_string());
+                if !self.player_mgr.session_reconnecting {
+                    self.player_mgr.session_reconnecting = true;
+                    self.reconnect_player().await;
+                }
+            }
+            None => {
+                warn!("Spotify product check failed or timed out");
+                if !self.player_mgr.session_reconnecting {
+                    self.player_mgr.session_reconnecting = true;
+                    self.reconnect_player().await;
                 }
             }
         }
