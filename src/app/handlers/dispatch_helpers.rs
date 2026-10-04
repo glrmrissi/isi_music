@@ -284,20 +284,75 @@ impl App {
         }
     }
 
-    pub(crate) fn report_remote_play_error(&mut self, e: &anyhow::Error) -> bool {
+    pub(crate) async fn handle_remote_play_error(
+        &mut self,
+        e: &anyhow::Error,
+        player_error: Option<&str>,
+    ) {
+        if self.report_remote_play_error(e, player_error) {
+            self.reconnect_player().await;
+        }
+    }
+
+    pub(crate) async fn remote_toggle_playback(&mut self, player_error: Option<String>) {
+        let result = self.spotify.toggle_playback().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    pub(crate) async fn remote_next_track(&mut self, player_error: Option<String>) {
+        let result = self.spotify.next_track().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    pub(crate) async fn remote_prev_track(&mut self, player_error: Option<String>) {
+        let result = self.spotify.prev_track().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    async fn report_remote_control_result(
+        &mut self,
+        result: anyhow::Result<()>,
+        player_error: Option<String>,
+    ) {
+        match result {
+            Ok(()) if player_error.is_some() => {
+                self.state.status_msg =
+                    Some("Playback command sent to an active Spotify Connect device".to_string());
+            }
+            Err(e) => {
+                self.handle_remote_play_error(&e, player_error.as_deref())
+                    .await
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn report_remote_play_error(
+        &mut self,
+        e: &anyhow::Error,
+        player_error: Option<&str>,
+    ) -> bool {
         let err_str = e.to_string();
         if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
             tracing::warn!("Got 401 - triggering reconnect");
             self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
             true
         } else if err_str.contains("no_active_device") || err_str.contains("No active device") {
-            self.state.status_msg = Some(
-                "No active Spotify device — streaming player unavailable or start Spotify on a device"
+            let status = "Spotify Connect has no active device";
+            self.state.status_msg = Some(match player_error {
+                Some(player_error) => format!("{player_error}; {status}"),
+                None => "No active Spotify device — streaming player unavailable or start Spotify on a device"
                     .to_string(),
-            );
+            });
             false
         } else {
-            self.state.status_msg = Some(format!("Error: {e}"));
+            self.state.status_msg = Some(match player_error {
+                Some(player_error) => format!("{player_error}; remote playback failed: {e}"),
+                None => format!("Error: {e}"),
+            });
             false
         }
     }

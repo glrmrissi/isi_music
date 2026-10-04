@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::search_cache::{CachedAlbum, CachedArtist, CachedTrack};
 use super::types::{AlbumSummary, ArtistSummary, TrackSummary};
 
+pub(crate) const LIBRARY_CACHE_TTL_SECS: i64 = 3600;
+
 #[derive(Clone)]
 pub struct LibraryCache {
     pub(super) conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
@@ -56,7 +58,7 @@ impl LibraryCache {
         })
     }
 
-    const CACHE_TTL_SECS: i64 = 3600;
+    const CACHE_TTL_SECS: i64 = LIBRARY_CACHE_TTL_SECS;
 
     fn unix_now() -> i64 {
         SystemTime::now()
@@ -225,16 +227,6 @@ impl LibraryCache {
             "DELETE FROM liked_tracks_cache WHERE uri = ?1",
             params![track_uri],
         );
-    }
-
-    #[allow(dead_code)]
-    pub fn has_liked_tracks_cache(&self) -> bool {
-        let Ok(conn) = self.conn.lock() else {
-            return false;
-        };
-        conn.query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
-            .unwrap_or(0)
-            > 0
     }
 
     pub fn get_liked_tracks_page(

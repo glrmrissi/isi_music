@@ -163,7 +163,7 @@ impl App {
                                 .unwrap_or(0);
                             if let Some(player) = &mut self.player_mgr.player {
                                 player.set_queue_tracks(&all_tracks, start_idx);
-                                self.player_mgr.playing_tracks = all_tracks;
+                                self.player_mgr.playing_tracks = Vec::new();
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                                 self.state.playback.title = track.name.clone();
                                 self.state.playback.artist = track.artist.clone();
@@ -212,7 +212,7 @@ impl App {
                                 .unwrap_or(0);
                             if let Some(player) = &mut self.player_mgr.player {
                                 player.set_queue_tracks(&all_tracks, start_idx);
-                                self.player_mgr.playing_tracks = all_tracks;
+                                self.player_mgr.playing_tracks = Vec::new();
                                 let track = self.state.tracks[actual_idx].clone();
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                                 self.state.playback.title = track.name.clone();
@@ -239,7 +239,10 @@ impl App {
                         }
                         self.state.cancel_quick_search();
                         self.activate_spotify_player();
-                        self.ensure_spotify_player().await;
+                        let player_ready = self.ensure_spotify_player().await;
+                        let player_error = (!player_ready)
+                            .then(|| self.state.status_msg.clone())
+                            .flatten();
                         if let Some(player) = &mut self.player_mgr.player {
                             let uris: Vec<String> =
                                 self.state.tracks.iter().map(|t| t.uri.clone()).collect();
@@ -281,10 +284,18 @@ impl App {
                             } else {
                                 self.spotify.play_track_uri(&track_uri).await
                             };
-                            if let Err(e) = result
-                                && self.report_remote_play_error(&e)
-                            {
-                                needs_reconnect = true;
+                            match result {
+                                Ok(()) if !player_ready => {
+                                    self.state.status_msg = Some(
+                                        "Playback sent to an active Spotify Connect device"
+                                            .to_string(),
+                                    );
+                                }
+                                Err(e) => {
+                                    needs_reconnect |=
+                                        self.report_remote_play_error(&e, player_error.as_deref());
+                                }
+                                _ => {}
                             }
                         }
                     }

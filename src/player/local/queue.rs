@@ -4,6 +4,13 @@ use super::LocalPlayer;
 use super::track::LocalTrack;
 use crate::player::RepeatMode;
 
+pub(super) fn replace_temp_track(
+    queue: &mut Vec<LocalTrack>,
+    track: LocalTrack,
+) -> Vec<LocalTrack> {
+    std::mem::replace(queue, vec![track])
+}
+
 impl LocalPlayer {
     pub(super) fn next_inner(&mut self) -> bool {
         if self.repeat == RepeatMode::Track {
@@ -29,13 +36,14 @@ impl LocalPlayer {
                 duration_ms: track.duration_ms,
                 cover_path: track.cover_path.clone(),
             };
-            self.temp_queue.push(lt);
-            let temp_idx = self.temp_queue.len() - 1;
-            if self.load_temp_track(temp_idx) {
+            let previous_temp_queue = replace_temp_track(&mut self.temp_queue, lt);
+            let previous_temp_playing = self.temp_playing;
+            if self.load_temp_track(0) {
                 self.playing_queued = Some(track);
                 return true;
             }
-            self.temp_queue.pop();
+            self.temp_queue = previous_temp_queue;
+            self.temp_playing = previous_temp_playing;
             return false;
         }
 
@@ -108,7 +116,7 @@ impl LocalPlayer {
         self.playing_queued = None;
 
         if self.shuffle {
-            if let Some(prev_idx) = self.play_history.pop() {
+            if let Some(prev_idx) = self.play_history.pop_back() {
                 return self.load_index_priv(prev_idx);
             }
             return false;
@@ -133,5 +141,40 @@ impl LocalPlayer {
             return self.try_load_track(target);
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resource_regression_replace_temp_track_retains_only_the_current_item() {
+        let mut queue = vec![LocalTrack {
+            path: PathBuf::from("old.flac"),
+            uri: "file://old.flac".to_string(),
+            name: "Old".to_string(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: 0,
+            cover_path: None,
+        }];
+        let current = LocalTrack {
+            path: PathBuf::from("current.flac"),
+            uri: "file://current.flac".to_string(),
+            name: "Current".to_string(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: 0,
+            cover_path: None,
+        };
+
+        let previous = replace_temp_track(&mut queue, current);
+
+        assert_eq!(previous.len(), 1);
+        assert_eq!(previous[0].uri, "file://old.flac");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].uri, "file://current.flac");
     }
 }

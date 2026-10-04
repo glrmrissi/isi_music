@@ -1088,10 +1088,10 @@ async fn on_track_started_skips_lyrics_fetch_for_episodes() {
 }
 
 #[tokio::test]
-async fn report_remote_play_error_translates_no_active_device() {
+async fn resource_regression_remote_play_error_translates_no_active_device() {
     let mut app = App::new_for_test().await;
     let e = anyhow::anyhow!("API error: 404 no_active_device");
-    assert!(!app.report_remote_play_error(&e));
+    assert!(!app.report_remote_play_error(&e, None));
     assert_eq!(
         app.state.status_msg.as_deref(),
         Some(
@@ -1101,10 +1101,10 @@ async fn report_remote_play_error_translates_no_active_device() {
 }
 
 #[tokio::test]
-async fn report_remote_play_error_flags_401_for_reconnect() {
+async fn resource_regression_remote_play_error_flags_401_for_reconnect() {
     let mut app = App::new_for_test().await;
     let e = anyhow::anyhow!("SPOTIFY_UNAUTHORIZED");
-    assert!(app.report_remote_play_error(&e));
+    assert!(app.report_remote_play_error(&e, None));
     assert_eq!(
         app.state.status_msg.as_deref(),
         Some("Authorization expired, reconnecting...")
@@ -1112,12 +1112,54 @@ async fn report_remote_play_error_flags_401_for_reconnect() {
 }
 
 #[tokio::test]
-async fn report_remote_play_error_shows_generic_message() {
+async fn resource_regression_remote_play_error_shows_generic_message() {
     let mut app = App::new_for_test().await;
     let e = anyhow::anyhow!("some other failure");
-    assert!(!app.report_remote_play_error(&e));
+    assert!(!app.report_remote_play_error(&e, None));
     assert_eq!(
         app.state.status_msg.as_deref(),
         Some("Error: some other failure")
     );
+}
+
+#[tokio::test]
+async fn resource_regression_remote_play_error_preserves_player_creation_failure() {
+    let mut app = App::new_for_test().await;
+    let player_error = "Failed to create Spotify player: session connect failed";
+    app.state.status_msg = Some(player_error.to_string());
+    let e = anyhow::anyhow!("API error: 404 no_active_device");
+
+    assert!(!app.report_remote_play_error(&e, Some(player_error)));
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some(
+            "Failed to create Spotify player: session connect failed; Spotify Connect has no active device"
+        )
+    );
+}
+
+#[test]
+fn resource_regression_local_scan_guard_prevents_overlapping_scans() {
+    let fetcher = crate::app::fetcher::FetchCoordinator::new();
+    let first = fetcher.try_start_local_scan();
+
+    assert!(first.is_some());
+    assert!(fetcher.try_start_local_scan().is_none());
+    drop(first);
+    assert!(fetcher.try_start_local_scan().is_some());
+}
+
+#[test]
+fn resource_regression_cancel_all_pending_drops_local_scan_receiver() {
+    let mut fetcher = crate::app::fetcher::FetchCoordinator::new();
+    let mut state = crate::ui::UiState::new();
+    let guard = fetcher.try_start_local_scan().expect("first scan starts");
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    fetcher.local_scan_rx = Some(rx);
+
+    fetcher.cancel_all_pending(&mut state);
+
+    assert!(guard.is_cancelled());
+    assert!(fetcher.local_scan_rx.is_none());
+    assert!(tx.send(Vec::new()).is_err());
 }

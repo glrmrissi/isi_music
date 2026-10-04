@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::spawn_blocking;
 use tracing::{info, warn};
 
@@ -19,6 +24,7 @@ pub struct CacheStats {
 
 pub struct CacheManager {
     conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
+    cleanup_running: Arc<AtomicBool>,
     options: CacheOptions,
 }
 
@@ -26,6 +32,7 @@ impl Clone for CacheManager {
     fn clone(&self) -> Self {
         Self {
             conn: Arc::clone(&self.conn),
+            cleanup_running: Arc::clone(&self.cleanup_running),
             options: self.options.clone(),
         }
     }
@@ -53,6 +60,60 @@ impl Default for CacheOptions {
     }
 }
 
+struct CleanupGuard(Arc<AtomicBool>);
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn referenced_cover_paths(conn: &rusqlite::Connection) -> Option<HashSet<PathBuf>> {
+    let mut stmt = conn
+        .prepare("SELECT cover_path FROM tracks WHERE cover_path IS NOT NULL")
+        .ok()?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).ok()?;
+    rows.map(|row| row.ok().map(PathBuf::from)).collect()
+}
+
+fn prune_generated_cache_files(
+    cache_root: &Path,
+    cutoff: SystemTime,
+    referenced_covers: Option<&HashSet<PathBuf>>,
+) -> Result<()> {
+    for (directory, extension) in [("covers", "jpg"), ("waveforms", "bin")] {
+        let path = cache_root.join(directory);
+        let entries = match std::fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
+        };
+
+        for entry in entries {
+            let entry =
+                entry.with_context(|| format!("failed to read an entry in {}", path.display()))?;
+            let file_type = entry.file_type().with_context(|| {
+                format!("failed to inspect cache file {}", entry.path().display())
+            })?;
+            if !file_type.is_file()
+                || entry.path().extension().and_then(|ext| ext.to_str()) != Some(extension)
+                || (extension == "jpg"
+                    && referenced_covers.is_none_or(|covers| covers.contains(&entry.path())))
+            {
+                continue;
+            }
+            let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+                continue;
+            };
+            if modified < cutoff {
+                std::fs::remove_file(entry.path())
+                    .with_context(|| format!("failed to remove {}", entry.path().display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CacheManager {
     pub fn new(cfg: &config::AppConfig) -> anyhow::Result<Self> {
         let db_path = if cfg!(test) {
@@ -77,7 +138,7 @@ impl CacheManager {
             enabled: cfg.cache.enabled.unwrap_or(true),
             auto_cleanup: cfg.cache.auto_cleanup.unwrap_or(true),
             max_size_mb: cfg.cache.max_size_mb.unwrap_or(500),
-            cleanup_interval_hours: cfg.cache.cleanup_interval_hours.unwrap_or(24),
+            cleanup_interval_hours: cfg.cache.cleanup_interval_hours.unwrap_or(24).max(1),
             keep_days: cfg.cache.keep_days.unwrap_or(60),
         };
         Self::new_with_options(db_path, options)
@@ -93,8 +154,17 @@ impl CacheManager {
 
         Ok(Self {
             conn: Arc::new(std::sync::Mutex::new(conn)),
+            cleanup_running: Arc::new(AtomicBool::new(false)),
             options,
         })
+    }
+
+    pub fn auto_cleanup_enabled(&self) -> bool {
+        self.options.enabled && self.options.auto_cleanup
+    }
+
+    pub fn cleanup_interval_hours(&self) -> u32 {
+        self.options.cleanup_interval_hours.max(1)
     }
 
     pub async fn clear_search(&self) -> Result<()> {
@@ -204,26 +274,42 @@ impl CacheManager {
     }
 
     pub async fn cleanup_expired(&self) -> Result<()> {
-        if !self.options.enabled {
+        if !self.options.enabled || self.cleanup_running.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let keep_seconds = self.options.keep_days * 24 * 3600;
+
+        let keep_seconds = u64::from(self.options.keep_days).saturating_mul(86_400);
+        let keep_seconds_sql = i64::try_from(keep_seconds).unwrap_or(i64::MAX);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let max_bytes = self.options.max_size_mb * 1024 * 1024;
+        let max_bytes = self.options.max_size_mb.saturating_mul(1024 * 1024);
+        let cutoff = SystemTime::now()
+            .checked_sub(Duration::from_secs(keep_seconds))
+            .unwrap_or(UNIX_EPOCH);
+        let cache_root = (!cfg!(test)).then(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("isi-music")
+        });
+        let conn = Arc::clone(&self.conn);
+        let cleanup_running = Arc::clone(&self.cleanup_running);
 
-        let conn = self.conn.clone();
         spawn_blocking(move || {
+            let _guard = CleanupGuard(cleanup_running);
             let Ok(conn) = conn.lock() else { return };
             let _ = conn.execute(
                 "DELETE FROM search_cache WHERE (?1 - saved_at) >= ?2",
-                rusqlite::params![now as i64, keep_seconds as i64],
+                rusqlite::params![now as i64, keep_seconds_sql],
             );
             let _ = conn.execute(
                 "DELETE FROM lyrics_cache WHERE (?1 - saved_at) >= ?2",
-                rusqlite::params![now as i64, keep_seconds as i64],
+                rusqlite::params![now as i64, keep_seconds_sql],
+            );
+            let _ = conn.execute(
+                "DELETE FROM library_cache WHERE (?1 - saved_at) >= ?2",
+                rusqlite::params![now as i64, crate::spotify::LIBRARY_CACHE_TTL_SECS],
             );
 
             let db_size: i64 = conn
@@ -244,7 +330,17 @@ impl CacheManager {
                 );
                 let _ = conn.execute("VACUUM", []);
             }
-        });
+            let referenced_covers = referenced_cover_paths(&conn);
+            drop(conn);
+            if let Some(cache_root) = cache_root
+                && let Err(e) =
+                    prune_generated_cache_files(&cache_root, cutoff, referenced_covers.as_ref())
+            {
+                warn!("Failed to prune generated cache files: {e:#}");
+            }
+        })
+        .await
+        .context("cache cleanup task failed")?;
 
         info!("Cache cleanup completed");
         Ok(())

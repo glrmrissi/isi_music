@@ -5,6 +5,8 @@ mod search_cache;
 mod token;
 mod types;
 
+pub(crate) use library_cache::LIBRARY_CACHE_TTL_SECS;
+
 #[cfg(test)]
 pub(crate) use client::playlist_item_to_track;
 pub use client::{SpotifyClient, remove_uri_http, save_uri_http};

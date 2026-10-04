@@ -12,18 +12,25 @@ use crate::player::PlayerNotification;
 use crate::utils::lock::lock_or_recover;
 
 impl LocalPlayer {
-    fn spawn_waveform_loader(&self, path: PathBuf) {
+    fn spawn_waveform_loader(&mut self, path: PathBuf) {
         *lock_or_recover(&self.waveform) = None;
         *lock_or_recover(&self.duration_measured) = None;
+        if let Some(task) = self.waveform_task.take() {
+            task.abort();
+        }
         let waveform = Arc::clone(&self.waveform);
         let duration_measured = Arc::clone(&self.duration_measured);
         let token = self.track_token.fetch_add(1, Ordering::SeqCst) + 1;
         let token_arc = Arc::clone(&self.track_token);
-        std::thread::spawn(move || {
-            if token_arc.load(Ordering::SeqCst) != token {
-                return;
-            }
-            if let Some((dur, data)) = crate::utils::waveform::generate_for_file(&path)
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            warn!("waveform worker unavailable outside a Tokio runtime");
+            return;
+        };
+        let task = runtime.spawn_blocking(move || {
+            if let Some((dur, data)) =
+                crate::utils::waveform::generate_for_file_with_cancel(&path, || {
+                    token_arc.load(Ordering::SeqCst) != token
+                })
                 && token_arc.load(Ordering::SeqCst) == token
             {
                 if let Ok(mut w) = waveform.lock() {
@@ -36,6 +43,7 @@ impl LocalPlayer {
                 }
             }
         });
+        self.waveform_task = Some(task.abort_handle());
     }
 
     pub(super) fn load_track_inner(&mut self, idx: usize, record_history: bool) -> bool {
@@ -75,10 +83,11 @@ impl LocalPlayer {
         self.sink.play();
 
         if record_history
+            && self.shuffle
             && let Some(prev) = self.current_idx
             && prev != idx
         {
-            self.play_history.push(prev);
+            crate::player::remember_play_history(&mut self.play_history, prev);
         }
         self.current_idx = Some(idx);
         self.temp_playing = None;
@@ -103,13 +112,13 @@ impl LocalPlayer {
             return false;
         }
 
-        self.sink.clear();
-        self.sink.stop();
-
         let decoder = match LocalDecoder::open(&path) {
             Some(d) => d,
             None => return false,
         };
+
+        self.sink.clear();
+        self.sink.stop();
 
         if self.analyzer.enabled() {
             if let Some(handle) = self.analyzer.handle() {

@@ -11,6 +11,16 @@ const LOCAL_FOLDER_URI_PREFIX: &str = "local:folder:";
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "wav", "aiff", "opus"];
 
 pub fn scan_local_files(dir: &Path) -> Vec<LocalNode> {
+    scan_local_files_with_cancel(dir, || false).unwrap_or_default()
+}
+
+fn scan_local_files_with_cancel(
+    dir: &Path,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> Option<Vec<LocalNode>> {
+    if is_cancelled() {
+        return None;
+    }
     let extensions = AUDIO_EXTENSIONS;
     let db_path = crate::config::get_local_db_path();
     let conn = rusqlite::Connection::open(&db_path).ok();
@@ -32,15 +42,21 @@ pub fn scan_local_files(dir: &Path) -> Vec<LocalNode> {
         );
     }
 
-    let mut nodes: Vec<LocalNode> = Vec::new();
-    if let Some(ref c) = conn {
-        let _ = c.execute_batch("BEGIN TRANSACTION;");
+    let mut nodes = Vec::new();
+    let transaction_started = conn
+        .as_ref()
+        .is_some_and(|c| c.execute_batch("BEGIN TRANSACTION;").is_ok());
+    let complete = scan_dir(dir, 0, &mut nodes, extensions, &conn, &mut is_cancelled);
+    if !complete || is_cancelled() {
+        if transaction_started && let Some(conn) = &conn {
+            let _ = conn.execute_batch("ROLLBACK;");
+        }
+        return None;
     }
-    scan_dir(dir, 0, &mut nodes, extensions, &conn);
-    if let Some(ref c) = conn {
-        let _ = c.execute_batch("COMMIT;");
+    if transaction_started && let Some(conn) = &conn {
+        let _ = conn.execute_batch("COMMIT;");
     }
-    nodes
+    Some(nodes)
 }
 
 fn scan_dir(
@@ -49,30 +65,49 @@ fn scan_dir(
     nodes: &mut Vec<LocalNode>,
     extensions: &[&str],
     conn: &Option<rusqlite::Connection>,
-) {
+    is_cancelled: &mut impl FnMut() -> bool,
+) -> bool {
+    if is_cancelled() {
+        return false;
+    }
     let mut subdirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        let mut entries_vec: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-        entries_vec.sort();
-        for path in entries_vec {
-            if path.is_dir() {
-                subdirs.push(path);
-            } else if path.is_file() {
-                let ext_ok = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| extensions.contains(&e.to_lowercase().as_str()))
-                    .unwrap_or(false);
-                if ext_ok {
-                    files.push(path);
-                }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return true;
+    };
+    let mut entries_vec = Vec::new();
+    for entry in entries {
+        if is_cancelled() {
+            return false;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        entries_vec.push(entry.path());
+    }
+    entries_vec.sort();
+    for path in entries_vec {
+        if is_cancelled() {
+            return false;
+        }
+        if path.is_dir() {
+            subdirs.push(path);
+        } else if path.is_file() {
+            let ext_ok = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| extensions.contains(&e.to_lowercase().as_str()))
+                .unwrap_or(false);
+            if ext_ok {
+                files.push(path);
             }
         }
     }
 
     for subdir in subdirs {
+        if is_cancelled() {
+            return false;
+        }
         let name = subdir
             .file_name()
             .and_then(|n| n.to_str())
@@ -86,7 +121,9 @@ fn scan_dir(
             children_count: 0,
         });
         let before = nodes.len();
-        scan_dir(&subdir, depth + 1, nodes, extensions, conn);
+        if !scan_dir(&subdir, depth + 1, nodes, extensions, conn, is_cancelled) {
+            return false;
+        }
         let added = nodes.len() - before;
         if let LocalNode::Folder { children_count, .. } = &mut nodes[folder_idx] {
             *children_count = added;
@@ -97,6 +134,9 @@ fn scan_dir(
     }
 
     for path in files {
+        if is_cancelled() {
+            return false;
+        }
         let uri = format!("file://{}", path.display());
         let path_str = path.to_str().unwrap_or_default();
         nodes.push(LocalNode::Track {
@@ -104,6 +144,7 @@ fn scan_dir(
             depth,
         });
     }
+    true
 }
 
 impl App {
@@ -272,6 +313,14 @@ impl App {
             self.state.status_msg = Some(format!("Directory not found: {}", dir.display()));
             return;
         }
+        if self.fetcher.local_scan_rx.is_some() {
+            self.state.status_msg = Some("A local file scan is already running".to_string());
+            return;
+        }
+        let Some(scan_guard) = self.fetcher.try_start_local_scan() else {
+            self.state.status_msg = Some("A local file scan is already running".to_string());
+            return;
+        };
 
         self.state.push_nav();
         self.state.status_msg = Some("Loading local files...".to_string());
@@ -282,8 +331,11 @@ impl App {
         self.fetcher.local_scan_rx = Some(rx);
 
         tokio::task::spawn_blocking(move || {
-            let nodes = scan_local_files(&dir);
-            let _ = tx.send(nodes);
+            let nodes = scan_local_files_with_cancel(&dir, || scan_guard.is_cancelled());
+            drop(scan_guard);
+            if let Some(nodes) = nodes {
+                let _ = tx.send(nodes);
+            }
         });
     }
 
@@ -474,6 +526,13 @@ fn collect_tracks_recursive(
     }
 }
 
+fn cached_track_cover_available(track: &TrackSummary) -> bool {
+    track
+        .cover_path
+        .as_deref()
+        .is_none_or(|cover_path| Path::new(cover_path).exists())
+}
+
 fn build_track_from_path(
     path: &Path,
     uri: &str,
@@ -507,7 +566,9 @@ fn build_track_from_path(
                 },
             )
             .ok();
-        if let Some(t) = cached {
+        if let Some(t) = cached
+            && cached_track_cover_available(&t)
+        {
             return t;
         }
     }
@@ -551,5 +612,60 @@ fn build_track_from_path(
         uri: uri.to_string(),
         cover_path,
         added_at: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_regression_local_scan_stops_when_cancelled_during_directory_read() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a.mp3", "b.mp3", "c.mp3"] {
+            std::fs::write(dir.path().join(name), b"fixture").unwrap();
+        }
+        let mut nodes = Vec::new();
+        let conn = None;
+        let mut checks = 0;
+        let mut is_cancelled = || {
+            checks += 1;
+            checks == 3
+        };
+
+        let complete = scan_dir(
+            dir.path(),
+            0,
+            &mut nodes,
+            AUDIO_EXTENSIONS,
+            &conn,
+            &mut is_cancelled,
+        );
+
+        assert!(!complete);
+        assert!(nodes.is_empty());
+        assert_eq!(checks, 3);
+    }
+
+    #[test]
+    fn resource_regression_missing_cached_cover_invalidates_track_metadata() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        std::fs::write(&cover_path, b"cover").unwrap();
+        let mut track = TrackSummary {
+            name: "Track".to_string(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: 0,
+            uri: "file://track.mp3".to_string(),
+            cover_path: Some(cover_path.to_string_lossy().into_owned()),
+            added_at: None,
+        };
+
+        assert!(cached_track_cover_available(&track));
+        std::fs::remove_file(&cover_path).unwrap();
+        assert!(!cached_track_cover_available(&track));
+        track.cover_path = None;
+        assert!(cached_track_cover_available(&track));
     }
 }

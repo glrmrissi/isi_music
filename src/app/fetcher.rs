@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::spotify::SpotifyClient;
 use crate::ui::UiState;
@@ -109,12 +112,31 @@ pub enum FetchResult {
     LocalFolderTracks(Result<Vec<crate::spotify::TrackSummary>, String>),
 }
 
+pub(crate) struct LocalScanGuard {
+    running: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl LocalScanGuard {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for LocalScanGuard {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+    }
+}
+
 pub struct FetchCoordinator {
     pub pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pub pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pub stream_rx: Option<tokio::sync::mpsc::UnboundedReceiver<StreamEvent>>,
     pub pending_nav_down: bool,
     pub local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
+    local_scan_running: Arc<AtomicBool>,
+    local_scan_cancelled: Arc<AtomicBool>,
     pub local_scan_total: usize,
     pub album_art_pending: Option<tokio::sync::oneshot::Receiver<Vec<u8>>>,
     pub last_art_uri: String,
@@ -129,6 +151,8 @@ impl FetchCoordinator {
             stream_rx: None,
             pending_nav_down: false,
             local_scan_rx: None,
+            local_scan_running: Arc::new(AtomicBool::new(false)),
+            local_scan_cancelled: Arc::new(AtomicBool::new(false)),
             local_scan_total: 0,
             album_art_pending: None,
             last_art_uri: String::new(),
@@ -136,11 +160,26 @@ impl FetchCoordinator {
         }
     }
 
+    pub(crate) fn try_start_local_scan(&self) -> Option<LocalScanGuard> {
+        self.local_scan_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| {
+                self.local_scan_cancelled.store(false, Ordering::Release);
+                LocalScanGuard {
+                    running: Arc::clone(&self.local_scan_running),
+                    cancelled: Arc::clone(&self.local_scan_cancelled),
+                }
+            })
+    }
+
     pub fn cancel_all_pending(&mut self, state: &mut UiState) {
         self.pending_fetch = None;
         self.pending_pagination = None;
         self.pending_nav_down = false;
         self.stream_rx = None;
+        self.local_scan_cancelled.store(true, Ordering::Release);
+        self.local_scan_rx = None;
         state.loading = false;
         state.tracks_loading = false;
         if let Some(sr) = state.search_results.as_mut() {

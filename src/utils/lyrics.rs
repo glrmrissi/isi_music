@@ -683,6 +683,16 @@ async fn fetch_from_ovh(
 struct HandleInner {
     last_uri: String,
     pending: Option<oneshot::Receiver<Option<LyricsData>>>,
+    task: Option<tokio::task::AbortHandle>,
+}
+
+impl HandleInner {
+    fn cancel_pending(&mut self) {
+        self.pending = None;
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -739,7 +749,7 @@ impl LyricsHandle {
         }
 
         inner.last_uri = uri.to_string();
-        inner.pending = None;
+        inner.cancel_pending();
 
         if let Ok(cache) = self.cache.lock()
             && let Some(cached) = cache.get(uri)
@@ -791,7 +801,7 @@ impl LyricsHandle {
         let debug_overlay = self.debug_overlay.clone();
         let musixmatch_api_key = self.musixmatch_api_key.clone();
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let result =
                 fetch_lyrics(&http, &title, &artist, &debug_overlay, musixmatch_api_key).await;
             if let Some(ref data) = result {
@@ -810,6 +820,7 @@ impl LyricsHandle {
             }
             let _ = tx.send(result);
         });
+        inner.task = Some(task.abort_handle());
     }
 
     pub fn poll(&self) -> Option<LyricsData> {
@@ -819,11 +830,13 @@ impl LyricsHandle {
         match rx.try_recv() {
             Ok(result) => {
                 inner.pending = None;
+                inner.task = None;
                 result
             }
             Err(oneshot::error::TryRecvError::Empty) => None,
             Err(_) => {
                 inner.pending = None;
+                inner.task = None;
                 None
             }
         }
@@ -846,5 +859,32 @@ mod tests {
         assert_eq!(parse_timestamp("01:23.456"), Some(83_456));
         assert_eq!(parse_timestamp("00:00.000"), Some(0));
         assert_eq!(parse_timestamp("invalid"), None);
+    }
+
+    #[tokio::test]
+    async fn resource_regression_cancel_pending_aborts_the_previous_lyrics_task() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut inner = HandleInner::default();
+        let (result_tx, result_rx) = oneshot::channel();
+        let (started_tx, started_rx) = oneshot::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_by_task = Arc::clone(&completed);
+        inner.pending = Some(result_rx);
+        let task = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            completed_by_task.store(true, Ordering::SeqCst);
+            let _ = result_tx.send(Some(LyricsData::default()));
+        });
+        inner.task = Some(task.abort_handle());
+        started_rx.await.expect("task started");
+
+        inner.cancel_pending();
+
+        assert!(inner.pending.is_none());
+        assert!(inner.task.is_none());
+        assert!(task.await.is_err());
+        assert!(!completed.load(Ordering::SeqCst));
     }
 }

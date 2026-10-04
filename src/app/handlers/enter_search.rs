@@ -26,7 +26,10 @@ impl App {
                             return;
                         }
                         self.activate_spotify_player();
-                        self.ensure_spotify_player().await;
+                        let player_ready = self.ensure_spotify_player().await;
+                        let player_error = (!player_ready)
+                            .then(|| self.state.status_msg.clone())
+                            .flatten();
                         if let Some(player) = &mut self.player_mgr.player {
                             self.current_track_uri = track_uri.clone();
                             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -54,11 +57,20 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated
-                            && let Err(e) = self.spotify.play_track_uri(&track_uri).await
-                            && self.report_remote_play_error(&e)
-                        {
-                            *needs_reconnect = true;
+                        } else if self.spotify.authenticated {
+                            match self.spotify.play_track_uri(&track_uri).await {
+                                Ok(()) if !player_ready => {
+                                    self.state.status_msg = Some(
+                                        "Playback sent to an active Spotify Connect device"
+                                            .to_string(),
+                                    );
+                                }
+                                Err(e) => {
+                                    *needs_reconnect |=
+                                        self.report_remote_play_error(&e, player_error.as_deref());
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -91,7 +103,6 @@ impl App {
                                 });
                             self.state.active_content = ActiveContent::Tracks;
                             self.state.rebuild_sort_indices();
-                            self.state.previous_search = self.state.search_results.take();
                             self.state.status_msg = None;
                             self.state.focus = Focus::Tracks;
                         }
@@ -149,7 +160,6 @@ impl App {
                     self.state.track_list.select(Some(0));
                     self.state.active_content = ActiveContent::Tracks;
                     self.state.rebuild_sort_indices();
-                    self.state.previous_search = self.state.search_results.take();
                     self.state.status_msg = None;
                     self.state.focus = Focus::Tracks;
                 }
@@ -173,7 +183,6 @@ impl App {
                         self.state.loading = true;
                         self.state.active_playlist_uri = Some(format!("show:{id}"));
                         self.state.active_playlist_id = Some(format!("show:{id}"));
-                        self.state.previous_search = self.state.search_results.take();
                         let spotify = std::sync::Arc::clone(&self.spotify);
                         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                         self.fetcher.stream_rx = Some(rx);
@@ -188,7 +197,10 @@ impl App {
                             return;
                         }
                         self.activate_spotify_player();
-                        self.ensure_spotify_player().await;
+                        let player_ready = self.ensure_spotify_player().await;
+                        let player_error = (!player_ready)
+                            .then(|| self.state.status_msg.clone())
+                            .flatten();
                         if let Some(player) = &mut self.player_mgr.player {
                             self.current_track_uri = episode_uri.clone();
                             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -217,11 +229,20 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated
-                            && let Err(e) = self.spotify.play_track_uri(&episode_uri).await
-                            && self.report_remote_play_error(&e)
-                        {
-                            *needs_reconnect = true;
+                        } else if self.spotify.authenticated {
+                            match self.spotify.play_track_uri(&episode_uri).await {
+                                Ok(()) if !player_ready => {
+                                    self.state.status_msg = Some(
+                                        "Playback sent to an active Spotify Connect device"
+                                            .to_string(),
+                                    );
+                                }
+                                Err(e) => {
+                                    *needs_reconnect |=
+                                        self.report_remote_play_error(&e, player_error.as_deref());
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     _ => {}
@@ -256,7 +277,6 @@ impl App {
                                 });
                             self.state.active_content = ActiveContent::Tracks;
                             self.state.rebuild_sort_indices();
-                            self.state.previous_search = self.state.search_results.take();
                             self.state.status_msg = None;
                             self.state.focus = Focus::Tracks;
                         }
@@ -300,7 +320,7 @@ impl App {
             .unwrap_or(0);
         if let Some(player) = &mut self.player_mgr.player {
             player.set_queue_tracks(&all_tracks, start_idx);
-            self.player_mgr.playing_tracks = all_tracks;
+            self.player_mgr.playing_tracks = Vec::new();
             self.state.status_msg = Some(format!("Playing {}…", track.name));
             self.state.playback.title = track.name.clone();
             self.state.playback.artist = track.artist.clone();

@@ -90,11 +90,16 @@ impl App {
         if !dir.exists() {
             return;
         }
+        let Some(scan_guard) = self.fetcher.try_start_local_scan() else {
+            return;
+        };
 
-        let nodes =
-            tokio::task::spawn_blocking(move || crate::app::library::scan_local_files(&dir))
-                .await
-                .unwrap_or_default();
+        let nodes = tokio::task::spawn_blocking(move || {
+            let _scan_guard = scan_guard;
+            crate::app::library::scan_local_files(&dir)
+        })
+        .await
+        .unwrap_or_default();
 
         let tree = crate::ui::LocalFileTree::new(nodes);
         self.state.local_tree = tree;
