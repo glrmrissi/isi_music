@@ -1050,7 +1050,8 @@ impl App {
                 }
             }
 
-            self.integrations.update_discord(&self.state);
+            self.integrations
+                .update_discord(&self.state, &self.current_track_uri);
 
             #[cfg(feature = "album-art")]
             self.maybe_fetch_album_art().await;

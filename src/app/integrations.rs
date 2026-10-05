@@ -99,7 +99,7 @@ impl IntegrationManager {
         self.track_start_unix = ts;
     }
 
-    pub fn update_discord(&mut self, state: &UiState) {
+    pub fn update_discord(&mut self, state: &UiState, track_uri: &str) {
         let Some(discord) = &self.discord else {
             return;
         };
@@ -140,38 +140,37 @@ impl IntegrationManager {
         if self.discord_dirty && self.discord_last_send.elapsed() >= Duration::from_secs(2) {
             self.discord_dirty = false;
             self.discord_last_send = Instant::now();
-            Self::send_discord(discord, pb);
+            Self::send_discord(discord, pb, track_uri);
             self.discord_last_art = pb.art_url.clone();
         }
     }
 
-    fn send_discord(discord: &DiscordRpc, pb: &crate::ui::PlaybackState) {
-        if pb.title.is_empty() {
+    fn send_discord(discord: &DiscordRpc, pb: &crate::ui::PlaybackState, track_uri: &str) {
+        if pb.title.is_empty() || !pb.is_playing {
             discord.clear();
             return;
         }
+        let track_url = track_uri
+            .strip_prefix("spotify:track:")
+            .map(|id| format!("https://open.spotify.com/track/{id}"))
+            .or_else(|| {
+                track_uri
+                    .strip_prefix("spotify:episode:")
+                    .map(|id| format!("https://open.spotify.com/episode/{id}"))
+            });
         let now = crate::app::metadata::unix_now() as i64;
         let start_unix = now - (pb.progress_ms / 1000) as i64;
         let duration_secs = (pb.duration_ms / 1000) as i64;
-        if pb.is_playing {
-            let end_unix = (duration_secs > 0).then_some(start_unix + duration_secs);
-            discord.update_playing(
-                &pb.title,
-                &pb.artist,
-                &pb.album,
-                pb.art_url.as_deref(),
-                start_unix,
-                end_unix,
-            );
-        } else {
-            discord.update_paused(
-                &pb.title,
-                &pb.artist,
-                pb.art_url.as_deref(),
-                start_unix,
-                now,
-            );
-        }
+        let end_unix = (duration_secs > 0).then_some(start_unix + duration_secs);
+        discord.update_playing(
+            &pb.title,
+            &pb.artist,
+            &pb.album,
+            pb.art_url.as_deref(),
+            track_url.as_deref(),
+            start_unix,
+            end_unix,
+        );
     }
 
     #[cfg(all(feature = "mpris", target_os = "linux"))]

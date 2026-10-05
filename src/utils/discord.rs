@@ -1,5 +1,8 @@
 pub const DEFAULT_APP_ID: &str = "1489692487541850324";
 
+#[cfg(feature = "discord")]
+const ISI_LOGO_KEY: &str = "isi_logo";
+
 /// Discord Rich Presence — shows current track in Discord activity.
 ///
 /// Runs in a dedicated std::thread (discord-rich-presence is blocking).
@@ -18,29 +21,38 @@ fn http_image(url: &str) -> Option<&str> {
 }
 
 #[cfg(feature = "discord")]
+fn spotify_button<'a>(track_url: Option<&'a str>) -> Option<Vec<activity::Button<'a>>> {
+    track_url.map(|url| vec![activity::Button::new("Listen on Spotify", url)])
+}
+
+#[cfg(feature = "discord")]
 fn build_playing_activity<'a>(
     title: &'a str,
     artist: &'a str,
     album: &'a str,
-    image: Option<&'a str>,
+    image: &'a str,
+    track_url: Option<&'a str>,
     start_unix: i64,
     end_unix: Option<i64>,
 ) -> activity::Activity<'a> {
     let large_text = if album.is_empty() { title } else { album };
-    let mut assets = activity::Assets::new().large_text(large_text);
-    if let Some(img) = image {
-        assets = assets.large_image(img);
-    }
+    let assets = activity::Assets::new()
+        .large_text(large_text)
+        .large_image(image);
     let mut timestamps = activity::Timestamps::new().start(start_unix);
     if let Some(end) = end_unix {
         timestamps = timestamps.end(end);
     }
-    activity::Activity::new()
+    let mut activity = activity::Activity::new()
         .activity_type(activity::ActivityType::Listening)
         .details(title)
         .state(artist)
         .timestamps(timestamps)
-        .assets(assets)
+        .assets(assets);
+    if let Some(buttons) = spotify_button(track_url) {
+        activity = activity.buttons(buttons);
+    }
+    activity
 }
 
 pub struct DiscordRpc {
@@ -53,15 +65,9 @@ enum RpcUpdate {
         artist: String,
         album: String,
         art_url: Option<String>,
+        track_url: Option<String>,
         start_unix: i64,
         end_unix: Option<i64>,
-    },
-    Paused {
-        title: String,
-        artist: String,
-        art_url: Option<String>,
-        start_unix: i64,
-        end_unix: i64,
     },
     Clear,
 }
@@ -77,44 +83,23 @@ fn send_update(
             artist,
             album,
             art_url,
+            track_url,
             start_unix,
             end_unix,
         } => {
-            let image = art_url.as_deref().and_then(http_image);
+            let image = art_url
+                .as_deref()
+                .and_then(http_image)
+                .unwrap_or(ISI_LOGO_KEY);
             client.set_activity(build_playing_activity(
                 title,
                 artist,
                 album,
                 image,
+                track_url.as_deref(),
                 *start_unix,
                 *end_unix,
             ))
-        }
-        RpcUpdate::Paused {
-            title,
-            artist,
-            art_url,
-            start_unix,
-            end_unix,
-        } => {
-            let image = art_url.as_deref().and_then(http_image);
-            let state = format!("{artist} · Paused");
-            let mut assets = activity::Assets::new().large_text(title.as_str());
-            if let Some(img) = image {
-                assets = assets.large_image(img);
-            }
-            client.set_activity(
-                activity::Activity::new()
-                    .activity_type(activity::ActivityType::Listening)
-                    .details(title.as_str())
-                    .state(&state)
-                    .timestamps(
-                        activity::Timestamps::new()
-                            .start(*start_unix)
-                            .end(*end_unix),
-                    )
-                    .assets(assets),
-            )
         }
         RpcUpdate::Clear => client.clear_activity(),
     }
@@ -201,12 +186,14 @@ impl DiscordRpc {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_playing(
         &self,
         title: &str,
         artist: &str,
         album: &str,
         art_url: Option<&str>,
+        track_url: Option<&str>,
         start_unix: i64,
         end_unix: Option<i64>,
     ) {
@@ -217,35 +204,13 @@ impl DiscordRpc {
                 artist: artist.to_string(),
                 album: album.to_string(),
                 art_url: art_url.map(|s| s.to_string()),
+                track_url: track_url.map(|s| s.to_string()),
                 start_unix,
                 end_unix,
             })
             .is_err()
         {
             tracing::trace!("Discord RPC channel full, dropping update_playing");
-        }
-    }
-
-    pub fn update_paused(
-        &self,
-        title: &str,
-        artist: &str,
-        art_url: Option<&str>,
-        start_unix: i64,
-        end_unix: i64,
-    ) {
-        if self
-            .tx
-            .try_send(RpcUpdate::Paused {
-                title: title.to_string(),
-                artist: artist.to_string(),
-                art_url: art_url.map(|s| s.to_string()),
-                start_unix,
-                end_unix,
-            })
-            .is_err()
-        {
-            tracing::trace!("Discord RPC channel full, dropping update_paused");
         }
     }
 
