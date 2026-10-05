@@ -1,5 +1,9 @@
+use super::combo::{KeyCombo, KeyId, key_combo_to_string, parse_key_combo};
+use super::map::Keybinds;
+use super::schema::{KeybindsToml, KeybindsTomlOutput, name_to_action};
 use super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
+use std::collections::HashMap;
 
 #[test]
 fn defaults_contains_all_actions() {
