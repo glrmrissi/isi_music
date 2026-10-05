@@ -126,6 +126,7 @@ impl App {
 
                 if self.player_mgr.local_active {
                     self.state.playback.cover_path = track.cover_path.clone();
+                    self.state.playback.art_url = None;
                 } else {
                     self.state.playback.art_url = track.cover_path.clone();
                     // Spotify tracks don't carry a local cover path; clear
