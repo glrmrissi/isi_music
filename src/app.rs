@@ -1100,7 +1100,12 @@ impl App {
             .unwrap_or_else(|| Duration::from_secs(0));
 
             let mut event_received = false;
-            if crossterm::event::poll(timeout)? {
+            let mut wait = timeout;
+            for _ in 0..64 {
+                if !crossterm::event::poll(wait)? {
+                    break;
+                }
+                wait = Duration::ZERO;
                 match crossterm::event::read()? {
                     crossterm::event::Event::Key(key_event) => {
                         // Windows consoles also emit Release events — handle only
@@ -1120,9 +1125,9 @@ impl App {
                     }
                     _ => {}
                 }
-                if event_received {
-                    self.needs_redraw = true;
-                }
+            }
+            if event_received {
+                self.needs_redraw = true;
             }
 
             self.player_mgr.interpolate_progress(&mut self.state);
