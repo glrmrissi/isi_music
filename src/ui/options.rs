@@ -600,6 +600,8 @@ impl SettingsPanel {
             ("Mono Audio", "", state.mono_audio),
             ("Compact Mode", "", state.compact_mode),
             ("Breadcrumb", "", state.show_breadcrumb),
+            ("ASCII Art", "", state.show_ascii_art),
+            ("Transparent Background", "", theme.transparent_background),
         ];
 
         let lastfm_text = if state.lastfm_connected {

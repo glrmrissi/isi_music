@@ -384,6 +384,67 @@ async fn settings_equalizer_reset_row_arrows_are_noop() {
 }
 
 #[tokio::test]
+async fn settings_ascii_art_toggle_flips_state() {
+    let mut app = App::new_for_test().await;
+    app.state.show_ascii_art = false;
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::General;
+        #[cfg(feature = "album-art")]
+        {
+            panel.selected_item = 7;
+        }
+        #[cfg(not(feature = "album-art"))]
+        {
+            panel.selected_item = 6;
+        }
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert!(app.state.show_ascii_art);
+    assert_eq!(app.state.status_msg.as_deref(), Some("ASCII art enabled"));
+}
+
+#[tokio::test]
+async fn settings_transparent_background_toggle_flips_ui_theme() {
+    let mut app = App::new_for_test().await;
+    assert!(!app.ui.theme_snapshot().transparent_background);
+    {
+        let panel = app.settings_panel.as_mut().unwrap();
+        panel.visible = true;
+        panel.focused_section = crate::ui::options::SettingsSection::General;
+        #[cfg(feature = "album-art")]
+        {
+            panel.selected_item = 8;
+        }
+        #[cfg(not(feature = "album-art"))]
+        {
+            panel.selected_item = 7;
+        }
+    }
+
+    app.handle_key(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    )
+    .await
+    .expect("handle_key");
+
+    assert!(app.ui.theme_snapshot().transparent_background);
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Transparent background enabled")
+    );
+}
+
+#[tokio::test]
 async fn settings_general_renders_lyrics_display() {
     let mut app = App::new_for_test().await;
     let panel = app.settings_panel.as_mut().unwrap();

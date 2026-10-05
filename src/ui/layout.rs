@@ -16,7 +16,7 @@ impl Ui {
             children: None,
         };
 
-        let (main_constraints, main_children) = if self.theme.show_ascii_art {
+        let (main_constraints, main_children) = if state.show_ascii_art {
             (
                 vec![
                     SerializableConstraint::Percentage(35),
@@ -99,7 +99,7 @@ impl Ui {
                     self.render_visualizer(frame, &state.playback, &state.viz_bands, area, state);
                 }
                 UiWidget::Help => {}
-                UiWidget::AsciiArt => self.render_ascii_art(frame, area),
+                UiWidget::AsciiArt => self.render_ascii_art(frame, state, area),
                 UiWidget::Spacer => {}
                 UiWidget::Lyrics => {
                     if state.show_lyrics {
@@ -165,8 +165,8 @@ impl Ui {
         }
     }
 
-    pub fn render_ascii_art(&self, frame: &mut Frame, area: Rect) {
-        if !self.theme.show_ascii_art {
+    pub fn render_ascii_art(&self, frame: &mut Frame, state: &UiState, area: Rect) {
+        if !state.show_ascii_art {
             return;
         }
         let Some(lines) = self.theme.load_ascii_art() else {

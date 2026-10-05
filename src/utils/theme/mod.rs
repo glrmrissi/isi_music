@@ -227,6 +227,8 @@ pub struct Theme {
     #[serde(default = "default_cross_fade_ms")]
     pub reactive_cross_fade_ms: u64,
     #[serde(default)]
+    pub transparent_background: bool,
+    #[serde(default)]
     pub visualizer: VisualizerConfig,
     #[serde(default)]
     pub borders: HashMap<UiWidget, BorderConfig>,
@@ -264,6 +266,7 @@ impl Default for Theme {
             info: default_info(),
             reactive_theme: false,
             reactive_cross_fade_ms: default_cross_fade_ms(),
+            transparent_background: false,
             visualizer: VisualizerConfig::default(),
             borders: HashMap::new(),
         }
@@ -351,6 +354,7 @@ impl Theme {
             ascii_art_inline: legacy.ascii_art_inline.clone(),
             ascii_art_path: legacy.ascii_art_path.clone(),
             show_ascii_art: legacy.show_ascii_art,
+            transparent_background: legacy.transparent_background,
             highlight_symbol: legacy.highlight_symbol.clone(),
             options_panel_symbol: legacy.options_panel_symbol.clone(),
             ..Default::default()

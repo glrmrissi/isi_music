@@ -182,6 +182,7 @@ impl App {
         state.show_breadcrumb = cfg.show_breadcrumb();
         state.compact_mode = cfg.compact_mode_default();
         state.reactive_theme_enabled = theme.reactive_theme;
+        state.show_ascii_art = theme.show_ascii_art;
         state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
         state.spotify_authenticated = spotify.authenticated;
         state.spotify_enabled = spotify_enabled;
