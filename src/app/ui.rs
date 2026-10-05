@@ -335,11 +335,15 @@ impl App {
         self.fetcher.album_art_pending = Some(rx);
 
         tokio::spawn(async move {
-            let Some(track_id) = uri.strip_prefix("spotify:track:").map(|s| s.to_string()) else {
+            let (endpoint, id, episode) = if let Some(id) = uri.strip_prefix("spotify:track:") {
+                ("tracks", id.to_string(), false)
+            } else if let Some(id) = uri.strip_prefix("spotify:episode:") {
+                ("episodes", id.to_string(), true)
+            } else {
                 return;
             };
             let Ok(resp) = http
-                .get(format!("https://api.spotify.com/v1/tracks/{track_id}"))
+                .get(format!("https://api.spotify.com/v1/{endpoint}/{id}"))
                 .bearer_auth(&token)
                 .send()
                 .await
@@ -349,7 +353,12 @@ impl App {
             let Ok(json) = resp.json::<serde_json::Value>().await else {
                 return;
             };
-            let Some(url) = json["album"]["images"]
+            let images = if episode {
+                &json["images"]
+            } else {
+                &json["album"]["images"]
+            };
+            let Some(url) = images
                 .as_array()
                 .and_then(|imgs| imgs.first())
                 .and_then(|img| img["url"].as_str())
