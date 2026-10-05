@@ -107,41 +107,17 @@ impl App {
                         let id = show.id.clone();
                         let name = show.name.clone();
                         self.state.push_nav();
+                        self.fetcher.cancel_all_pending(&mut self.state);
                         self.state.status_msg = Some(format!("Loading {name}…"));
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        match self.spotify.fetch_show_episodes(&id, 0).await {
-                            Ok((tracks, total)) => {
-                                self.state.tracks = tracks;
-                                self.state.tracks_total = total;
-                                self.state.tracks_offset = self.state.tracks.len() as u32;
-                                self.state.tracks_api_offset = self.state.tracks.len() as u32;
-                                self.state.active_playlist_uri = Some(format!("show:{id}"));
-                                self.state.active_playlist_id = Some(format!("show:{id}"));
-                                self.state
-                                    .track_list
-                                    .select(if self.state.tracks.is_empty() {
-                                        None
-                                    } else {
-                                        Some(0)
-                                    });
-                                self.state.active_content = ActiveContent::Tracks;
-                                self.state.rebuild_sort_indices();
-                                self.state.status_msg = None;
-                            }
-                            Err(e) => {
-                                let err_str = e.to_string();
-                                if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                    || err_str.contains("401")
-                                {
-                                    warn!("Got 401 - triggering reconnect");
-                                    needs_reconnect = true;
-                                    self.state.status_msg =
-                                        Some("Authorization expired, reconnecting...".to_string());
-                                } else {
-                                    self.state.status_msg = Some(format!("Error: {e}"));
-                                }
-                            }
-                        }
+                        self.state.loading = true;
+                        self.state.active_playlist_uri = Some(format!("show:{id}"));
+                        self.state.active_playlist_id = Some(format!("show:{id}"));
+                        let spotify = Arc::clone(&self.spotify);
+                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                        self.fetcher.stream_rx = Some(rx);
+                        tokio::spawn(async move {
+                            let _ = spotify.stream_show_episodes(&id, &name, tx).await;
+                        });
                     }
                 }
                 ActiveContent::LocalFiles => {
@@ -187,7 +163,7 @@ impl App {
                                 .unwrap_or(0);
                             if let Some(player) = &mut self.player_mgr.player {
                                 player.set_queue_tracks(&all_tracks, start_idx);
-                                self.player_mgr.playing_tracks = all_tracks;
+                                self.player_mgr.playing_tracks = Vec::new();
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                                 self.state.playback.title = track.name.clone();
                                 self.state.playback.artist = track.artist.clone();
@@ -236,7 +212,7 @@ impl App {
                                 .unwrap_or(0);
                             if let Some(player) = &mut self.player_mgr.player {
                                 player.set_queue_tracks(&all_tracks, start_idx);
-                                self.player_mgr.playing_tracks = all_tracks;
+                                self.player_mgr.playing_tracks = Vec::new();
                                 let track = self.state.tracks[actual_idx].clone();
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                                 self.state.playback.title = track.name.clone();
@@ -263,32 +239,17 @@ impl App {
                         }
                         self.state.cancel_quick_search();
                         self.activate_spotify_player();
-                        self.ensure_spotify_player().await;
-                        if self
-                            .state
-                            .tracks
-                            .get(actual_idx)
-                            .map(|t| t.uri.starts_with("spotify:episode:"))
-                            .unwrap_or(false)
-                        {
-                            self.state.status_msg =
-                                Some("Podcast playback not supported".to_string());
-                        } else if let Some(player) = &mut self.player_mgr.player {
-                            let uris: Vec<String> = self
-                                .state
-                                .tracks
-                                .iter()
-                                .filter(|t| !t.uri.starts_with("spotify:episode:"))
-                                .map(|t| t.uri.clone())
-                                .collect();
-                            let adjusted_idx = self.state.tracks[..actual_idx]
-                                .iter()
-                                .filter(|t| !t.uri.starts_with("spotify:episode:"))
-                                .count();
+                        let player_ready = self.ensure_spotify_player().await;
+                        let player_error = (!player_ready)
+                            .then(|| self.state.status_msg.clone())
+                            .flatten();
+                        if let Some(player) = &mut self.player_mgr.player {
+                            let uris: Vec<String> =
+                                self.state.tracks.iter().map(|t| t.uri.clone()).collect();
                             if let Some(track) = self.state.tracks.get(actual_idx) {
                                 self.state.status_msg = Some(format!("Playing {}…", track.name));
                             }
-                            player.set_queue(uris, adjusted_idx);
+                            player.set_queue(uris, actual_idx);
                             self.player_mgr.playing_tracks = self.state.tracks.clone();
                             if let Some(track) = self.state.tracks.get(actual_idx) {
                                 self.state.playback.title = track.name.clone();
@@ -304,34 +265,37 @@ impl App {
                             }
                         } else if self.spotify.authenticated {
                             let track_uri = self.state.tracks[actual_idx].uri.clone();
-                            let is_playlist = self
-                                .state
-                                .active_playlist_uri
-                                .as_deref()
-                                .map(|u| u != "liked_songs" && !u.starts_with("search:"))
-                                .unwrap_or(false);
+                            let context_uri =
+                                self.state.active_playlist_uri.as_deref().and_then(|u| {
+                                    for kind in ["album", "artist", "show"] {
+                                        if let Some(id) = u.strip_prefix(&format!("{kind}:")) {
+                                            return Some(format!("spotify:{kind}:{id}"));
+                                        }
+                                    }
+                                    if u.starts_with("spotify:") {
+                                        Some(u.to_string())
+                                    } else {
+                                        None
+                                    }
+                                });
                             tokio::time::sleep(Duration::from_millis(100)).await;
-                            let result = if is_playlist {
-                                if let Some(uri) = self.state.active_playlist_uri.clone() {
-                                    self.spotify.play_in_context(&uri, &track_uri).await
-                                } else {
-                                    self.spotify.play_track_uri(&track_uri).await
-                                }
+                            let result = if let Some(ctx) = context_uri {
+                                self.spotify.play_in_context(&ctx, &track_uri).await
                             } else {
                                 self.spotify.play_track_uri(&track_uri).await
                             };
-                            if let Err(e) = result {
-                                let err_str = e.to_string();
-                                if err_str.contains("SPOTIFY_UNAUTHORIZED")
-                                    || err_str.contains("401")
-                                {
-                                    warn!("Got 401 - triggering reconnect");
-                                    needs_reconnect = true;
-                                    self.state.status_msg =
-                                        Some("Authorization expired, reconnecting...".to_string());
-                                } else {
-                                    self.state.status_msg = Some(format!("Error: {e}"));
+                            match result {
+                                Ok(()) if !player_ready => {
+                                    self.state.status_msg = Some(
+                                        "Playback sent to an active Spotify Connect device"
+                                            .to_string(),
+                                    );
                                 }
+                                Err(e) => {
+                                    needs_reconnect |=
+                                        self.report_remote_play_error(&e, player_error.as_deref());
+                                }
+                                _ => {}
                             }
                         }
                     }

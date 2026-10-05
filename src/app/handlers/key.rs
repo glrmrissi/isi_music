@@ -7,15 +7,15 @@ fn smtc_toggle_index() -> usize {
     let base = {
         #[cfg(all(feature = "album-art", feature = "palette"))]
         {
-            8
+            11
         }
         #[cfg(all(feature = "album-art", not(feature = "palette")))]
         {
-            7
+            10
         }
         #[cfg(not(feature = "album-art"))]
         {
-            6
+            10
         }
     };
     #[cfg(windows)]
@@ -135,6 +135,22 @@ impl App {
                                 });
                             }
                             3 => {
+                                self.state.mono_audio = !self.state.mono_audio;
+                                panel.config.audio.mono = self.state.mono_audio;
+                                panel.save_config();
+                                if let Some(player) = &mut self.player_mgr.player {
+                                    player.set_mono_enabled(self.state.mono_audio);
+                                }
+                                if let Some(player) = &mut self.player_mgr.parked_player {
+                                    player.set_mono_enabled(self.state.mono_audio);
+                                }
+                                self.state.status_msg = Some(if self.state.mono_audio {
+                                    "Mono audio enabled".to_string()
+                                } else {
+                                    "Mono audio disabled".to_string()
+                                });
+                            }
+                            4 => {
                                 self.state.compact_mode = !self.state.compact_mode;
                                 panel.config.ui.compact_mode_default =
                                     Some(self.state.compact_mode);
@@ -145,7 +161,7 @@ impl App {
                                     "Compact mode off".to_string()
                                 });
                             }
-                            4 => {
+                            5 => {
                                 self.state.show_breadcrumb = !self.state.show_breadcrumb;
                                 panel.config.ui.show_breadcrumb = Some(self.state.show_breadcrumb);
                                 panel.save_config();
@@ -155,10 +171,46 @@ impl App {
                                     "Breadcrumb off".to_string()
                                 });
                             }
-                            5 => {
+                            6 => {
+                                self.state.show_ascii_art = !self.state.show_ascii_art;
+                                match self.theme_mgr.set_ascii_art(self.state.show_ascii_art) {
+                                    Ok(()) => {
+                                        self.state.status_msg =
+                                            Some(if self.state.show_ascii_art {
+                                                "ASCII art enabled".to_string()
+                                            } else {
+                                                "ASCII art disabled".to_string()
+                                            });
+                                    }
+                                    Err(e) => {
+                                        self.state.status_msg = Some(format!(
+                                            "ASCII art toggled but theme.toml save failed: {e}"
+                                        ));
+                                    }
+                                }
+                            }
+                            7 => {
+                                let v = !self.ui.theme_snapshot().transparent_background;
+                                self.ui.set_transparent_background(v);
+                                match self.theme_mgr.set_transparent_background(v) {
+                                    Ok(()) => {
+                                        self.state.status_msg = Some(if v {
+                                            "Transparent background enabled".to_string()
+                                        } else {
+                                            "Transparent background disabled".to_string()
+                                        });
+                                    }
+                                    Err(e) => {
+                                        self.state.status_msg = Some(format!(
+                                            "Background toggled but theme.toml save failed: {e}"
+                                        ));
+                                    }
+                                }
+                            }
+                            8 => {
                                 self.toggle_lastfm_scrobbling().await;
                             }
-                            6 => {
+                            9 => {
                                 let v = !panel.config.autoplay_enabled();
                                 panel.config.ui.autoplay = Some(v);
                                 self.player_mgr.autoplay_enabled = v;
@@ -170,7 +222,7 @@ impl App {
                                 });
                             }
                             #[cfg(all(feature = "album-art", feature = "palette"))]
-                            7 => {
+                            10 => {
                                 let enabled = !self.theme_mgr.reactive_theme_enabled();
                                 if let Err(e) = self.theme_mgr.toggle_reactive(enabled) {
                                     self.state.status_msg =
@@ -253,6 +305,19 @@ impl App {
                     }
                     _ => {}
                 },
+                SettingsAction::EqChanged => {
+                    let gains = panel.config.audio.eq_gains;
+                    self.state.eq_gains = gains;
+                    if let Some(player) = &mut self.player_mgr.player {
+                        player.set_eq_gains(gains);
+                    }
+                    if let Some(player) = &mut self.player_mgr.parked_player {
+                        player.set_eq_gains(gains);
+                    }
+                    self.state.status_msg =
+                        Some(format!("EQ: {}", crate::audio::eq::preset_name(&gains)));
+                    self.needs_redraw = true;
+                }
                 SettingsAction::ClearAllCache => {
                     let _ = panel.cache_manager.clear_all().await;
                     self.spotify.library_cache.clear_all_library_cache();

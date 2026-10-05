@@ -28,19 +28,25 @@ impl App {
                 self.state.status_msg = Some("Like failed: no token".to_string());
                 return;
             };
-            let track_id = self
-                .current_track_uri
-                .rsplit(':')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            if track_id.is_empty() {
-                self.state.status_msg = Some("Like failed: empty track ID".to_string());
+            let uri = self.current_track_uri.clone();
+            if !uri.starts_with("spotify:") {
+                self.state.status_msg = Some("Like failed: invalid URI".to_string());
                 return;
             }
-            match crate::spotify::save_track_http(&self.spotify.http, &token, &track_id).await {
+            let is_episode = uri.starts_with("spotify:episode:");
+            match crate::spotify::save_uri_http(&self.spotify.http, &token, &uri).await {
                 Ok(_) => {
-                    self.state.status_msg = Some("Liked".to_string());
+                    self.state.status_msg = Some(
+                        if is_episode {
+                            "Saved to Your Episodes"
+                        } else {
+                            "Liked"
+                        }
+                        .to_string(),
+                    );
+                    if is_episode {
+                        return;
+                    }
                     let new_track = crate::spotify::TrackSummary {
                         name: self.state.playback.title.clone(),
                         artist: self.state.playback.artist.clone(),
@@ -78,6 +84,11 @@ impl App {
             .current_track_uri
             .strip_prefix("spotify:track:")
             .map(|id| format!("https://open.spotify.com/track/{id}"))
+            .or_else(|| {
+                self.current_track_uri
+                    .strip_prefix("spotify:episode:")
+                    .map(|id| format!("https://open.spotify.com/episode/{id}"))
+            })
             .unwrap_or_default();
         if url.is_empty() {
             self.state.status_msg = Some("No track playing".to_string());
@@ -217,37 +228,30 @@ impl App {
                 self.state.status_msg = Some("No track playing".to_string());
             } else {
                 // Not a playlist — check if track is liked
-                let track_id = self
-                    .current_track_uri
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                if track_id.is_empty() {
+                let uri = self.current_track_uri.clone();
+                if !uri.starts_with("spotify:") {
                     self.state.status_msg = Some("Invalid track".to_string());
                     return;
                 }
 
                 self.state.status_msg = Some("Checking...".to_string());
-                match self.spotify.check_track_saved(&track_id).await {
+                match self.spotify.check_uri_saved(&uri).await {
                     Ok(true) => {
                         let Some(token) = self.spotify.get_access_token().await else {
                             self.state.status_msg = Some("Unlike failed: no token".to_string());
                             return;
                         };
-                        match crate::spotify::unlike_track_http(
-                            &self.spotify.http,
-                            &token,
-                            &track_id,
-                        )
-                        .await
+                        match crate::spotify::remove_uri_http(&self.spotify.http, &token, &uri)
+                            .await
                         {
                             Ok(_) => {
                                 self.state.status_msg = Some("Unliked".to_string());
                                 let uri = self.current_track_uri.clone();
-                                if self.state.active_playlist_id.as_deref() == Some("liked_songs")
-                                    && let Some(pos) =
-                                        self.state.tracks.iter().position(|t| t.uri == uri)
+                                if matches!(
+                                    self.state.active_playlist_id.as_deref(),
+                                    Some("liked_songs") | Some("saved_episodes")
+                                ) && let Some(pos) =
+                                    self.state.tracks.iter().position(|t| t.uri == uri)
                                 {
                                     self.state.tracks.remove(pos);
                                     self.state.tracks_offset =
@@ -277,6 +281,79 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    pub(crate) async fn handle_remote_play_error(
+        &mut self,
+        e: &anyhow::Error,
+        player_error: Option<&str>,
+    ) {
+        if self.report_remote_play_error(e, player_error) {
+            self.reconnect_player().await;
+        }
+    }
+
+    pub(crate) async fn remote_toggle_playback(&mut self, player_error: Option<String>) {
+        let result = self.spotify.toggle_playback().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    pub(crate) async fn remote_next_track(&mut self, player_error: Option<String>) {
+        let result = self.spotify.next_track().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    pub(crate) async fn remote_prev_track(&mut self, player_error: Option<String>) {
+        let result = self.spotify.prev_track().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    async fn report_remote_control_result(
+        &mut self,
+        result: anyhow::Result<()>,
+        player_error: Option<String>,
+    ) {
+        match result {
+            Ok(()) if player_error.is_some() => {
+                self.state.status_msg =
+                    Some("Playback command sent to an active Spotify Connect device".to_string());
+            }
+            Err(e) => {
+                self.handle_remote_play_error(&e, player_error.as_deref())
+                    .await
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn report_remote_play_error(
+        &mut self,
+        e: &anyhow::Error,
+        player_error: Option<&str>,
+    ) -> bool {
+        let err_str = e.to_string();
+        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+            tracing::warn!("Got 401 - triggering reconnect");
+            self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+            true
+        } else if err_str.contains("no_active_device") || err_str.contains("No active device") {
+            let status = "Spotify Connect has no active device";
+            self.state.status_msg = Some(match player_error {
+                Some(player_error) => format!("{player_error}; {status}"),
+                None => "No active Spotify device — streaming player unavailable or start Spotify on a device"
+                    .to_string(),
+            });
+            false
+        } else {
+            self.state.status_msg = Some(match player_error {
+                Some(player_error) => format!("{player_error}; remote playback failed: {e}"),
+                None => format!("Error: {e}"),
+            });
+            false
         }
     }
 }

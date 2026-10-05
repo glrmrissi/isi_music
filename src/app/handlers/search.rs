@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::event::KeyCode;
+use tracing::warn;
 
 use crate::App;
 use crate::app::fetcher::StreamEvent;
@@ -90,11 +91,23 @@ impl App {
         if !dir.exists() {
             return;
         }
+        let Some(scan_guard) = self.fetcher.try_start_local_scan() else {
+            return;
+        };
 
-        let nodes =
-            tokio::task::spawn_blocking(move || crate::app::library::scan_local_files(&dir))
-                .await
-                .unwrap_or_default();
+        let nodes = match tokio::task::spawn_blocking(move || {
+            let _scan_guard = scan_guard;
+            crate::app::library::scan_local_files(&dir)
+        })
+        .await
+        {
+            Ok(nodes) => nodes,
+            Err(e) => {
+                warn!("local file scan task failed; keeping existing tree: {e}");
+                self.state.status_msg = Some("Local file scan failed".to_string());
+                return;
+            }
+        };
 
         let tree = crate::ui::LocalFileTree::new(nodes);
         self.state.local_tree = tree;
@@ -125,13 +138,8 @@ impl App {
         let total = matched.len() as u32;
         let results = FullSearchResults {
             tracks: matched,
-            artists: vec![],
-            albums: vec![],
-            playlists: vec![],
             tracks_total: total,
-            artists_total: 0,
-            albums_total: 0,
-            playlists_total: 0,
+            ..FullSearchResults::empty()
         };
         self.state.search_results = Some(SearchResults::new(query.to_string(), results));
         if let Some(sr) = &mut self.state.search_results {

@@ -152,6 +152,10 @@ fn theme_toml_roundtrip() {
     assert_eq!(t.background, deserialized.background);
     assert_eq!(t.text_secondary, deserialized.text_secondary);
     assert_eq!(
+        t.transparent_background,
+        deserialized.transparent_background
+    );
+    assert_eq!(
         t.fullscreen_layout.children.as_ref().unwrap().len(),
         deserialized
             .fullscreen_layout
@@ -648,6 +652,24 @@ reactive_cross_fade_ms = 1200
     let theme: Theme = toml::from_str(toml_str).unwrap();
     assert!(theme.reactive_theme);
     assert_eq!(theme.reactive_cross_fade_ms, 1200);
+}
+
+#[test]
+fn transparent_background_defaults_off() {
+    assert!(!Theme::default().transparent_background);
+    let toml_str = r#"
+border_active = "red"
+border_inactive = "gray"
+highlight_bg = "rgb(40,40,40)"
+text_primary = "white"
+accent_color = "green"
+background = "rgb(20,20,20)"
+text_secondary = "gray"
+status_bar = "rgb(30,30,30)"
+transparent_background = true
+"#;
+    let theme: Theme = toml::from_str(toml_str).unwrap();
+    assert!(theme.transparent_background);
 }
 
 #[test]

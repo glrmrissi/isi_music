@@ -27,6 +27,7 @@ pub enum SearchPanel {
     Artists,
     Albums,
     Playlists,
+    Podcasts,
 }
 
 impl SearchPanel {
@@ -35,16 +36,18 @@ impl SearchPanel {
             Self::Tracks => Self::Artists,
             Self::Artists => Self::Albums,
             Self::Albums => Self::Playlists,
-            Self::Playlists => Self::Tracks,
+            Self::Playlists => Self::Podcasts,
+            Self::Podcasts => Self::Tracks,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Tracks => Self::Playlists,
+            Self::Tracks => Self::Podcasts,
             Self::Artists => Self::Tracks,
             Self::Albums => Self::Artists,
             Self::Playlists => Self::Albums,
+            Self::Podcasts => Self::Playlists,
         }
     }
 }
@@ -63,7 +66,6 @@ pub struct NavEntry {
     pub active_playlist_id: Option<String>,
     pub active_artist_name: Option<String>,
     pub search_results: Option<SearchResults>,
-    pub previous_search: Option<SearchResults>,
     pub tracks: Vec<crate::spotify::TrackSummary>,
     pub sorted_track_indices: Vec<usize>,
     pub track_sort_by: TrackSortBy,
@@ -144,7 +146,6 @@ pub struct UiState {
     pub shows_offset: u32,
     pub shows_total: u32,
     pub search_results: Option<SearchResults>,
-    pub previous_search: Option<SearchResults>,
     pub fullscreen_player: bool,
     pub queue_items: Vec<(String, String)>,
     pub queue_list: ListState,
@@ -160,10 +161,13 @@ pub struct UiState {
     pub spin_angle: f64,
     pub marquee_offset: usize,
     pub show_breadcrumb: bool,
+    pub show_ascii_art: bool,
     pub marquee_ms: u64,
     pub viz_bands: Vec<f32>,
     pub art_url: Option<String>,
     pub show_visualizer: bool,
+    pub mono_audio: bool,
+    pub eq_gains: [i8; crate::audio::eq::EQ_BANDS],
     pub reactive_theme_enabled: bool,
     pub track_sort_by: TrackSortBy,
     pub sorted_track_indices: Vec<usize>,
@@ -221,7 +225,6 @@ impl UiState {
             shows_offset: 0,
             shows_total: 0,
             search_results: None,
-            previous_search: None,
             fullscreen_player: false,
             queue_items: Vec::new(),
             queue_list: ListState::default(),
@@ -237,10 +240,13 @@ impl UiState {
             spin_angle: 0.0,
             marquee_offset: 0,
             show_breadcrumb: false,
+            show_ascii_art: false,
             marquee_ms: 0,
             viz_bands: Vec::new(),
             art_url: None,
             show_visualizer: true,
+            mono_audio: false,
+            eq_gains: [0; crate::audio::eq::EQ_BANDS],
             reactive_theme_enabled: false,
             track_sort_by: TrackSortBy::Default,
             sorted_track_indices: Vec::new(),

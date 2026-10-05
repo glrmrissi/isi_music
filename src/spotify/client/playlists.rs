@@ -4,6 +4,49 @@ use tracing::{info, warn};
 use super::super::types::{PlaylistSummary, TrackSummary};
 use super::SpotifyClient;
 
+pub(crate) fn playlist_item_to_track(item_wrapper: &serde_json::Value) -> Option<TrackSummary> {
+    let track = if !item_wrapper["item"].is_null() {
+        &item_wrapper["item"]
+    } else if !item_wrapper["track"].is_null() {
+        &item_wrapper["track"]
+    } else {
+        return None;
+    };
+    if track.is_null() {
+        return None;
+    }
+    let uri = track["uri"].as_str().unwrap_or("").to_string();
+    if uri.is_empty() {
+        return None;
+    }
+    let (artist, album) = if track["type"].as_str() == Some("episode") {
+        let show = track["show"]["name"].as_str().unwrap_or("").to_string();
+        (show.clone(), show)
+    } else {
+        (
+            track["artists"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x["name"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default(),
+            track["album"]["name"].as_str().unwrap_or("").to_string(),
+        )
+    };
+    Some(TrackSummary {
+        name: track["name"].as_str().unwrap_or("Unknown").to_string(),
+        artist,
+        album,
+        duration_ms: track["duration_ms"].as_u64().unwrap_or(0),
+        uri,
+        cover_path: None,
+        added_at: item_wrapper["added_at"].as_str().map(|s| s.to_string()),
+    })
+}
+
 impl SpotifyClient {
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
         if !self.authenticated {
@@ -241,8 +284,8 @@ impl SpotifyClient {
     }
 
     /// Returns (tracks, total, page_items_count).
-    /// `page_items_count` is the number of items the API returned (before episode filtering),
-    /// which callers must use to increment the offset — NOT `tracks.len()`.
+    /// `page_items_count` is the number of raw items the API returned, which
+    /// callers must use to increment the offset — NOT `tracks.len()`.
     pub async fn fetch_playlist_tracks(
         &self,
         playlist_id: &str,
@@ -328,38 +371,8 @@ impl SpotifyClient {
                     let mut all_tracks = Vec::new();
                     if let Some(items) = tracks_obj["items"].as_array() {
                         for item_wrapper in items {
-                            let track = if !item_wrapper["item"].is_null() {
-                                &item_wrapper["item"]
-                            } else {
-                                &item_wrapper["track"]
-                            };
-                            if track.is_null() || track["type"].as_str() == Some("episode") {
-                                continue;
-                            }
-                            let name = track["name"].as_str().unwrap_or("Unknown").to_string();
-                            let artist = track["artists"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|x| x["name"].as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                })
-                                .unwrap_or_default();
-                            let album = track["album"]["name"].as_str().unwrap_or("").to_string();
-                            let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
-                            let uri = track["uri"].as_str().unwrap_or("").to_string();
-                            let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
-                            if !uri.is_empty() {
-                                all_tracks.push(TrackSummary {
-                                    name,
-                                    artist,
-                                    album,
-                                    duration_ms,
-                                    uri,
-                                    cover_path: None,
-                                    added_at,
-                                });
+                            if let Some(track) = playlist_item_to_track(item_wrapper) {
+                                all_tracks.push(track);
                             }
                         }
                     }
@@ -396,46 +409,8 @@ impl SpotifyClient {
 
         if let Some(items) = json["items"].as_array() {
             for item_wrapper in items {
-                // New API: "item" (was "track")
-                let track = if !item_wrapper["item"].is_null() {
-                    &item_wrapper["item"]
-                } else if !item_wrapper["track"].is_null() {
-                    &item_wrapper["track"]
-                } else {
-                    continue;
-                };
-
-                if track.is_null() || track["type"].as_str() == Some("episode") {
-                    continue;
-                }
-
-                let added_at = item_wrapper["added_at"].as_str().map(|s| s.to_string());
-
-                let name = track["name"].as_str().unwrap_or("Unknown").to_string();
-                let artist = track["artists"]
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| x["name"].as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_default();
-                let album = track["album"]["name"].as_str().unwrap_or("").to_string();
-                let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
-                let uri = track["uri"].as_str().unwrap_or("").to_string();
-                let cover_path = None;
-
-                if !uri.is_empty() {
-                    tracks.push(TrackSummary {
-                        name,
-                        artist,
-                        album,
-                        duration_ms,
-                        uri,
-                        cover_path,
-                        added_at,
-                    });
+                if let Some(track) = playlist_item_to_track(item_wrapper) {
+                    tracks.push(track);
                 }
             }
         }

@@ -9,11 +9,13 @@ pub mod state;
 pub use local_tree::{LIBRARY_ITEMS, LocalFileTree, LocalNode, library_items};
 pub use options::SettingsPanel;
 pub use playback::PlaybackState;
-pub use search::SearchResults;
+pub use search::{PodcastSelection, SearchResults};
 pub use state::{ActiveContent, CompactItem, Focus, SearchPanel, UiState};
 
 use crate::utils::debug_overlay::DebugOverlay;
-use crate::utils::theme::{BorderConfig, LayoutNode, SerializableConstraint, Theme, UiWidget};
+use crate::utils::theme::{
+    BorderConfig, LayoutNode, SerializableConstraint, SerializableDirection, Theme, UiWidget,
+};
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -53,6 +55,10 @@ impl Ui {
         self.theme.clone()
     }
 
+    pub fn set_transparent_background(&mut self, enabled: bool) {
+        self.theme.transparent_background = enabled;
+    }
+
     pub fn build_panel_block(&self, widget: UiWidget, focused: bool, title: &str) -> Block<'_> {
         use crate::utils::theme::BorderStyle as B;
 
@@ -77,18 +83,19 @@ impl Ui {
             B::None => Block::default(),
         };
 
-        block = block
-            .border_style(Style::default().fg(color))
-            .style(Style::default().bg(self.theme.background_panel))
-            .title_top(
-                Line::from(vec![Span::styled(
-                    format!(" {} ", title),
-                    Style::default()
-                        .fg(self.theme.primary)
-                        .add_modifier(Modifier::BOLD),
-                )])
-                .alignment(Alignment::Left),
-            );
+        block = block.border_style(Style::default().fg(color));
+        if !self.theme.transparent_background {
+            block = block.style(Style::default().bg(self.theme.background_panel));
+        }
+        block = block.title_top(
+            Line::from(vec![Span::styled(
+                format!(" {} ", title),
+                Style::default()
+                    .fg(self.theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )])
+            .alignment(Alignment::Left),
+        );
 
         block
     }
@@ -133,10 +140,12 @@ impl Ui {
         let area = frame.area();
 
         frame.render_widget(Clear, area);
-        frame.render_widget(
-            Block::default().style(Style::default().bg(self.theme.background)),
-            area,
-        );
+        if !self.theme.transparent_background {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(self.theme.background)),
+                area,
+            );
+        }
 
         let root_area = Rect {
             x: area.x + 1,
@@ -186,7 +195,40 @@ impl Ui {
             let layout_tree = self.build_compact_layout(state);
             self.render_recursive(frame, state, root_area, &layout_tree);
         } else {
-            let layout_tree = self.theme.layout_tree.clone();
+            let mut layout_tree = self.theme.layout_tree.clone();
+            if state.show_ascii_art
+                && let Some(lines) = self.theme.load_ascii_art()
+                && !lines.is_empty()
+            {
+                let art_w = lines
+                    .iter()
+                    .map(|l| {
+                        l.chars()
+                            .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as u16)
+                            .sum::<u16>()
+                    })
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(2)
+                    .clamp(10, 60);
+                layout_tree = LayoutNode {
+                    direction: Some(SerializableDirection::Horizontal),
+                    constraints: Some(vec![
+                        SerializableConstraint::Length(art_w),
+                        SerializableConstraint::Fill(1),
+                    ]),
+                    widget: None,
+                    children: Some(vec![
+                        LayoutNode {
+                            widget: Some(UiWidget::AsciiArt),
+                            direction: None,
+                            constraints: None,
+                            children: None,
+                        },
+                        layout_tree,
+                    ]),
+                };
+            }
             self.render_recursive(frame, state, root_area, &layout_tree);
         }
 

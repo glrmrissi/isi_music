@@ -11,7 +11,8 @@ use crate::config::{AppConfig, LastfmConfig};
 use crate::utils::theme::Theme;
 
 use helpers::{confirm_overwrite, detect_music_dir, header, optional_input, theme as dialog_theme};
-use layouts::{apply_layout_to_theme, pick_layout};
+pub use layouts::apply_layout_to_theme;
+use layouts::pick_layout;
 use presets::PRESETS;
 use spotify::configure_spotify;
 
@@ -285,23 +286,14 @@ pub(super) fn parse_hex(hex: &str) -> ratatui::style::Color {
 }
 
 fn save_config(cfg: &AppConfig) -> Result<()> {
-    let path = crate::config::config_path()?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let toml = toml::to_string_pretty(cfg).context("Failed to serialise config")?;
-    std::fs::write(&path, toml).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(())
+    cfg.save()
 }
 
 fn save_theme(theme: &Theme) -> Result<()> {
     let path = Theme::get_path().context("Could not determine theme path")?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
     let toml = toml::to_string_pretty(theme).context("Failed to serialise theme")?;
-    std::fs::write(&path, toml).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(())
+    crate::config::write_atomic(&path, &toml)
+        .with_context(|| format!("Failed to write {}", path.display()))
 }
 
 pub async fn run() -> Result<()> {

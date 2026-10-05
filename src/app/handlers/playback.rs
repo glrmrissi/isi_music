@@ -66,7 +66,6 @@ impl App {
         self.activate_spotify_player();
         if !self.ensure_spotify_player().await {
             warn!("Failed to create Spotify player");
-            self.state.status_msg = Some("Failed to create Spotify player".to_string());
             return;
         }
 
@@ -152,7 +151,6 @@ impl App {
         self.activate_spotify_player();
         if !self.ensure_spotify_player().await {
             warn!("Failed to create Spotify player");
-            self.state.status_msg = Some("Failed to create Spotify player".to_string());
             return;
         }
 
@@ -233,7 +231,6 @@ impl App {
         self.activate_spotify_player();
         if !self.ensure_spotify_player().await {
             warn!("Failed to create Spotify player");
-            self.state.status_msg = Some("Failed to create Spotify player".to_string());
             return;
         }
 
@@ -314,7 +311,6 @@ impl App {
         self.activate_spotify_player();
         if !self.ensure_spotify_player().await {
             warn!("Failed to create Spotify player");
-            self.state.status_msg = Some("Failed to create Spotify player".to_string());
             return;
         }
 

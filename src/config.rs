@@ -8,6 +8,7 @@ pub const CUSTOM_REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
+    #[serde(default)]
     pub spotify: SpotifyConfig,
     #[serde(default)]
     pub lastfm: LastfmConfig,
@@ -125,6 +126,10 @@ pub struct AudioConfig {
     /// Spotify stream bitrate in kbps: 96, 160 or 320.
     #[serde(default = "default_bitrate")]
     pub bitrate: u16,
+    #[serde(default)]
+    pub mono: bool,
+    #[serde(default)]
+    pub eq_gains: [i8; crate::audio::eq::EQ_BANDS],
 }
 
 fn default_true() -> bool {
@@ -156,7 +161,7 @@ impl AppConfig {
                 std::fs::create_dir_all(dir)?;
             }
             let empty = toml::to_string(&AppConfig::default())?;
-            std::fs::write(&path, empty)?;
+            write_atomic(&path, &empty)?;
             return Ok(AppConfig::default());
         }
 
@@ -272,14 +277,23 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = config_path()?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let content = toml::to_string_pretty(self)?;
-        std::fs::write(&path, content)?;
-        Ok(())
+        self.save_to(&config_path()?)
     }
+
+    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        write_atomic(path, &content)
+    }
+}
+
+pub fn write_atomic(path: &std::path::Path, contents: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, contents).with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("Failed to replace {}", path.display()))?;
+    Ok(())
 }
 
 pub fn config_path() -> Result<PathBuf> {
@@ -300,8 +314,10 @@ pub fn refresh_token_path() -> Result<PathBuf> {
 }
 
 pub fn save_refresh_token(rt: &str) {
-    if let Ok(p) = refresh_token_path() {
-        let _ = std::fs::write(p, rt);
+    if let Ok(p) = refresh_token_path()
+        && let Err(e) = write_atomic(&p, rt)
+    {
+        tracing::warn!("failed to persist refresh token to {}: {e}", p.display());
     }
 }
 
@@ -327,8 +343,13 @@ pub fn streaming_refresh_token_path() -> Result<PathBuf> {
 }
 
 pub fn save_streaming_refresh_token(rt: &str) {
-    if let Ok(p) = streaming_refresh_token_path() {
-        let _ = std::fs::write(p, rt);
+    if let Ok(p) = streaming_refresh_token_path()
+        && let Err(e) = write_atomic(&p, rt)
+    {
+        tracing::warn!(
+            "failed to persist streaming refresh token to {}: {e}",
+            p.display()
+        );
     }
 }
 
@@ -384,8 +405,10 @@ pub fn load_volume() -> u8 {
 }
 
 pub fn save_volume(volume: u8) {
-    if let Ok(p) = volume_path() {
-        let _ = std::fs::write(p, volume.to_string());
+    if let Ok(p) = volume_path()
+        && let Err(e) = write_atomic(&p, &volume.to_string())
+    {
+        tracing::warn!("failed to persist volume to {}: {e}", p.display());
     }
 }
 
@@ -435,5 +458,34 @@ mod tests {
         cfg.options.show_lyrics = Some(true);
         cfg.normalize();
         assert_eq!(cfg.ui.show_lyrics, Some(true));
+    }
+
+    #[test]
+    fn save_to_writes_config_and_leaves_no_temp_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut cfg = AppConfig::default();
+        cfg.local.music_dir = Some("/music".to_string());
+
+        cfg.save_to(&path).unwrap();
+
+        assert!(path.exists());
+        assert!(!dir.path().join("config.tmp").exists());
+        let loaded: AppConfig = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.local.music_dir.as_deref(), Some("/music"));
+    }
+
+    #[test]
+    fn save_to_replaces_existing_config_atomically() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[local]\nmusic_dir = \"/old\"\n").unwrap();
+
+        let mut cfg = AppConfig::default();
+        cfg.local.music_dir = Some("/new".to_string());
+        cfg.save_to(&path).unwrap();
+
+        let loaded: AppConfig = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.local.music_dir.as_deref(), Some("/new"));
     }
 }

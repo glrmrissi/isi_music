@@ -20,6 +20,7 @@ pub enum SettingsAction {
     None,
     Close,
     ToggleItem,
+    EqChanged,
     ClearAllCache,
     CleanupExpired,
     RefreshStats,
@@ -48,6 +49,7 @@ pub struct SettingsPanel {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SettingsSection {
     General,
+    Equalizer,
     Account,
     Cache,
     QuickAccess,
@@ -56,6 +58,7 @@ pub enum SettingsSection {
 
 const SECTIONS: &[SettingsSection] = &[
     SettingsSection::General,
+    SettingsSection::Equalizer,
     SettingsSection::Account,
     SettingsSection::Cache,
     SettingsSection::QuickAccess,
@@ -99,6 +102,9 @@ impl SettingsPanel {
 
     pub fn save_config(&self) {
         if let Ok(mut guard) = self.settings.lock() {
+            if guard.load_failed {
+                return;
+            }
             guard.config = self.config.clone();
             guard.mark_dirty();
             if !cfg!(test) {
@@ -135,15 +141,15 @@ impl SettingsPanel {
                 let count = {
                     #[cfg(all(feature = "album-art", feature = "palette"))]
                     {
-                        9
+                        10
                     }
                     #[cfg(all(feature = "album-art", not(feature = "palette")))]
                     {
-                        8
+                        9
                     }
                     #[cfg(not(feature = "album-art"))]
                     {
-                        7
+                        8
                     }
                 };
                 #[cfg(windows)]
@@ -155,6 +161,7 @@ impl SettingsPanel {
                     count
                 }
             }
+            SettingsSection::Equalizer => crate::audio::eq::EQ_BANDS + 2,
             SettingsSection::Account => {
                 if self.config.spotify_enabled() {
                     4
@@ -217,6 +224,50 @@ impl SettingsPanel {
                     return SettingsAction::None;
                 }
                 KeyCode::Esc => return SettingsAction::Close,
+                _ => {}
+            }
+        }
+
+        if self.focused_section == SettingsSection::Equalizer {
+            match code {
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if self.selected_item == 0 {
+                        self.config.audio.eq_gains =
+                            crate::audio::eq::prev_preset_gains(&self.config.audio.eq_gains);
+                        self.save_config();
+                        return SettingsAction::EqChanged;
+                    }
+                    if self.adjust_eq_band(-1) {
+                        return SettingsAction::EqChanged;
+                    }
+                    return SettingsAction::None;
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if self.selected_item == 0 {
+                        self.config.audio.eq_gains =
+                            crate::audio::eq::next_preset_gains(&self.config.audio.eq_gains);
+                        self.save_config();
+                        return SettingsAction::EqChanged;
+                    }
+                    if self.adjust_eq_band(1) {
+                        return SettingsAction::EqChanged;
+                    }
+                    return SettingsAction::None;
+                }
+                KeyCode::Enter => match self.selected_item {
+                    0 => {
+                        self.config.audio.eq_gains =
+                            crate::audio::eq::next_preset_gains(&self.config.audio.eq_gains);
+                        self.save_config();
+                        return SettingsAction::EqChanged;
+                    }
+                    n if n == crate::audio::eq::EQ_BANDS + 1 => {
+                        self.config.audio.eq_gains = [0; crate::audio::eq::EQ_BANDS];
+                        self.save_config();
+                        return SettingsAction::EqChanged;
+                    }
+                    _ => return SettingsAction::None,
+                },
                 _ => {}
             }
         }
@@ -288,6 +339,16 @@ impl SettingsPanel {
             }
             _ => SettingsAction::None,
         }
+    }
+
+    fn adjust_eq_band(&mut self, delta: i8) -> bool {
+        let band = self.selected_item.wrapping_sub(1);
+        if band >= crate::audio::eq::EQ_BANDS {
+            return false;
+        }
+        let gain = &mut self.config.audio.eq_gains[band];
+        *gain = (*gain + delta).clamp(crate::audio::eq::EQ_MIN_DB, crate::audio::eq::EQ_MAX_DB);
+        true
     }
 
     pub fn navigate_sections(&mut self, up: bool, down: bool) {
@@ -399,6 +460,7 @@ impl SettingsPanel {
             .map(|section| {
                 let label = match section {
                     SettingsSection::General => "Features",
+                    SettingsSection::Equalizer => "Equalizer",
                     SettingsSection::Account => "Account",
                     SettingsSection::Cache => "Cache",
                     SettingsSection::QuickAccess => "Quick Access",
@@ -452,6 +514,7 @@ impl SettingsPanel {
             SettingsSection::General => {
                 self.render_general_section(frame, state, area, theme, autoplay_enabled)
             }
+            SettingsSection::Equalizer => self.render_equalizer_section(frame, area, theme),
             SettingsSection::Account => self.render_account_section(frame, state, area, theme),
             SettingsSection::Cache => self.render_cache_section(frame, area, theme),
             SettingsSection::QuickAccess => self.render_quick_access_section(frame, area, theme),
@@ -534,8 +597,11 @@ impl SettingsPanel {
             ("Lyrics Fetching", "", self.config.enable_lyrics()),
             ("Lyrics Display", "", state.show_lyrics),
             ("Visualizer Display", "", state.show_visualizer),
+            ("Mono Audio", "", state.mono_audio),
             ("Compact Mode", "", state.compact_mode),
             ("Breadcrumb", "", state.show_breadcrumb),
+            ("ASCII Art", "", state.show_ascii_art),
+            ("Transparent Background", "", theme.transparent_background),
         ];
 
         let lastfm_text = if state.lastfm_connected {
@@ -567,6 +633,85 @@ impl SettingsPanel {
         items.push(("Global Media Hotkeys", "", self.config.media_keys_enabled()));
 
         self.render_item_list(frame, area, "General", &items, theme);
+    }
+
+    fn render_equalizer_section(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        use crate::audio::eq::{EQ_BAND_LABELS, EQ_BANDS, EQ_MAX_DB, EQ_MIN_DB, preset_name};
+
+        let accent_color = theme.accent_color;
+        let text_color = theme.text_primary;
+        let muted_color = theme.text_secondary;
+        let gains = self.config.audio.eq_gains;
+
+        let block = section_block("Equalizer", theme);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let bar_width = (inner.width.saturating_sub(22)).clamp(8, 40) as usize;
+        let span = (EQ_MAX_DB - EQ_MIN_DB) as i32;
+        let center = ((0 - EQ_MIN_DB as i32) * bar_width as i32 / span) as usize;
+        let selected_style = Style::default()
+            .fg(accent_color)
+            .add_modifier(Modifier::BOLD);
+        let normal_style = Style::default().fg(text_color);
+
+        let mut items: Vec<ListItem> = Vec::with_capacity(EQ_BANDS + 3);
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                " Preset: ",
+                if self.selected_item == 0 {
+                    selected_style
+                } else {
+                    normal_style
+                },
+            ),
+            Span::styled(preset_name(&gains), Style::default().fg(accent_color)),
+        ])));
+
+        for (i, label) in EQ_BAND_LABELS.iter().enumerate() {
+            let gain = gains[i];
+            let pos = ((gain as i32 - EQ_MIN_DB as i32) * bar_width as i32 / span) as usize;
+            let mut bar = String::with_capacity(bar_width);
+            for c in 0..bar_width {
+                let filled = if pos > center {
+                    (center..pos).contains(&c)
+                } else {
+                    (pos..center).contains(&c)
+                };
+                if c == center && pos == center {
+                    bar.push('│');
+                } else if filled {
+                    bar.push('█');
+                } else {
+                    bar.push('░');
+                }
+            }
+            let is_sel = self.selected_item == i + 1;
+            let style = if is_sel { selected_style } else { normal_style };
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!(" {:<6}", label), style),
+                Span::styled(
+                    format!("[{}]", bar),
+                    Style::default().fg(if gain != 0 { accent_color } else { muted_color }),
+                ),
+                Span::styled(format!(" {:>+3}dB", gain), style),
+            ])));
+        }
+
+        items.push(ListItem::new(Line::from(Span::styled(
+            " Reset",
+            if self.selected_item == EQ_BANDS + 1 {
+                selected_style
+            } else {
+                normal_style
+            },
+        ))));
+        items.push(ListItem::new(Line::from(Span::styled(
+            " ←/→: adjust/cycle  Enter: preset/reset",
+            Style::default().fg(muted_color),
+        ))));
+
+        frame.render_widget(List::new(items).style(bg_style(theme)), inner);
     }
 
     fn render_account_section(

@@ -35,6 +35,7 @@ impl Ui {
                         SearchPanel::Artists => "Artists",
                         SearchPanel::Albums => "Albums",
                         SearchPanel::Playlists => "Playlists",
+                        SearchPanel::Podcasts => "Podcasts",
                     }
                 };
                 let title = if is_loading {
@@ -136,6 +137,48 @@ impl Ui {
                                 ]))
                             },
                         ),
+                        SearchPanel::Podcasts => build_list_window(
+                            sr.shows.len() + sr.episodes.len(),
+                            list_height,
+                            &sr.podcast_list,
+                            |idx| {
+                                if idx < sr.shows.len() {
+                                    let s = &sr.shows[idx];
+                                    ListItem::new(Line::from(vec![
+                                        Span::styled("", Style::default().fg(self.theme.primary)),
+                                        Span::styled(
+                                            format!("{:>3}. ", idx + 1),
+                                            Style::default().fg(self.theme.text_secondary),
+                                        ),
+                                        Span::styled(
+                                            s.name.as_str(),
+                                            Style::default().fg(self.theme.text_primary),
+                                        ),
+                                        Span::styled(
+                                            format!("  [Show] {}", s.publisher),
+                                            Style::default().fg(self.theme.text_secondary),
+                                        ),
+                                    ]))
+                                } else {
+                                    let t = &sr.episodes[idx - sr.shows.len()];
+                                    ListItem::new(Line::from(vec![
+                                        Span::styled("", Style::default().fg(self.theme.primary)),
+                                        Span::styled(
+                                            format!("{:>3}. ", idx + 1),
+                                            Style::default().fg(self.theme.text_secondary),
+                                        ),
+                                        Span::styled(
+                                            t.name.as_str(),
+                                            Style::default().fg(self.theme.text_primary),
+                                        ),
+                                        Span::styled(
+                                            format!("  [Ep] {}", t.artist),
+                                            Style::default().fg(self.theme.text_secondary),
+                                        ),
+                                    ]))
+                                }
+                            },
+                        ),
                     }
                 };
                 let ListWindow {
@@ -184,6 +227,14 @@ impl Ui {
                             list,
                             list_area,
                             &mut sr.playlist_list,
+                            start,
+                            selected,
+                        ),
+                        SearchPanel::Podcasts => render_list_window(
+                            frame,
+                            list,
+                            list_area,
+                            &mut sr.podcast_list,
                             start,
                             selected,
                         ),
@@ -249,7 +300,11 @@ impl Ui {
 
             let rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .constraints([
+                    Constraint::Percentage(36),
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(30),
+                ])
                 .split(area);
 
             let top_cols = Layout::default()
@@ -467,6 +522,69 @@ impl Ui {
                 &mut sr.playlist_list,
                 pl_start,
                 pl_selected,
+            );
+
+            let podcast_title = ptitle(SearchPanel::Podcasts, "Podcasts");
+            let pod_block = self.build_panel_block(
+                UiWidget::Search,
+                is_focused && focus_panel == SearchPanel::Podcasts,
+                &podcast_title,
+            );
+            let pod_inner = pod_block.inner(rows[2]);
+            let ListWindow {
+                items: pod_items,
+                start: pod_start,
+                selected: pod_selected,
+            } = build_list_window(
+                sr.shows.len() + sr.episodes.len(),
+                pod_inner.height as usize,
+                &sr.podcast_list,
+                |idx| {
+                    if idx < sr.shows.len() {
+                        let s = &sr.shows[idx];
+                        ListItem::new(Line::from(vec![
+                            Span::styled(" ", Style::default().fg(self.theme.primary)),
+                            Span::styled(
+                                s.name.as_str(),
+                                Style::default().fg(self.theme.text_primary),
+                            ),
+                            Span::styled(
+                                format!("  [Show] {}", s.publisher),
+                                Style::default().fg(self.theme.text_secondary),
+                            ),
+                        ]))
+                    } else {
+                        let t = &sr.episodes[idx - sr.shows.len()];
+                        ListItem::new(Line::from(vec![
+                            Span::styled(" ", Style::default().fg(self.theme.primary)),
+                            Span::styled(
+                                t.name.as_str(),
+                                Style::default().fg(self.theme.text_primary),
+                            ),
+                            Span::styled(
+                                format!("  [Ep] {}", t.artist),
+                                Style::default().fg(self.theme.text_secondary),
+                            ),
+                        ]))
+                    }
+                },
+            );
+            let pod_list = List::new(pod_items)
+                .block(pod_block)
+                .highlight_style(
+                    Style::default()
+                        .bg(self.theme.highlight_bg)
+                        .fg(self.theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol(self.theme.highlight_symbol.as_str());
+            render_list_window(
+                frame,
+                pod_list,
+                rows[2],
+                &mut sr.podcast_list,
+                pod_start,
+                pod_selected,
             );
         }
     }

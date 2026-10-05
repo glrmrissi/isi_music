@@ -66,7 +66,11 @@ impl App {
         let artist = self.state.playback.artist.clone();
         let uri = self.current_track_uri.clone();
 
-        if !title.is_empty() && !artist.is_empty() && self.enable_lyrics {
+        if !title.is_empty()
+            && !artist.is_empty()
+            && self.enable_lyrics
+            && !uri.starts_with("spotify:episode:")
+        {
             self.fetcher.ensure_lyrics(&self.debug_overlay);
             self.state.playback.lyrics_loading = true;
             if let Some(lyrics) = &self.fetcher.lyrics {
@@ -122,6 +126,7 @@ impl App {
 
                 if self.player_mgr.local_active {
                     self.state.playback.cover_path = track.cover_path.clone();
+                    self.state.playback.art_url = None;
                 } else {
                     self.state.playback.art_url = track.cover_path.clone();
                     // Spotify tracks don't carry a local cover path; clear
@@ -358,7 +363,7 @@ impl App {
                     MAX_RECONNECT_ATTEMPTS
                 );
                 self.debug_overlay.log(
-                    crate::utils::debug_overlay::LogLevel::Warn,
+                    crate::utils::debug_overlay::LogLevel::Api,
                     format!(
                         "Max reconnect attempts ({}) reached",
                         MAX_RECONNECT_ATTEMPTS
@@ -381,7 +386,7 @@ impl App {
         );
 
         self.debug_overlay.log(
-            crate::utils::debug_overlay::LogLevel::Warn,
+            crate::utils::debug_overlay::LogLevel::Api,
             format!(
                 "Attempting librespot reconnection ({}/{})",
                 self.player_mgr.reconnect_attempts, MAX_RECONNECT_ATTEMPTS
@@ -397,43 +402,9 @@ impl App {
             return;
         }
 
-        let (saved_queue, saved_index) = self
+        let saved = self
             .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.snapshot_queue())
-            .unwrap_or_default();
-        let saved_user_queue = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.snapshot_user_queue())
-            .unwrap_or_default();
-        let saved_volume = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.volume())
-            .unwrap_or(50);
-        let saved_shuffle = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.shuffle())
-            .unwrap_or(false);
-        let saved_repeat = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.repeat())
-            .unwrap_or(crate::player::RepeatMode::Off);
-        let saved_progress = self.state.playback.progress_ms;
-        let saved_is_playing = self
-            .player_mgr
-            .player
-            .as_ref()
-            .map(|p| p.is_playing())
-            .unwrap_or(false);
+            .take_restore_snapshot(self.state.playback.progress_ms);
 
         self.player_mgr.player = None;
         self.player_mgr.band_energies = None;
@@ -449,39 +420,9 @@ impl App {
         .await
         {
             Ok(mut p) => {
-                p.set_volume(saved_volume);
-                if !saved_queue.is_empty() {
-                    let start = saved_index.unwrap_or(0);
-                    p.set_queue(saved_queue, start);
-                }
-                for qt in &saved_user_queue {
-                    p.add_to_queue(
-                        qt.uri.clone(),
-                        qt.name.clone(),
-                        qt.artist.clone(),
-                        qt.album.clone(),
-                        qt.duration_ms,
-                        qt.cover_path.clone(),
-                    );
-                }
-                if saved_shuffle {
-                    p.toggle_shuffle();
-                }
-                match saved_repeat {
-                    crate::player::RepeatMode::Queue => {
-                        p.cycle_repeat();
-                    }
-                    crate::player::RepeatMode::Track => {
-                        p.cycle_repeat();
-                        p.cycle_repeat();
-                    }
-                    crate::player::RepeatMode::Off => {}
-                }
-                if saved_progress > 1000 {
-                    p.seek(saved_progress as u32);
-                }
-                if !saved_is_playing {
-                    p.pause();
+                match &saved {
+                    Some(r) => r.apply(&mut p),
+                    None => p.set_volume(50),
                 }
                 p.set_visualizer_enabled(self.state.show_visualizer);
                 self.player_mgr.band_energies = p.band_energies();
@@ -489,7 +430,7 @@ impl App {
                 self.state.status_msg = Some("Reconnected!".to_string());
                 info!("Librespot session reconnected successfully");
                 self.debug_overlay.log(
-                    crate::utils::debug_overlay::LogLevel::Info,
+                    crate::utils::debug_overlay::LogLevel::Api,
                     "Librespot session reconnected successfully".to_string(),
                 );
                 self.player_mgr.reconnect_attempts = 0;
@@ -497,28 +438,25 @@ impl App {
                 self.player_mgr.session_reconnecting = false;
             }
             Err(e) => {
+                self.player_mgr.pending_player_restore = saved;
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("free") || msg.contains("premium") {
                     warn!("Spotify free account — disabling streaming permanently");
+                    self.player_mgr
+                        .disable_streaming(&mut self.state, &self.debug_overlay);
+                    self.player_mgr.session_reconnecting = false;
+                } else if msg.contains("setup-spotify") || msg.contains("not initialized") {
+                    warn!("Streaming authentication missing — cannot reconnect: {e:#}");
                     self.debug_overlay.log(
-                        crate::utils::debug_overlay::LogLevel::Warn,
-                        "Spotify free account — disabling streaming permanently".to_string(),
+                        crate::utils::debug_overlay::LogLevel::Api,
+                        format!("Reconnect aborted, streaming auth missing: {e:#}"),
                     );
-                    self.player_mgr.spotify_streaming_disabled = true;
-                    self.state.status_msg =
-                        Some("Spotify Premium required. Switched to local-only mode.".to_string());
-                    if self.player_mgr.parked_player.is_some() {
-                        std::mem::swap(
-                            &mut self.player_mgr.player,
-                            &mut self.player_mgr.parked_player,
-                        );
-                        self.player_mgr.local_active = true;
-                        self.player_mgr.band_energies = self
-                            .player_mgr
-                            .player
-                            .as_ref()
-                            .and_then(|p| p.band_energies());
-                    }
+                    self.state.status_msg = Some(
+                        "Spotify streaming is not authenticated. Run `isi-music setup-spotify`."
+                            .to_string(),
+                    );
+                    self.player_mgr.reconnect_attempts = 0;
+                    self.player_mgr.last_reconnect_attempt = None;
                     self.player_mgr.session_reconnecting = false;
                 } else if msg.contains("401") || msg.contains("unauthorized") {
                     warn!(
@@ -532,10 +470,47 @@ impl App {
                 } else {
                     warn!("Reconnect failed: {e:#}");
                     self.debug_overlay.log(
-                        crate::utils::debug_overlay::LogLevel::Warn,
+                        crate::utils::debug_overlay::LogLevel::Api,
                         format!("Reconnect failed: {e:#}"),
                     );
                     self.state.status_msg = Some(format!("Reconnect failed: {e}"));
+                }
+            }
+        }
+    }
+
+    pub async fn verify_streaming_product(&mut self) {
+        self.player_mgr.product_check_pending = false;
+        let product = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            self.spotify.get_product(),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+        match product.as_deref() {
+            Some("free") | Some("open") => {
+                self.player_mgr
+                    .disable_streaming(&mut self.state, &self.debug_overlay);
+                self.sync_track_selection();
+                self.sync_queue_display();
+            }
+            Some(product) => {
+                info!(
+                    "Spotify product={product}: consecutive unavailable tracks were transient errors"
+                );
+                self.state.status_msg =
+                    Some("Streaming errors detected, reconnecting...".to_string());
+                if !self.player_mgr.session_reconnecting {
+                    self.player_mgr.session_reconnecting = true;
+                    self.reconnect_player().await;
+                }
+            }
+            None => {
+                warn!("Spotify product check failed or timed out");
+                if !self.player_mgr.session_reconnecting {
+                    self.player_mgr.session_reconnecting = true;
+                    self.reconnect_player().await;
                 }
             }
         }

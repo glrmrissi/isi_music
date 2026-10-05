@@ -7,9 +7,10 @@ pub mod trait_impl;
 
 pub use track::LocalTrack;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rodio::{OutputStreamBuilder, Sink};
 use rusqlite::Connection;
+use std::collections::VecDeque;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -39,13 +40,16 @@ pub struct LocalPlayer {
     event_tx: mpsc::UnboundedSender<PlayerNotification>,
     event_rx: mpsc::UnboundedReceiver<PlayerNotification>,
     pub analyzer: Arc<SharedAnalyzerState>,
+    pub mono_enabled: Arc<AtomicBool>,
+    pub eq_gains: Arc<AtomicU64>,
     load_guard: Option<Instant>,
     pub is_seeking: Arc<AtomicBool>,
     seek_deadline: Arc<Mutex<Option<Instant>>>,
     waveform: Arc<Mutex<Option<Vec<u8>>>>,
     duration_measured: Arc<Mutex<Option<u64>>>,
     track_token: Arc<AtomicU64>,
-    play_history: Vec<usize>,
+    waveform_task: Option<tokio::task::AbortHandle>,
+    play_history: VecDeque<usize>,
     audio_shutdown: Arc<AtomicBool>,
     audio_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -59,8 +63,9 @@ impl LocalPlayer {
         let audio_shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&audio_shutdown);
 
-        let audio_thread =
-            std::thread::spawn(move || match OutputStreamBuilder::open_default_stream() {
+        let audio_thread = std::thread::Builder::new()
+            .name("isi-local-audio".to_string())
+            .spawn(move || match OutputStreamBuilder::open_default_stream() {
                 Ok(stream) => {
                     let sink = Sink::connect_new(stream.mixer());
                     if sync_tx.send(Ok(sink)).is_ok() {
@@ -73,7 +78,8 @@ impl LocalPlayer {
                 Err(e) => {
                     let _ = sync_tx.send(Err(anyhow::anyhow!("Audio output unavailable: {e}")));
                 }
-            });
+            })
+            .context("failed to spawn local audio thread")?;
 
         let sink = sync_rx
             .recv()
@@ -100,13 +106,16 @@ impl LocalPlayer {
             event_tx: tx,
             event_rx: rx,
             analyzer: Arc::new(SharedAnalyzerState::new()),
+            mono_enabled: Arc::new(AtomicBool::new(false)),
+            eq_gains: Arc::new(AtomicU64::new(0)),
             load_guard: None,
             is_seeking: Arc::new(AtomicBool::new(false)),
             seek_deadline: Arc::new(Mutex::new(None)),
             waveform: Arc::new(Mutex::new(None)),
             duration_measured: Arc::new(Mutex::new(None)),
             track_token: Arc::new(AtomicU64::new(0)),
-            play_history: Vec::new(),
+            waveform_task: None,
+            play_history: VecDeque::new(),
             audio_shutdown,
             audio_thread: Some(audio_thread),
         };
@@ -135,6 +144,10 @@ impl LocalPlayer {
 
 impl Drop for LocalPlayer {
     fn drop(&mut self) {
+        self.track_token.fetch_add(1, Ordering::SeqCst);
+        if let Some(task) = self.waveform_task.take() {
+            task.abort();
+        }
         self.audio_shutdown.store(true, Ordering::Relaxed);
         if let Some(thread) = self.audio_thread.take() {
             thread.thread().unpark();

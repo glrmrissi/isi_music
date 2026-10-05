@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::spotify::SpotifyClient;
 use crate::ui::UiState;
@@ -54,6 +57,32 @@ pub enum StreamEvent {
     ArtistsInitial {
         artists: Vec<crate::spotify::ArtistSummary>,
     },
+    ShowsInitial {
+        shows: Vec<crate::spotify::ShowSummary>,
+        total: u32,
+    },
+    ShowsBatch {
+        shows: Vec<crate::spotify::ShowSummary>,
+        total: u32,
+    },
+    ShowTracksInitial {
+        show_id: String,
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
+    ShowTracksBatch {
+        show_id: String,
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
+    EpisodesInitial {
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
+    EpisodesBatch {
+        tracks: Vec<crate::spotify::TrackSummary>,
+        total: u32,
+    },
     AlbumTracksInitial {
         album_id: String,
         tracks: Vec<crate::spotify::TrackSummary>,
@@ -83,14 +112,33 @@ pub enum FetchResult {
     LocalFolderTracks(Result<Vec<crate::spotify::TrackSummary>, String>),
 }
 
+pub(crate) struct LocalScanGuard {
+    running: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl LocalScanGuard {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for LocalScanGuard {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+    }
+}
+
 pub struct FetchCoordinator {
     pub pending_fetch: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pub pending_pagination: Option<tokio::sync::oneshot::Receiver<FetchResult>>,
     pub stream_rx: Option<tokio::sync::mpsc::UnboundedReceiver<StreamEvent>>,
     pub pending_nav_down: bool,
     pub local_scan_rx: Option<tokio::sync::oneshot::Receiver<Vec<crate::ui::LocalNode>>>,
+    local_scan_running: Arc<AtomicBool>,
+    local_scan_cancelled: Arc<AtomicBool>,
     pub local_scan_total: usize,
-    pub album_art_pending: Option<tokio::sync::oneshot::Receiver<Vec<u8>>>,
+    pub album_art_pending: Option<tokio::sync::oneshot::Receiver<(Option<String>, Vec<u8>)>>,
     pub last_art_uri: String,
     pub lyrics: Option<LyricsHandle>,
 }
@@ -103,6 +151,8 @@ impl FetchCoordinator {
             stream_rx: None,
             pending_nav_down: false,
             local_scan_rx: None,
+            local_scan_running: Arc::new(AtomicBool::new(false)),
+            local_scan_cancelled: Arc::new(AtomicBool::new(false)),
             local_scan_total: 0,
             album_art_pending: None,
             last_art_uri: String::new(),
@@ -110,11 +160,26 @@ impl FetchCoordinator {
         }
     }
 
+    pub(crate) fn try_start_local_scan(&self) -> Option<LocalScanGuard> {
+        self.local_scan_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| {
+                self.local_scan_cancelled.store(false, Ordering::Release);
+                LocalScanGuard {
+                    running: Arc::clone(&self.local_scan_running),
+                    cancelled: Arc::clone(&self.local_scan_cancelled),
+                }
+            })
+    }
+
     pub fn cancel_all_pending(&mut self, state: &mut UiState) {
         self.pending_fetch = None;
         self.pending_pagination = None;
         self.pending_nav_down = false;
         self.stream_rx = None;
+        self.local_scan_cancelled.store(true, Ordering::Release);
+        self.local_scan_rx = None;
         state.loading = false;
         state.tracks_loading = false;
         if let Some(sr) = state.search_results.as_mut() {
@@ -411,6 +476,182 @@ impl FetchCoordinator {
                             state.focus = crate::ui::Focus::Tracks;
                             needs_redraw = true;
                         }
+                        StreamEvent::ShowsInitial { shows, total } => {
+                            state.loading = false;
+                            state.shows = shows;
+                            state.shows_total = total;
+                            state.shows_offset = state.shows.len() as u32;
+                            state.show_list.select(if state.shows.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            state.active_content = crate::ui::ActiveContent::Shows;
+                            state.search_results = None;
+                            state.status_msg = None;
+                            state.focus = crate::ui::Focus::Tracks;
+                            needs_redraw = true;
+                        }
+                        StreamEvent::ShowsBatch { mut shows, total } => {
+                            if state.active_content == crate::ui::ActiveContent::Shows {
+                                if state.shows.len() >= total as usize {
+                                    continue;
+                                }
+                                shows.retain(|s| {
+                                    !state.shows.iter().any(|existing| existing.id == s.id)
+                                });
+                                let remaining = (total as usize).saturating_sub(state.shows.len());
+                                if shows.len() > remaining {
+                                    shows.truncate(remaining);
+                                }
+                                if shows.is_empty() {
+                                    continue;
+                                }
+                                let selected = state.show_list.selected();
+                                state.shows.append(&mut shows);
+                                state.shows_total = total;
+                                state.shows_offset = state.shows.len() as u32;
+                                state.show_list.select(selected);
+                                needs_redraw = true;
+                            }
+                        }
+                        StreamEvent::ShowTracksInitial {
+                            show_id,
+                            tracks,
+                            total,
+                        } => {
+                            let expected = format!("show:{show_id}");
+                            if state.active_playlist_id.as_deref() != Some(&expected)
+                                && state.active_playlist_id.is_some()
+                            {
+                                continue;
+                            }
+                            state.loading = false;
+                            state.tracks = tracks;
+                            state.tracks_total = total;
+                            state.tracks_offset = state.tracks.len() as u32;
+                            state.tracks_api_offset = state.tracks.len() as u32;
+                            state.active_playlist_uri = Some(format!("show:{show_id}"));
+                            state.active_playlist_id = Some(format!("show:{show_id}"));
+                            state.track_list.select(if state.tracks.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            state.active_content = crate::ui::ActiveContent::Tracks;
+                            state.search_results = None;
+                            state.rebuild_sort_indices();
+                            state.status_msg = None;
+                            state.focus = crate::ui::Focus::Tracks;
+                            needs_redraw = true;
+                        }
+                        StreamEvent::ShowTracksBatch {
+                            show_id,
+                            mut tracks,
+                            total,
+                        } => {
+                            if state.active_playlist_id.as_deref()
+                                == Some(&format!("show:{show_id}"))
+                            {
+                                if state.tracks.len() >= total as usize {
+                                    continue;
+                                }
+                                tracks.retain(|t| {
+                                    !state.tracks.iter().any(|existing| existing.uri == t.uri)
+                                });
+                                let remaining = (total as usize).saturating_sub(state.tracks.len());
+                                if tracks.len() > remaining {
+                                    tracks.truncate(remaining);
+                                }
+                                if tracks.is_empty() {
+                                    continue;
+                                }
+                                let selected_raw = state
+                                    .track_list
+                                    .selected()
+                                    .and_then(|display_idx| {
+                                        state.sorted_track_indices.get(display_idx)
+                                    })
+                                    .copied();
+                                state.tracks.append(&mut tracks);
+                                state.tracks_total = total;
+                                state.tracks_offset = state.tracks.len() as u32;
+                                state.tracks_api_offset = state.tracks.len() as u32;
+                                state.rebuild_sort_indices();
+                                if let Some(raw_idx) = selected_raw
+                                    && let Some(pos) = state
+                                        .sorted_track_indices
+                                        .iter()
+                                        .position(|&idx| idx == raw_idx)
+                                {
+                                    state.track_list.select(Some(pos));
+                                }
+                                needs_redraw = true;
+                            }
+                        }
+                        StreamEvent::EpisodesInitial { tracks, total } => {
+                            if state.active_playlist_id.as_deref() != Some("saved_episodes")
+                                && state.active_playlist_id.is_some()
+                            {
+                                continue;
+                            }
+                            state.loading = false;
+                            state.tracks = tracks;
+                            state.tracks_total = total;
+                            state.tracks_offset = state.tracks.len() as u32;
+                            state.tracks_api_offset = state.tracks.len() as u32;
+                            state.active_playlist_uri = Some("saved_episodes".to_string());
+                            state.active_playlist_id = Some("saved_episodes".to_string());
+                            state.track_list.select(if state.tracks.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            state.active_content = crate::ui::ActiveContent::Tracks;
+                            state.search_results = None;
+                            state.rebuild_sort_indices();
+                            state.status_msg = None;
+                            state.focus = crate::ui::Focus::Tracks;
+                            needs_redraw = true;
+                        }
+                        StreamEvent::EpisodesBatch { mut tracks, total } => {
+                            if state.active_playlist_id.as_deref() == Some("saved_episodes") {
+                                if state.tracks.len() >= total as usize {
+                                    continue;
+                                }
+                                tracks.retain(|t| {
+                                    !state.tracks.iter().any(|existing| existing.uri == t.uri)
+                                });
+                                let remaining = (total as usize).saturating_sub(state.tracks.len());
+                                if tracks.len() > remaining {
+                                    tracks.truncate(remaining);
+                                }
+                                if tracks.is_empty() {
+                                    continue;
+                                }
+                                let selected_raw = state
+                                    .track_list
+                                    .selected()
+                                    .and_then(|display_idx| {
+                                        state.sorted_track_indices.get(display_idx)
+                                    })
+                                    .copied();
+                                state.tracks.append(&mut tracks);
+                                state.tracks_total = total;
+                                state.tracks_offset = state.tracks.len() as u32;
+                                state.tracks_api_offset = state.tracks.len() as u32;
+                                state.rebuild_sort_indices();
+                                if let Some(raw_idx) = selected_raw
+                                    && let Some(pos) = state
+                                        .sorted_track_indices
+                                        .iter()
+                                        .position(|&idx| idx == raw_idx)
+                                {
+                                    state.track_list.select(Some(pos));
+                                }
+                                needs_redraw = true;
+                            }
+                        }
                         StreamEvent::AlbumTracksInitial {
                             album_id,
                             tracks,
@@ -493,7 +734,9 @@ impl FetchCoordinator {
                             let total = results.tracks.len()
                                 + results.artists.len()
                                 + results.albums.len()
-                                + results.playlists.len();
+                                + results.playlists.len()
+                                + results.shows.len()
+                                + results.episodes.len();
                             state.search_results =
                                 Some(crate::ui::SearchResults::new(query.clone(), *results));
                             state.tracks.clear();
@@ -553,6 +796,28 @@ impl FetchCoordinator {
                                         sr.playlists_api_offset =
                                             sr.playlists_api_offset.saturating_add(page_size);
                                         sr.playlists.append(&mut new_playlists);
+                                    }
+                                    "show,episode" => {
+                                        let page_size =
+                                            results.shows.len().max(results.episodes.len()) as u32;
+                                        let existing_shows: std::collections::HashSet<&str> =
+                                            sr.shows.iter().map(|s| s.id.as_str()).collect();
+                                        let mut new_shows = results.shows;
+                                        new_shows
+                                            .retain(|s| !existing_shows.contains(s.id.as_str()));
+                                        let existing_eps: std::collections::HashSet<&str> =
+                                            sr.episodes.iter().map(|t| t.uri.as_str()).collect();
+                                        let mut new_eps = results.episodes;
+                                        new_eps.retain(|t| !existing_eps.contains(t.uri.as_str()));
+                                        sr.shows_total = results.shows_total;
+                                        sr.episodes_total = results.episodes_total;
+                                        sr.podcasts_api_offset = if page_size == 0 {
+                                            results.shows_total + results.episodes_total
+                                        } else {
+                                            sr.podcasts_api_offset.saturating_add(page_size)
+                                        };
+                                        sr.shows.append(&mut new_shows);
+                                        sr.episodes.append(&mut new_eps);
                                     }
                                     _ => {}
                                 }

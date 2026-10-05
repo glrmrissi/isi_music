@@ -17,6 +17,9 @@ mod playlists;
 mod recommendations;
 mod search;
 
+#[cfg(test)]
+pub(crate) use playlists::playlist_item_to_track;
+
 /// Build a reqwest client with a sane timeout so network drops don't hang the TUI.
 pub(super) fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -120,7 +123,7 @@ impl SpotifyClient {
             .ok()?;
         json["album"]["images"]
             .as_array()?
-            .last()
+            .first()
             .and_then(|img| img["url"].as_str())
             .map(|s| s.to_string())
     }
@@ -177,7 +180,7 @@ impl SpotifyClient {
         })
     }
 
-    pub async fn check_track_saved(&self, track_id: &str) -> Result<bool> {
+    pub async fn check_uri_saved(&self, uri: &str) -> Result<bool> {
         spotify_rate_limit().await;
         let token = self
             .get_access_token()
@@ -187,7 +190,7 @@ impl SpotifyClient {
             &token,
             self.http
                 .get("https://api.spotify.com/v1/me/library/contains")
-                .query(&[("uris", &format!("spotify:track:{}", track_id))]),
+                .query(&[("uris", uri)]),
         )
         .await?;
         let status = resp.status();
@@ -199,12 +202,29 @@ impl SpotifyClient {
             anyhow::bail!("Check track saved failed ({}): {}", status.as_u16(), text);
         }
     }
+
+    pub async fn get_product(&self) -> Result<String> {
+        let token = self
+            .get_access_token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+        let resp = send_with_retry(&token, self.http.get("https://api.spotify.com/v1/me")).await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("get_product failed ({}): {}", status.as_u16(), text);
+        }
+        let json: serde_json::Value = serde_json::from_str(&text)?;
+        json["product"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("no product field in /me response"))
+    }
 }
 
-pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
+pub async fn remove_uri_http(http: &reqwest::Client, token: &str, uri: &str) -> Result<()> {
     spotify_rate_limit().await;
 
-    let uri = format!("spotify:track:{}", track_id);
     let resp = send_with_retry(
         token,
         http.delete("https://api.spotify.com/v1/me/library")
@@ -223,10 +243,9 @@ pub async fn unlike_track_http(http: &reqwest::Client, token: &str, track_id: &s
     }
 }
 
-pub async fn save_track_http(http: &reqwest::Client, token: &str, track_id: &str) -> Result<()> {
+pub async fn save_uri_http(http: &reqwest::Client, token: &str, uri: &str) -> Result<()> {
     spotify_rate_limit().await;
 
-    let uri = format!("spotify:track:{}", track_id);
     let resp = send_with_retry(
         token,
         http.put("https://api.spotify.com/v1/me/library")

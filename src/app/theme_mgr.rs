@@ -103,6 +103,32 @@ impl ThemeManager {
         }
     }
 
+    pub fn set_ascii_art(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.persist_theme_flag(|t| t.show_ascii_art = enabled)
+    }
+
+    pub fn set_transparent_background(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.persist_theme_flag(|t| t.transparent_background = enabled)
+    }
+
+    fn persist_theme_flag(&mut self, edit: impl FnOnce(&mut Theme)) -> anyhow::Result<()> {
+        #[cfg(test)]
+        {
+            let _ = edit;
+            Ok(())
+        }
+        #[cfg(not(test))]
+        {
+            let path = Theme::get_path().unwrap_or_else(|| std::path::PathBuf::from("theme.toml"));
+            let content = std::fs::read_to_string(&path)?;
+            let mut theme: Theme = toml::from_str(&content).unwrap_or_default();
+            edit(&mut theme);
+            let new_content = toml::to_string_pretty(&theme)?;
+            crate::config::write_atomic(&path, &new_content)?;
+            Ok(())
+        }
+    }
+
     #[cfg(all(feature = "palette", feature = "album-art"))]
     pub fn toggle_reactive(&mut self, enabled: bool) -> anyhow::Result<()> {
         let path = Theme::get_path().unwrap_or_else(|| std::path::PathBuf::from("theme.toml"));

@@ -10,6 +10,10 @@ use crate::config;
 
 impl SpotifyClient {
     pub async fn new_unauthenticated() -> Result<Self> {
+        let cache_enabled = config::AppConfig::load()
+            .ok()
+            .and_then(|c| c.cache.enabled)
+            .unwrap_or(true);
         let http = super::http_client();
         let dummy_token = TokenManager::new(String::new(), http.clone());
         Ok(Self {
@@ -19,13 +23,14 @@ impl SpotifyClient {
             is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::super::RepeatState::Off),
             authenticated: false,
-            search_cache: SearchCache::new(600)?,
-            library_cache: LibraryCache::new().await?,
+            search_cache: SearchCache::new(600, cache_enabled)?,
+            library_cache: LibraryCache::new(cache_enabled).await?,
         })
     }
 
     pub async fn new() -> Result<Self> {
         let cfg = config::AppConfig::load()?;
+        let cache_enabled = cfg.cache.enabled.unwrap_or(true);
         let Some(client_id) = cfg.get_client_id() else {
             warn!("Spotify Web API Client ID is not configured; starting in local-only mode");
             return Self::new_unauthenticated().await;
@@ -50,8 +55,8 @@ impl SpotifyClient {
                         is_playing: std::sync::atomic::AtomicBool::new(false),
                         repeat_state: std::sync::RwLock::new(super::super::RepeatState::Off),
                         authenticated: true,
-                        search_cache: SearchCache::new(600)?,
-                        library_cache: LibraryCache::new().await?,
+                        search_cache: SearchCache::new(600, cache_enabled)?,
+                        library_cache: LibraryCache::new(cache_enabled).await?,
                     });
                 }
                 Err(e) => {
@@ -73,8 +78,8 @@ impl SpotifyClient {
             is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::super::RepeatState::Off),
             authenticated: true,
-            search_cache: SearchCache::new(600)?,
-            library_cache: LibraryCache::new().await?,
+            search_cache: SearchCache::new(600, cache_enabled)?,
+            library_cache: LibraryCache::new(cache_enabled).await?,
         })
     }
 

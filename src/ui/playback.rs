@@ -62,7 +62,57 @@ impl PlaybackState {
         self.lyrics_loading = lyrics_loading;
         self.lyrics_scroll = lyrics_scroll;
         self.radio_mode = radio_mode;
-        self.art_url = art_url;
+        if self.art_url.is_none() && !self.is_local {
+            self.art_url = art_url;
+        }
         self.waveform = waveform;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_local_drops_stale_remote_art() {
+        let mut state = PlaybackState {
+            art_url: Some("https://i.scdn.co/image/abc".into()),
+            ..PlaybackState::default()
+        };
+        state.merge_from_api(PlaybackState {
+            is_local: true,
+            art_url: None,
+            ..PlaybackState::default()
+        });
+        assert_eq!(state.art_url, None);
+    }
+
+    #[test]
+    fn merge_remote_keeps_art_when_incoming_is_none() {
+        let mut state = PlaybackState {
+            art_url: Some("https://i.scdn.co/image/abc".into()),
+            ..PlaybackState::default()
+        };
+        state.merge_from_api(PlaybackState::default());
+        assert_eq!(
+            state.art_url.as_deref(),
+            Some("https://i.scdn.co/image/abc")
+        );
+    }
+
+    #[test]
+    fn merge_remote_prefers_fresh_art() {
+        let mut state = PlaybackState {
+            art_url: Some("https://i.scdn.co/image/old".into()),
+            ..PlaybackState::default()
+        };
+        state.merge_from_api(PlaybackState {
+            art_url: Some("https://i.scdn.co/image/new".into()),
+            ..PlaybackState::default()
+        });
+        assert_eq!(
+            state.art_url.as_deref(),
+            Some("https://i.scdn.co/image/new")
+        );
     }
 }

@@ -66,6 +66,8 @@ pub struct App {
     #[cfg(target_os = "linux")]
     trim_counter: u64,
     audio: crate::config::AudioConfig,
+    cache_manager: crate::utils::cache::CacheManager,
+    last_cache_cleanup: Instant,
     needs_redraw: bool,
     force_clear: bool,
     last_click_time: Option<Instant>,
@@ -81,9 +83,18 @@ impl App {
         keybinds_rx: crate::keybinds::KeybindsWatcher,
     ) -> Result<Self> {
         let (seek_tx, seek_rx) = mpsc::channel::<u32>();
-        let settings = Arc::new(Mutex::new(
-            crate::settings::Settings::load().unwrap_or_default(),
-        ));
+        let mut settings_load_failed = false;
+        let settings = Arc::new(Mutex::new(match crate::settings::Settings::load() {
+            Ok(s) => s,
+            Err(e) => {
+                settings_load_failed = true;
+                warn!("config.toml failed to load; settings changes will not be saved: {e:#}");
+                crate::settings::Settings {
+                    load_failed: true,
+                    ..Default::default()
+                }
+            }
+        }));
         let cfg = lock_or_recover(&settings).config.clone();
         let autoplay_enabled = cfg.autoplay_enabled();
         let spotify_enabled = cfg.spotify_enabled();
@@ -105,6 +116,10 @@ impl App {
         debug_overlay.log(LogLevel::Info, "isi-music starting up");
 
         let mut startup_warning: Option<String> = None;
+        if settings_load_failed {
+            startup_warning =
+                Some("config.toml failed to load; settings changes will not be saved".to_string());
+        }
 
         let spotify = if spotify_enabled {
             match SpotifyClient::new().await {
@@ -116,7 +131,7 @@ impl App {
                             "Spotify returned 403 — shared client_id may have hit 5-user Dev Mode limit"
                         );
                         debug_overlay.log(
-                            LogLevel::Warn,
+                            LogLevel::Api,
                             "Spotify 403 — create your own app: isi-music setup-spotify",
                         );
                         startup_warning = Some(
@@ -124,7 +139,7 @@ impl App {
                         );
                     } else {
                         debug_overlay.log(
-                            LogLevel::Warn,
+                            LogLevel::Api,
                             format!("Spotify unavailable ({e:#}), starting in local-only mode"),
                         );
                     }
@@ -144,10 +159,14 @@ impl App {
 
         if spotify_enabled
             && (spotify.authenticated || crate::config::load_streaming_refresh_token().is_some())
+            && crate::player::ensure_streaming_auth().await.is_err()
         {
-            crate::player::ensure_streaming_auth()
-                .await
-                .map_err(|e| anyhow::anyhow!("Streaming authentication failed: {e}"))?;
+            let warning = "Spotify streaming authentication failed. Local playback remains available; run `isi-music setup-spotify` to retry.".to_string();
+            debug_overlay.log(LogLevel::Api, warning.clone());
+            startup_warning = Some(match startup_warning {
+                Some(existing) => format!("{existing}; {warning}"),
+                None => warning,
+            });
         }
 
         let volume = crate::config::load_volume();
@@ -157,10 +176,13 @@ impl App {
         let mut state = UiState::new();
         state.show_album_art = cfg.show_cover_images();
         state.show_visualizer = cfg.show_visualizer();
+        state.mono_audio = cfg.audio.mono;
+        state.eq_gains = cfg.audio.eq_gains;
         state.show_lyrics = cfg.show_lyrics();
         state.show_breadcrumb = cfg.show_breadcrumb();
         state.compact_mode = cfg.compact_mode_default();
         state.reactive_theme_enabled = theme.reactive_theme;
+        state.show_ascii_art = theme.show_ascii_art;
         state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
         state.spotify_authenticated = spotify.authenticated;
         state.spotify_enabled = spotify_enabled;
@@ -272,14 +294,17 @@ impl App {
             None
         };
 
-        let cache_manager = crate::utils::cache::CacheManager::new()?;
-        {
+        let cache_manager = crate::utils::cache::CacheManager::new(&cfg)?;
+        if cache_manager.auto_cleanup_enabled() {
             let cm = cache_manager.clone();
             tokio::spawn(async move {
-                let _ = cm.cleanup_expired().await;
+                if let Err(e) = cm.cleanup_expired().await {
+                    tracing::warn!("Cache cleanup failed: {e:#}");
+                }
             });
         }
-        let settings_panel = crate::ui::SettingsPanel::new(cache_manager, Arc::clone(&settings));
+        let settings_panel =
+            crate::ui::SettingsPanel::new(cache_manager.clone(), Arc::clone(&settings));
 
         state.lastfm_connected = lastfm.is_some();
 
@@ -332,6 +357,8 @@ impl App {
             #[cfg(target_os = "linux")]
             trim_counter: 0,
             audio: cfg.audio.clone(),
+            cache_manager,
+            last_cache_cleanup: Instant::now(),
             needs_redraw: true,
             force_clear: false,
             last_click_time: None,
@@ -346,13 +373,17 @@ impl App {
             .await
             .expect("test client init");
         let debug_overlay = Arc::new(DebugOverlay::new());
-        let cache_manager = crate::utils::cache::CacheManager::new().expect("test cache init");
+        let cache_manager =
+            crate::utils::cache::CacheManager::new(&crate::config::AppConfig::default())
+                .expect("test cache init");
         let settings = Arc::new(Mutex::new(crate::settings::Settings::default()));
         let mut state = crate::ui::UiState::new();
         {
             let cfg = lock_or_recover(&*settings).config.clone();
             state.show_album_art = cfg.show_cover_images();
             state.show_visualizer = cfg.show_visualizer();
+            state.mono_audio = cfg.audio.mono;
+            state.eq_gains = cfg.audio.eq_gains;
             state.show_lyrics = cfg.show_lyrics();
             state.show_breadcrumb = cfg.show_breadcrumb();
             state.compact_mode = cfg.compact_mode_default();
@@ -400,6 +431,11 @@ impl App {
                 Arc::clone(&settings),
             )),
             audio: crate::config::AudioConfig::default(),
+            cache_manager: crate::utils::cache::CacheManager::new(
+                &crate::config::AppConfig::default(),
+            )
+            .expect("test cache init"),
+            last_cache_cleanup: Instant::now(),
             needs_redraw: true,
             force_clear: false,
             last_click_time: None,
@@ -409,19 +445,20 @@ impl App {
 
     async fn ensure_spotify_player(&mut self) -> bool {
         if !self.spotify_enabled {
-            return false;
-        }
-        let ok = self
-            .player_mgr
-            .ensure_spotify_player(&self.spotify, &self.state, &self.debug_overlay, &self.audio)
-            .await;
-        if !ok {
             self.state.status_msg = Some(
                 "Spotify streaming is not authenticated. Run `isi-music setup-spotify`."
                     .to_string(),
             );
+            return false;
         }
-        ok
+        self.player_mgr
+            .ensure_spotify_player(
+                &self.spotify,
+                &mut self.state,
+                &self.debug_overlay,
+                &self.audio,
+            )
+            .await
     }
 
     async fn ensure_local_player(&mut self) -> bool {
@@ -504,6 +541,21 @@ impl App {
                 }
             }
 
+            let cleanup_interval = Duration::from_secs(
+                u64::from(self.cache_manager.cleanup_interval_hours()).saturating_mul(3600),
+            );
+            if self.cache_manager.auto_cleanup_enabled()
+                && now.duration_since(self.last_cache_cleanup) >= cleanup_interval
+            {
+                self.last_cache_cleanup = now;
+                let cm = self.cache_manager.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = cm.cleanup_expired().await {
+                        tracing::warn!("Cache cleanup failed: {e:#}");
+                    }
+                });
+            }
+
             if let Some(player) = &self.player_mgr.player
                 && let Some(pb) = player.current_playback_state()
             {
@@ -526,26 +578,27 @@ impl App {
                                 let (tx, rx) = tokio::sync::oneshot::channel();
                                 tokio::spawn(async move {
                                     if let Ok(bytes) = tokio::fs::read(&path).await {
-                                        let _ = tx.send(bytes);
+                                        let _ = tx.send((None, bytes));
                                     }
                                 });
                                 self.fetcher.album_art_pending = Some(rx);
                             }
                         }
 
-                        if self.enable_lyrics {
+                        let is_episode = self.current_track_uri.starts_with("spotify:episode:");
+                        if self.enable_lyrics && !is_episode {
                             self.fetcher.ensure_lyrics(&self.debug_overlay);
-                        }
-                        if let Some(lyrics) = &self.fetcher.lyrics {
-                            lyrics.request(
-                                &self.state.playback.title,
-                                &self.state.playback.artist,
-                                &self.current_track_uri,
-                            );
+                            if let Some(lyrics) = &self.fetcher.lyrics {
+                                lyrics.request(
+                                    &self.state.playback.title,
+                                    &self.state.playback.artist,
+                                    &self.current_track_uri,
+                                );
+                            }
                         }
 
                         self.state.playback.lyrics = None;
-                        self.state.playback.lyrics_loading = true;
+                        self.state.playback.lyrics_loading = !is_episode && self.enable_lyrics;
                     }
                 } else {
                     self.state.playback.volume = pb.volume;
@@ -615,6 +668,7 @@ impl App {
             let needs_reconnect = notif_result.needs_reconnect;
             let needs_crossover = notif_result.needs_crossover;
             let needs_radio_refill = notif_result.needs_radio_refill;
+            let needs_product_check = notif_result.needs_product_check;
 
             {
                 self.debug_overlay.update_metrics();
@@ -673,6 +727,10 @@ impl App {
                 }
             }
 
+            if needs_product_check {
+                self.verify_streaming_product().await;
+            }
+
             if needs_reconnect && !self.player_mgr.session_reconnecting {
                 self.player_mgr.session_reconnecting = true;
                 self.reconnect_player().await;
@@ -728,11 +786,14 @@ impl App {
                 for cmd in cmds {
                     match cmd {
                         MprisCmd::Play => {
-                            self.ensure_spotify_player().await;
-                            if let Some(p) = &mut self.player_mgr.player {
+                            if self.ensure_spotify_player().await
+                                && let Some(p) = &mut self.player_mgr.player
+                            {
                                 p.play();
+                                self.state.playback.is_playing = true;
+                            } else {
+                                self.state.playback.is_playing = false;
                             }
-                            self.state.playback.is_playing = true;
                         }
                         MprisCmd::Pause => {
                             if let Some(p) = &mut self.player_mgr.player {
@@ -805,29 +866,37 @@ impl App {
                             }
                         }
                         SmtcCmd::Next => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.next() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.next_track().await;
+                                self.remote_next_track(player_error).await;
                             }
                         }
                         SmtcCmd::Previous => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.prev() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.prev_track().await;
+                                self.remote_prev_track(player_error).await;
                             }
                         }
                         SmtcCmd::Seek(ms) => {
@@ -859,8 +928,11 @@ impl App {
                                 p.play();
                                 self.state.playback.is_playing = true;
                             } else {
-                                self.ensure_spotify_player().await;
-                                if self.player_mgr.player.is_none() {
+                                let player_ready = self.ensure_spotify_player().await;
+                                let player_error = (!player_ready)
+                                    .then(|| self.state.status_msg.clone())
+                                    .flatten();
+                                if !player_ready {
                                     self.ensure_local_player().await;
                                 }
                                 if let Some(p) = &mut self.player_mgr.player {
@@ -869,34 +941,42 @@ impl App {
                                     }
                                     self.state.playback.is_playing = true;
                                 } else if self.spotify.authenticated {
-                                    let _ = self.spotify.toggle_playback().await;
+                                    self.remote_toggle_playback(player_error).await;
                                 }
                             }
                         }
                         MediaKey::Next => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.next() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.next_track().await;
+                                self.remote_next_track(player_error).await;
                             }
                         }
                         MediaKey::Previous => {
-                            if self.player_mgr.player.is_none() {
-                                self.ensure_spotify_player().await;
-                            }
+                            let player_error = if self.player_mgr.player.is_none()
+                                && !self.ensure_spotify_player().await
+                            {
+                                self.state.status_msg.clone()
+                            } else {
+                                None
+                            };
                             if let Some(p) = &mut self.player_mgr.player {
                                 if p.prev() {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
                             } else if self.spotify.authenticated {
-                                let _ = self.spotify.prev_track().await;
+                                self.remote_prev_track(player_error).await;
                             }
                         }
                     }
@@ -906,8 +986,12 @@ impl App {
             #[cfg(feature = "album-art")]
             if let Some(rx) = &mut self.fetcher.album_art_pending {
                 match rx.try_recv() {
-                    Ok(bytes) => {
+                    Ok((url, bytes)) => {
                         self.fetcher.album_art_pending = None;
+
+                        if url.is_some() {
+                            self.state.playback.art_url = url;
+                        }
 
                         #[cfg(windows)]
                         if let Some(path) = crate::utils::smtc::cache_cover_bytes(&bytes)
@@ -967,7 +1051,8 @@ impl App {
                 }
             }
 
-            self.integrations.update_discord(&self.state);
+            self.integrations
+                .update_discord(&self.state, &self.current_track_uri);
 
             #[cfg(feature = "album-art")]
             self.maybe_fetch_album_art().await;
@@ -1016,7 +1101,12 @@ impl App {
             .unwrap_or_else(|| Duration::from_secs(0));
 
             let mut event_received = false;
-            if crossterm::event::poll(timeout)? {
+            let mut wait = timeout;
+            for _ in 0..64 {
+                if !crossterm::event::poll(wait)? {
+                    break;
+                }
+                wait = Duration::ZERO;
                 match crossterm::event::read()? {
                     crossterm::event::Event::Key(key_event) => {
                         // Windows consoles also emit Release events — handle only
@@ -1036,9 +1126,9 @@ impl App {
                     }
                     _ => {}
                 }
-                if event_received {
-                    self.needs_redraw = true;
-                }
+            }
+            if event_received {
+                self.needs_redraw = true;
             }
 
             self.player_mgr.interpolate_progress(&mut self.state);
