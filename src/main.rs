@@ -309,6 +309,20 @@ fn main() -> Result<()> {
         }
     }
 
+    // Streaming auth before the TUI takes over: the browser-OAuth path prints
+    // a URL the user must click, which must land on the normal screen buffer.
+    if cfg.spotify_enabled()
+        && (config::load_refresh_token().is_some()
+            || config::load_streaming_refresh_token().is_some())
+        && let Err(e) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(player::ensure_streaming_auth())
+    {
+        eprintln!("Spotify streaming authentication failed: {e:#}");
+        eprintln!("Local playback remains available; run `isi-music setup-spotify` to retry.");
+    }
+
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(4)
