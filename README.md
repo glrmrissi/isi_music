@@ -132,6 +132,8 @@ http://127.0.0.1:8898/login
 
 Both authentications happen during setup/startup. No `client_secret` is required because the flow uses PKCE. Leave the Web API Client ID blank to use streaming-only mode.
 
+Refresh tokens are stored with `0600` permissions under the platform data directory (`~/.local/share/isi-music/` on Linux). Tokens stored by older versions under `~/.cache/isi-music/` are migrated automatically on first read.
+
 ## Usage
 
 ### TUI controls
