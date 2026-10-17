@@ -1,6 +1,6 @@
 [package]
 name = "isi-music"
-version = "2.0.5"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Guilherme Rissi <guilhermerissi04112006@gmail.com>"]
@@ -40,9 +40,9 @@ librespot-protocol = "0.8"
 protobuf = "3"
 hyper = { version = "1.6", features = ["http1", "http2"] }
 
-# Local audio playback (MP3, FLAC)
-rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac"] }
-symphonia = { version = "0.5", features = ["mp3", "flac"] }
+# Local audio playback (MP3, FLAC, AIFF)
+rodio = { version = "0.21", features = ["symphonia-mp3", "symphonia-flac", "symphonia-aiff"] }
+symphonia = { version = "0.5", features = ["mp3", "flac", "aiff"] }
 
 # Opus local playback: Ogg demux + libopus (bundled, built via cmake)
 ogg = "0.9"

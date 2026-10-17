@@ -11,7 +11,6 @@ pub struct KeybindsWatcher {
     pub rx: mpsc::Receiver<Keybinds>,
     #[allow(dead_code)]
     _watcher: Option<RecommendedWatcher>,
-    #[allow(dead_code)]
     stop: Arc<AtomicBool>,
 }
 
@@ -69,9 +68,14 @@ impl KeybindsWatcher {
         })
     }
 
-    #[allow(dead_code)]
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for KeybindsWatcher {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 

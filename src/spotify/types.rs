@@ -57,8 +57,31 @@ pub struct FullSearchResults {
     pub artists: Vec<ArtistSummary>,
     pub albums: Vec<AlbumSummary>,
     pub playlists: Vec<PlaylistSummary>,
+    pub shows: Vec<ShowSummary>,
+    pub episodes: Vec<TrackSummary>,
     pub tracks_total: u32,
     pub artists_total: u32,
     pub albums_total: u32,
     pub playlists_total: u32,
+    pub shows_total: u32,
+    pub episodes_total: u32,
+}
+
+impl FullSearchResults {
+    pub fn empty() -> Self {
+        Self {
+            tracks: vec![],
+            artists: vec![],
+            albums: vec![],
+            playlists: vec![],
+            shows: vec![],
+            episodes: vec![],
+            tracks_total: 0,
+            artists_total: 0,
+            albums_total: 0,
+            playlists_total: 0,
+            shows_total: 0,
+            episodes_total: 0,
+        }
+    }
 }

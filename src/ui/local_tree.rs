@@ -121,6 +121,7 @@ pub const LIBRARY_ITEMS: &[&str] = &[
     "Albums",
     "Artists",
     "Podcasts",
+    "Your Episodes",
     "Local Files",
 ];
 

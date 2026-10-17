@@ -39,13 +39,18 @@ fn generate_code_challenge(verifier: &str) -> String {
     base64url_encode(&hash)
 }
 
-fn build_authorize_url(client_id: &str, challenge: &str, redirect_uri: &str) -> String {
+fn build_authorize_url(
+    client_id: &str,
+    challenge: &str,
+    redirect_uri: &str,
+    state: &str,
+) -> String {
     let encoded_scopes = SCOPES.join("%20");
     let encoded_redirect = urlencoding::encode(redirect_uri);
     format!(
         "https://accounts.spotify.com/authorize?client_id={}&response_type=code&\
-         redirect_uri={}&code_challenge_method=S256&code_challenge={}&scope={}",
-        client_id, encoded_redirect, challenge, encoded_scopes
+         redirect_uri={}&code_challenge_method=S256&code_challenge={}&scope={}&state={}",
+        client_id, encoded_redirect, challenge, encoded_scopes, state
     )
 }
 
@@ -116,7 +121,7 @@ fn open_browser(url: &str) {
         .spawn();
 }
 
-fn extract_code_from_request(request: &str) -> Result<String> {
+fn extract_code_from_request(request: &str, expected_state: &str) -> Result<String> {
     let first_line = request.lines().next().unwrap_or("");
     let path = first_line
         .split_whitespace()
@@ -126,16 +131,30 @@ fn extract_code_from_request(request: &str) -> Result<String> {
     let fake_url = format!("http://127.0.0.1{path}");
     let parsed = url::Url::parse(&fake_url).context("Invalid callback URL")?;
 
+    let mut code = None;
+    let mut state = None;
     for (key, val) in parsed.query_pairs() {
-        if key == "code" {
-            return Ok(val.into_owned());
+        match key.as_ref() {
+            "code" => code = Some(val.into_owned()),
+            "state" => state = Some(val.into_owned()),
+            _ => {}
         }
     }
 
-    bail!("'code' parameter not found in callback")
+    // Reject callbacks without the exact CSRF state from the authorize URL.
+    match state {
+        Some(s) if s == expected_state => {}
+        _ => bail!("'state' mismatch in callback"),
+    }
+
+    code.context("'code' parameter not found in callback")
 }
 
-async fn run_oauth_flow(authorize_url: &str, callback_port: u16) -> Result<String> {
+async fn run_oauth_flow(
+    authorize_url: &str,
+    expected_state: &str,
+    callback_port: u16,
+) -> Result<String> {
     #[cfg(target_os = "linux")]
     let bind_addr: &str = {
         let is_wsl = std::fs::read_to_string("/proc/version")
@@ -195,7 +214,7 @@ async fn run_oauth_flow(authorize_url: &str, callback_port: u16) -> Result<Strin
             result = stream.write_all(response.as_bytes()) => result?,
         }
 
-        match extract_code_from_request(&request) {
+        match extract_code_from_request(&request, expected_state) {
             Ok(code) => return Ok(code),
             Err(_) => continue,
         }
@@ -289,9 +308,10 @@ impl SpotifyAuth {
         loop {
             let verifier = generate_code_verifier();
             let challenge = generate_code_challenge(&verifier);
+            let state = generate_code_verifier();
 
-            let url = build_authorize_url(client_id, &challenge, redirect_uri);
-            match run_oauth_flow(&url, callback_port).await {
+            let url = build_authorize_url(client_id, &challenge, redirect_uri, &state);
+            match run_oauth_flow(&url, &state, callback_port).await {
                 Ok(code) => {
                     return exchange_code(&code, &verifier, client_id, redirect_uri).await;
                 }
@@ -337,5 +357,44 @@ impl SpotifyAuth {
             Self::authenticate_with_client_id(config::OFFICIAL_CLIENT_ID).await?;
 
         Ok((web_api_refresh, streaming_refresh))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn callback(query: &str) -> String {
+        format!("GET /callback{query} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    }
+
+    #[test]
+    fn extract_code_accepts_matching_state() {
+        let req = callback("?code=abc123&state=tok42");
+        assert_eq!(extract_code_from_request(&req, "tok42").unwrap(), "abc123");
+    }
+
+    #[test]
+    fn extract_code_rejects_wrong_state() {
+        let req = callback("?code=attacker&state=other");
+        assert!(extract_code_from_request(&req, "tok42").is_err());
+    }
+
+    #[test]
+    fn extract_code_rejects_missing_state() {
+        let req = callback("?code=abc123");
+        assert!(extract_code_from_request(&req, "tok42").is_err());
+    }
+
+    #[test]
+    fn extract_code_rejects_state_without_code() {
+        let req = callback("?state=tok42");
+        assert!(extract_code_from_request(&req, "tok42").is_err());
+    }
+
+    #[test]
+    fn extract_code_ignores_extra_params() {
+        let req = callback("?foo=bar&code=c&state=tok42&baz=1");
+        assert_eq!(extract_code_from_request(&req, "tok42").unwrap(), "c");
     }
 }

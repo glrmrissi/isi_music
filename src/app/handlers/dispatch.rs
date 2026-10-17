@@ -18,7 +18,11 @@ impl App {
                     player.play();
                     self.state.playback.is_playing = true;
                 } else {
-                    if !self.ensure_spotify_player().await {
+                    let player_ready = self.ensure_spotify_player().await;
+                    let player_error = (!player_ready)
+                        .then(|| self.state.status_msg.clone())
+                        .flatten();
+                    if !player_ready {
                         self.ensure_local_player().await;
                     }
                     if let Some(player) = &mut self.player_mgr.player {
@@ -28,14 +32,16 @@ impl App {
                         self.state.playback.is_playing = true;
                         self.state.status_msg = None;
                     } else if self.spotify.authenticated {
-                        let _ = self.spotify.toggle_playback().await;
+                        self.remote_toggle_playback(player_error).await;
                     } else if self.state.status_msg.is_none() {
                         self.state.status_msg = Some("No audio player available".to_string());
                     }
                 }
             }
             A::NextTrack => {
+                let mut player_error = None;
                 if self.player_mgr.player.is_none() && !self.ensure_spotify_player().await {
+                    player_error = self.state.status_msg.clone();
                     self.ensure_local_player().await;
                 }
                 if let Some(player) = &mut self.player_mgr.player {
@@ -44,13 +50,15 @@ impl App {
                         self.sync_queue_display();
                     }
                 } else if self.spotify.authenticated {
-                    let _ = self.spotify.next_track().await;
+                    self.remote_next_track(player_error).await;
                 } else if self.state.status_msg.is_none() {
                     self.state.status_msg = Some("No audio player available".to_string());
                 }
             }
             A::PrevTrack => {
+                let mut player_error = None;
                 if self.player_mgr.player.is_none() && !self.ensure_spotify_player().await {
+                    player_error = self.state.status_msg.clone();
                     self.ensure_local_player().await;
                 }
                 if let Some(player) = &mut self.player_mgr.player {
@@ -59,7 +67,7 @@ impl App {
                         self.sync_queue_display();
                     }
                 } else if self.spotify.authenticated {
-                    let _ = self.spotify.prev_track().await;
+                    self.remote_prev_track(player_error).await;
                 } else if self.state.status_msg.is_none() {
                     self.state.status_msg = Some("No audio player available".to_string());
                 }
@@ -342,7 +350,6 @@ impl App {
                 } else if self.state.search_results.is_some() {
                     self.fetcher.cancel_all_pending(&mut self.state);
                     self.state.search_results = None;
-                    self.state.previous_search = None;
                     self.state.active_content = ActiveContent::None;
                     self.state.focus = Focus::Library;
                 } else if let Some(entry) = self.state.pop_nav() {
@@ -353,7 +360,6 @@ impl App {
                     self.state.active_playlist_id = entry.active_playlist_id;
                     self.state.active_artist_name = entry.active_artist_name;
                     self.state.search_results = entry.search_results;
-                    self.state.previous_search = entry.previous_search;
                     self.state.tracks = entry.tracks;
                     self.state.sorted_track_indices = entry.sorted_track_indices;
                     self.state.track_sort_by = entry.track_sort_by;

@@ -10,26 +10,31 @@ pub enum LocalDecoder {
 
 impl LocalDecoder {
     pub fn open(path: &Path) -> Option<Self> {
-        let is_opus = path
+        let ext = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("opus"))
-            .unwrap_or(false);
+            .unwrap_or_default();
 
-        if is_opus {
-            OpusSource::open(path).ok().map(LocalDecoder::Opus)
-        } else {
-            let file = File::open(path).ok()?;
-            let len = file.metadata().ok()?.len();
-            DecoderBuilder::new()
-                .with_data(BufReader::new(file))
-                .with_byte_len(len)
-                .with_seekable(true)
-                .with_coarse_seek(true)
-                .build()
-                .ok()
-                .map(LocalDecoder::Symphonia)
+        if ext.eq_ignore_ascii_case("opus") {
+            return OpusSource::open(path).ok().map(LocalDecoder::Opus);
         }
+
+        if ext.eq_ignore_ascii_case("ogg")
+            && let Ok(src) = OpusSource::open(path)
+        {
+            return Some(LocalDecoder::Opus(src));
+        }
+
+        let file = File::open(path).ok()?;
+        let len = file.metadata().ok()?.len();
+        DecoderBuilder::new()
+            .with_data(BufReader::new(file))
+            .with_byte_len(len)
+            .with_seekable(true)
+            .with_coarse_seek(true)
+            .build()
+            .ok()
+            .map(LocalDecoder::Symphonia)
     }
 }
 

@@ -9,6 +9,7 @@ use anyhow::Result;
 pub struct Settings {
     pub config: AppConfig,
     pub dirty: bool,
+    pub load_failed: bool,
 }
 
 impl Settings {
@@ -18,14 +19,33 @@ impl Settings {
         Ok(Self {
             config,
             dirty: false,
+            load_failed: false,
         })
     }
 
     pub fn save(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.load_failed,
+            "config.toml failed to load; refusing to overwrite it with defaults"
+        );
         self.config.save()
     }
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_refuses_to_overwrite_when_config_failed_to_load() {
+        let settings = Settings {
+            load_failed: true,
+            ..Default::default()
+        };
+        assert!(settings.save().is_err());
     }
 }

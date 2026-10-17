@@ -43,7 +43,7 @@ mod tests {
         let mut app = App::new_for_test().await;
         app.state.show_album_art = true;
         app.current_track_uri = "spotify:track:abc".into();
-        let (_, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+        let (_, rx) = tokio::sync::oneshot::channel::<(Option<String>, Vec<u8>)>();
         app.fetcher.album_art_pending = Some(rx);
 
         app.maybe_fetch_album_art().await;
@@ -93,7 +93,7 @@ mod tests {
     async fn fetch_local_album_art_returns_early_when_pending() {
         let mut app = App::new_for_test().await;
         app.current_track_uri = "file:///music/test.mp3".into();
-        let (_, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+        let (_, rx) = tokio::sync::oneshot::channel::<(Option<String>, Vec<u8>)>();
         app.fetcher.album_art_pending = Some(rx);
 
         app.fetch_local_album_art();

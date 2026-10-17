@@ -61,6 +61,10 @@ brew tap glrmrissi/isi-music
 brew install isi-music
 ```
 
+### AUR (Arch Linux)
+
+AUR is not supported for now due to external reasons. Install with the script or the release binaries shown here.
+
 ### Manual download
 
 **Linux**
@@ -132,6 +136,8 @@ http://127.0.0.1:8898/login
 
 Both authentications happen during setup/startup. No `client_secret` is required because the flow uses PKCE. Leave the Web API Client ID blank to use streaming-only mode.
 
+Refresh tokens are stored with `0600` permissions under the platform data directory (`~/.local/share/isi-music/` on Linux). Tokens stored by older versions under `~/.cache/isi-music/` are migrated automatically on first read.
+
 ## Usage
 
 ### TUI controls
@@ -150,7 +156,7 @@ Both authentications happen during setup/startup. No `client_secret` is required
 | `n` / `p` | Next or previous track |
 | `s` | Toggle shuffle |
 | `r` | Cycle repeat mode |
-| `+` / `-` | Change volume |
+| `=` / `-` | Change volume |
 | `←` / `→` | Seek five seconds |
 | `5` | Seek to middle of track |
 | `/` | Search |
@@ -158,7 +164,7 @@ Both authentications happen during setup/startup. No `client_secret` is required
 | `c` | Jump to the playing track |
 | `a` | Add the selected track to the queue |
 | `Delete` | Remove from queue |
-| `l` | Like the current track |
+| `l` | Like the current track (Spotify tracks only) |
 | `o` | Sort tracks |
 | `A` | Add to playlist |
 | `D` | Remove from playlist |
@@ -213,7 +219,7 @@ isi-music --status
 isi-music --quit-daemon
 ```
 
-Daemon logs are stored at `~/.local/share/isi-music/isi-music.log` on Linux and in the platform data directory on Windows. Local file playback is available in TUI mode.
+Daemon logs are stored at `~/.cache/isi-music/isi-music.log` on Linux and in the platform cache directory on Windows. Local file playback is available in TUI mode.
 
 ## Local files
 
@@ -330,7 +336,7 @@ toggle_fullscreen = ["z"]
 
 ### MPRIS2 on Linux
 
-MPRIS registers as `org.mpris.MediaPlayer2.isi_music`, enabling media keys, Waybar, and `playerctl`. It requires a running D-Bus session.
+MPRIS registers as `org.mpris.MediaPlayer2.isi_music`, enabling media keys, Waybar, and `playerctl`. It requires a running D-Bus session. Prebuilt release binaries include MPRIS; when building from source, enable it with `cargo build --release -F mpris` since it is an optional feature.
 
 ```bash
 playerctl --player=isi_music play-pause

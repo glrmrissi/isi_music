@@ -69,8 +69,16 @@ impl App {
                     self.load_and_search_album(album_id, &matches).await;
                     return;
                 } else if ctx.starts_with("spotify:artist:") {
-                    // Artist context uses artist name, not ID — skip for now
-                    // Fall through to liked songs fallback
+                    let artist_id = ctx.strip_prefix("spotify:artist:").unwrap_or(&ctx);
+                    if let Some(name) = self.spotify.fetch_artist_name(artist_id).await {
+                        self.load_and_search_artist(artist_id, &name, &matches)
+                            .await;
+                        return;
+                    }
+                } else if ctx.starts_with("spotify:show:") {
+                    let show_id = ctx.strip_prefix("spotify:show:").unwrap_or(&ctx);
+                    self.load_and_search_show(show_id, &matches).await;
+                    return;
                 }
             }
 
@@ -127,6 +135,94 @@ impl App {
         self.state.search_results = None;
 
         if let Ok((tracks, total)) = self.spotify.fetch_album_tracks(album_id, 0).await {
+            let tracks_len = tracks.len();
+            self.state.tracks = tracks;
+            self.state.tracks_total = total;
+            self.state.tracks_offset = tracks_len as u32;
+            self.state.tracks_api_offset = tracks_len as u32;
+            self.state.rebuild_sort_indices();
+            self.state.track_list.select(Some(0));
+            self.needs_redraw = true;
+
+            if let Some(target_real) = self.state.tracks.iter().position(matches)
+                && let Some(target_vi) = self
+                    .state
+                    .sorted_track_indices
+                    .iter()
+                    .position(|&r| r == target_real)
+            {
+                self.select_track_in_view(target_vi, false);
+                self.state.status_msg = Some("Jumped to playing track".to_string());
+            }
+        }
+    }
+
+    async fn load_and_search_artist(
+        &mut self,
+        artist_id: &str,
+        artist_name: &str,
+        matches: &impl Fn(&crate::spotify::TrackSummary) -> bool,
+    ) {
+        self.state.active_content = crate::ui::ActiveContent::Tracks;
+        self.state.active_artist_name = Some(artist_name.to_string());
+        self.state.active_playlist_uri = Some(format!("artist:{artist_id}"));
+        self.state.active_playlist_id = Some(format!("artist:{artist_id}"));
+        self.state.search_results = None;
+
+        if let Ok((tracks, total)) = self.spotify.fetch_artist_tracks(artist_name, 0).await {
+            let tracks_len = tracks.len();
+            self.state.tracks = tracks;
+            self.state.tracks_total = total;
+            self.state.tracks_offset = tracks_len as u32;
+            self.state.tracks_api_offset = tracks_len as u32;
+            self.state.rebuild_sort_indices();
+            self.state.track_list.select(Some(0));
+            self.needs_redraw = true;
+
+            if let Some(target_real) = self.state.tracks.iter().position(matches)
+                && let Some(target_vi) = self
+                    .state
+                    .sorted_track_indices
+                    .iter()
+                    .position(|&r| r == target_real)
+            {
+                self.select_track_in_view(target_vi, false);
+                self.state.status_msg = Some("Jumped to playing track".to_string());
+            }
+        }
+    }
+
+    async fn load_and_search_show(
+        &mut self,
+        show_id: &str,
+        matches: &impl Fn(&crate::spotify::TrackSummary) -> bool,
+    ) {
+        self.state.active_content = crate::ui::ActiveContent::Tracks;
+        self.state.active_playlist_uri = Some(format!("show:{show_id}"));
+        self.state.active_playlist_id = Some(format!("show:{show_id}"));
+        self.state.search_results = None;
+
+        let show_name = self
+            .state
+            .shows
+            .iter()
+            .find(|s| s.id == show_id)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let show_name = if show_name.is_empty() {
+            self.spotify
+                .fetch_show_name(show_id)
+                .await
+                .unwrap_or_default()
+        } else {
+            show_name
+        };
+
+        if let Ok((tracks, total)) = self
+            .spotify
+            .fetch_show_episodes(show_id, &show_name, 0)
+            .await
+        {
             let tracks_len = tracks.len();
             self.state.tracks = tracks;
             self.state.tracks_total = total;

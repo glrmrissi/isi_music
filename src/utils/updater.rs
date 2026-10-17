@@ -77,7 +77,7 @@ async fn fetch_latest_release() -> Result<Release> {
     Ok(release)
 }
 
-async fn download_asset(url: &str, dest: &std::path::Path) -> Result<()> {
+async fn download_asset(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
         .user_agent("isi-music-updater")
         .timeout(std::time::Duration::from_secs(60))
@@ -88,10 +88,60 @@ async fn download_asset(url: &str, dest: &std::path::Path) -> Result<()> {
     if !resp.status().is_success() {
         bail!("Download failed with status {}", resp.status());
     }
-    let bytes = resp.bytes().await?;
-    std::fs::write(dest, &bytes)
-        .with_context(|| format!("Failed to write to {}", dest.display()))?;
-    Ok(())
+    Ok(resp.bytes().await?.to_vec())
+}
+
+async fn fetch_checksums(release: &Release) -> Result<String> {
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == "checksums.sha256")
+        .with_context(|| {
+            format!(
+                "Release has no checksums.sha256 asset; refusing to install an unverified binary. \
+                 Download manually from https://github.com/{REPO}/releases"
+            )
+        })?;
+    let bytes = download_asset(&asset.browser_download_url).await?;
+    String::from_utf8(bytes).context("checksums.sha256 is not valid UTF-8")
+}
+
+/// Parse `sha256sum` output (`<hash>  <name>` or `<hash> *<name>`).
+fn expected_sha256(checksums: &str, asset_name: &str) -> Option<String> {
+    for line in checksums.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(hash) = parts.next() else { continue };
+        let Some(file) = parts.next() else { continue };
+        if file.trim_start_matches('*') == asset_name {
+            return Some(hash.to_lowercase());
+        }
+    }
+    None
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::Digest;
+    let hash = sha2::Sha256::digest(data);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Write `contents` to a fresh, unpredictable path in the system temp dir.
+/// `create_new` maps to O_EXCL: it refuses to follow or overwrite a file
+/// (including a symlink) that another local user pre-created there.
+fn write_temp_binary(contents: &[u8]) -> Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "isi-music-update-{}-{:016x}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .with_context(|| format!("Failed to create {}", path.display()))?;
+    std::io::Write::write_all(&mut file, contents)
+        .with_context(|| format!("Failed to write to {}", path.display()))?;
+    Ok(path)
 }
 
 fn replace_binary(new_binary: &std::path::Path) -> Result<()> {
@@ -167,11 +217,27 @@ pub async fn run() -> Result<()> {
         })?;
 
     println!("  New version available! Downloading {asset_name}...");
-    let tmp = std::env::temp_dir().join(format!("isi-music-update-{}", std::process::id()));
-    download_asset(&asset.browser_download_url, &tmp).await?;
+    let bytes = download_asset(&asset.browser_download_url).await?;
+
+    println!("  Verifying checksum...");
+    // Checksum file is same-origin as the binary: guards corruption and
+    // MITM outside GitHub; signed artifacts would be needed for full trust.
+    let checksums = fetch_checksums(&release).await?;
+    let expected = expected_sha256(&checksums, asset_name).with_context(|| {
+        format!("No checksum for {asset_name} in checksums.sha256; refusing to install")
+    })?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        bail!("Checksum mismatch for {asset_name}: expected {expected}, got {actual}");
+    }
+
+    let tmp = write_temp_binary(&bytes)?;
 
     println!("  Installing...");
-    replace_binary(&tmp)?;
+    if let Err(e) = replace_binary(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
 
     println!();
     println!("  Updated: v{CURRENT_VERSION} -> {remote_tag}");
@@ -179,4 +245,42 @@ pub async fn run() -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expected_sha256_matches_asset_line() {
+        let checksums = "aaaa1111  isi-music-linux-x86_64\nbbbb2222  isi-music-linux-arm64\n";
+        assert_eq!(
+            expected_sha256(checksums, "isi-music-linux-arm64").as_deref(),
+            Some("bbbb2222")
+        );
+    }
+
+    #[test]
+    fn expected_sha256_handles_binary_marker_and_case() {
+        let checksums = "AAAA1111 *isi-music-windows-x86_64.exe\n";
+        assert_eq!(
+            expected_sha256(checksums, "isi-music-windows-x86_64.exe").as_deref(),
+            Some("aaaa1111")
+        );
+    }
+
+    #[test]
+    fn expected_sha256_returns_none_for_missing_asset() {
+        let checksums = "aaaa1111  isi-music-linux-x86_64\n";
+        assert!(expected_sha256(checksums, "isi-music-macos").is_none());
+    }
+
+    #[test]
+    fn sha256_hex_known_vector() {
+        // sha256("abc") from the FIPS test vectors
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

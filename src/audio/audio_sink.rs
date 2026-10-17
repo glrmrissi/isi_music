@@ -305,7 +305,7 @@ impl AnalyzerSink {
         let Ok(mut producer) = self.handle.producer.lock() else {
             return;
         };
-        for ch in samples.chunks_exact(2) {
+        for ch in samples.as_chunks::<2>().0 {
             let mono = ((ch[0] + ch[1]) * 0.5) as f32;
             let _ = producer.try_push(mono);
         }

@@ -346,3 +346,110 @@ async fn sync_track_selection_matches_current_track_by_uri() {
     assert_eq!(app.state.playback.title, "Track B");
     assert_eq!(app.current_track_uri, "file://b.mp3");
 }
+
+#[test]
+fn resource_regression_play_history_keeps_only_the_most_recent_entries() {
+    let mut history = std::collections::VecDeque::new();
+    for index in 0..crate::player::MAX_PLAY_HISTORY + 10 {
+        crate::player::remember_play_history(&mut history, index);
+    }
+
+    assert_eq!(history.len(), crate::player::MAX_PLAY_HISTORY);
+    assert_eq!(history.front(), Some(&10));
+    assert_eq!(history.back(), Some(&(crate::player::MAX_PLAY_HISTORY + 9)));
+}
+
+#[tokio::test]
+async fn resource_regression_audio_output_loss_keeps_the_player_available_for_resume() {
+    let mut app = App::new_for_test().await;
+    let mut mock = MockPlayer::new(Arc::default(), Arc::default());
+    mock.is_playing = true;
+    mock.push_notification(crate::player::PlayerNotification::AudioOutputLost);
+    app.player_mgr.player = Some(Box::new(mock));
+    app.state.playback.is_playing = true;
+
+    let result = app
+        .player_mgr
+        .handle_notifications(&mut app.state, &app.debug_overlay);
+
+    assert!(!result.needs_reconnect);
+    assert!(!app.state.playback.is_playing);
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Audio output device lost. Reconnect the speaker, then press Play to resume.")
+    );
+}
+
+#[tokio::test]
+async fn resource_regression_audio_output_restored_clears_the_loss_status() {
+    let mut app = App::new_for_test().await;
+    let mut mock = MockPlayer::new(Arc::default(), Arc::default());
+    mock.push_notification(crate::player::PlayerNotification::AudioOutputRestored);
+    app.player_mgr.player = Some(Box::new(mock));
+    app.state.status_msg =
+        Some("Audio output device lost. Reconnect the speaker, then press Play to resume.".into());
+
+    app.player_mgr
+        .handle_notifications(&mut app.state, &app.debug_overlay);
+
+    assert!(app.state.playback.is_playing);
+    assert!(app.state.status_msg.is_none());
+}
+
+#[tokio::test]
+async fn resource_regression_free_account_suspicion_requests_product_check_instead_of_disabling() {
+    let mut app = App::new_for_test().await;
+    let mut mock = MockPlayer::new(Arc::default(), Arc::default());
+    mock.push_notification(crate::player::PlayerNotification::FreeAccountDetected);
+    mock.push_notification(crate::player::PlayerNotification::FreeAccountDetected);
+    app.player_mgr.player = Some(Box::new(mock));
+
+    let result = app
+        .player_mgr
+        .handle_notifications(&mut app.state, &app.debug_overlay);
+
+    assert!(result.needs_product_check);
+    assert!(app.player_mgr.product_check_pending);
+    assert!(!app.player_mgr.spotify_streaming_disabled);
+    assert!(app.player_mgr.player.is_some());
+}
+
+#[tokio::test]
+async fn resource_regression_confirmed_free_account_disables_streaming_and_swaps_to_local() {
+    let mut app = App::new_for_test().await;
+    let native = MockPlayer::new(Arc::default(), Arc::default());
+    let parked = MockPlayer::new(Arc::default(), Arc::default());
+    app.player_mgr.player = Some(Box::new(native));
+    app.player_mgr.parked_player = Some(Box::new(parked));
+    app.player_mgr.local_active = false;
+
+    app.player_mgr
+        .disable_streaming(&mut app.state, &app.debug_overlay);
+
+    assert!(app.player_mgr.spotify_streaming_disabled);
+    assert!(app.player_mgr.local_active);
+    assert!(app.player_mgr.player.is_some());
+    assert!(app.player_mgr.parked_player.is_none());
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Spotify Premium required. Switched to local-only mode.")
+    );
+}
+
+#[tokio::test]
+async fn resource_regression_disabled_streaming_blocks_new_spotify_player_creation() {
+    let mut app = App::new_for_test().await;
+    app.player_mgr.spotify_streaming_disabled = true;
+
+    let has_player = app
+        .player_mgr
+        .ensure_spotify_player(&app.spotify, &mut app.state, &app.debug_overlay, &app.audio)
+        .await;
+
+    assert!(!has_player);
+    assert!(app.player_mgr.player.is_none());
+    assert_eq!(
+        app.state.status_msg.as_deref(),
+        Some("Spotify Premium required for streaming")
+    );
+}

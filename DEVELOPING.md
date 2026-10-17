@@ -18,6 +18,10 @@ Linux and Windows.
 
 ## Build and run
 
+`build.rs` embeds Last.fm API credentials at compile time; the build fails
+without them. Copy `.env.example` to `.env` and fill in `LASTFM_API_KEY` and
+`LASTFM_API_SECRET` (create them at https://www.last.fm/api/account/create).
+
 ```bash
 git clone https://github.com/glrmrissi/isi_music.git
 cd isi_music

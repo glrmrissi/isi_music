@@ -1,10 +1,57 @@
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification};
+use crate::player::{AudioPlayer, LocalPlayer, NativePlayer, PlayerNotification, QueuedTrack};
 use crate::spotify::SpotifyClient;
 use crate::ui::UiState;
 use crate::utils::debug_overlay::{DebugOverlay, LogLevel};
+
+pub struct PlayerRestore {
+    pub queue: Vec<String>,
+    pub index: Option<usize>,
+    pub user_queue: Vec<QueuedTrack>,
+    pub volume: u8,
+    pub shuffle: bool,
+    pub repeat: crate::player::RepeatMode,
+    pub progress_ms: u64,
+    pub is_playing: bool,
+}
+
+impl PlayerRestore {
+    pub fn apply(&self, p: &mut dyn AudioPlayer) {
+        p.set_volume(self.volume);
+        if !self.queue.is_empty() {
+            p.set_queue(self.queue.clone(), self.index.unwrap_or(0));
+        }
+        for qt in &self.user_queue {
+            p.add_to_queue(
+                qt.uri.clone(),
+                qt.name.clone(),
+                qt.artist.clone(),
+                qt.album.clone(),
+                qt.duration_ms,
+                qt.cover_path.clone(),
+            );
+        }
+        if self.shuffle {
+            p.toggle_shuffle();
+        }
+        match self.repeat {
+            crate::player::RepeatMode::Queue => p.cycle_repeat(),
+            crate::player::RepeatMode::Track => {
+                p.cycle_repeat();
+                p.cycle_repeat();
+            }
+            crate::player::RepeatMode::Off => {}
+        }
+        if self.progress_ms > 1000 {
+            p.seek_mut(self.progress_ms as u32);
+        }
+        if !self.is_playing {
+            p.pause();
+        }
+    }
+}
 
 pub struct PlayerManager {
     pub player: Option<Box<dyn AudioPlayer>>,
@@ -19,14 +66,16 @@ pub struct PlayerManager {
     pub autoplay_enabled: bool,
     pub recent_track_uris: std::collections::VecDeque<String>,
     pub playing_tracks: Vec<crate::spotify::TrackSummary>,
-    pub consecutive_unavailable: u32,
     pub spotify_streaming_disabled: bool,
+    pub product_check_pending: bool,
     pub reconnect_attempts: u32,
     pub last_reconnect_attempt: Option<Instant>,
     pub last_playback_health_check: Instant,
     pub playing_started_at: Option<Instant>,
     pub progress_at_play_start: u64,
     pub initial_sync_done: bool,
+    pub last_failed_player_attempt: Option<Instant>,
+    pub pending_player_restore: Option<PlayerRestore>,
 }
 
 impl PlayerManager {
@@ -49,26 +98,51 @@ impl PlayerManager {
             autoplay_enabled,
             recent_track_uris: std::collections::VecDeque::new(),
             playing_tracks: Vec::new(),
-            consecutive_unavailable: 0,
             spotify_streaming_disabled: false,
+            product_check_pending: false,
             reconnect_attempts: 0,
             last_reconnect_attempt: None,
             last_playback_health_check: Instant::now(),
             playing_started_at: None,
             progress_at_play_start: 0,
             initial_sync_done: false,
+            last_failed_player_attempt: None,
+            pending_player_restore: None,
         }
+    }
+
+    pub fn take_restore_snapshot(&mut self, progress_ms: u64) -> Option<PlayerRestore> {
+        if let Some(r) = self.pending_player_restore.take() {
+            return Some(r);
+        }
+        self.player.as_ref().map(|p| {
+            let (queue, index) = p.snapshot_queue();
+            PlayerRestore {
+                queue,
+                index,
+                user_queue: p.snapshot_user_queue(),
+                volume: p.volume(),
+                shuffle: p.shuffle(),
+                repeat: p.repeat(),
+                progress_ms,
+                is_playing: p.is_playing(),
+            }
+        })
     }
 
     pub async fn ensure_spotify_player(
         &mut self,
         spotify: &SpotifyClient,
-        state: &UiState,
+        state: &mut UiState,
         debug_overlay: &DebugOverlay,
         audio: &crate::config::AudioConfig,
     ) -> bool {
         if self.player.is_some() && !self.local_active {
             return true;
+        }
+        if self.spotify_streaming_disabled {
+            state.status_msg = Some("Spotify Premium required for streaming".to_string());
+            return false;
         }
         if self.parked_player.is_some() && self.local_active {
             std::mem::swap(&mut self.player, &mut self.parked_player);
@@ -76,14 +150,28 @@ impl PlayerManager {
             self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
             return true;
         }
+        if let Some(t) = self.last_failed_player_attempt
+            && t.elapsed() < Duration::from_secs(10)
+        {
+            state.status_msg =
+                Some("Spotify streaming unavailable — retry in a few seconds".to_string());
+            return false;
+        }
+        self.last_failed_player_attempt = Some(Instant::now());
         let token = spotify.get_access_token().await;
         match NativePlayer::new(token, false, audio.librespot_bitrate(), audio.gapless).await {
             Ok(mut p) => {
-                p.set_volume(self.saved_volume);
+                match self.pending_player_restore.take() {
+                    Some(r) => r.apply(&mut p),
+                    None => p.set_volume(self.saved_volume),
+                }
                 p.set_visualizer_enabled(state.show_visualizer);
+                p.set_mono_enabled(state.mono_audio);
+                p.set_eq_gains(state.eq_gains);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = false;
+                self.last_failed_player_attempt = None;
                 true
             }
             Err(e) => {
@@ -98,7 +186,8 @@ impl PlayerManager {
                     } else {
                         format!("Failed to create Spotify player: {e:#}")
                     };
-                debug_overlay.log(LogLevel::Warn, format!("{status}: {e:#}"));
+                state.status_msg = Some(status.clone());
+                debug_overlay.log(LogLevel::Api, format!("{status}: {e:#}"));
                 false
             }
         }
@@ -121,6 +210,8 @@ impl PlayerManager {
         match LocalPlayer::new(self.saved_volume, &self.local_db_path) {
             Ok(mut p) => {
                 p.set_visualizer_enabled(state.show_visualizer);
+                p.set_mono_enabled(state.mono_audio);
+                p.set_eq_gains(state.eq_gains);
                 self.band_energies = p.band_energies();
                 self.player = Some(Box::new(p));
                 self.local_active = true;
@@ -128,7 +219,7 @@ impl PlayerManager {
             }
             Err(e) => {
                 debug_overlay.log(
-                    LogLevel::Error,
+                    LogLevel::Audio,
                     format!("Failed to create local player: {e}"),
                 );
                 false
@@ -207,7 +298,6 @@ impl PlayerManager {
             while let Some(notif) = player.try_recv_event() {
                 match notif {
                     PlayerNotification::TrackEnded => {
-                        self.consecutive_unavailable = 0;
                         if player.next() {
                             result.needs_sync = true;
                         } else if parked_has_queue {
@@ -221,16 +311,40 @@ impl PlayerManager {
                         }
                     }
                     PlayerNotification::Playing => {
-                        self.consecutive_unavailable = 0;
                         state.playback.is_playing = true;
+                        if state
+                            .status_msg
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with("Audio output device lost"))
+                        {
+                            state.status_msg = None;
+                        }
                         if self.local_active && self.playing_started_at.is_none() {
                             self.playing_started_at = Some(Instant::now());
                             self.progress_at_play_start = state.playback.progress_ms;
                         }
                     }
                     PlayerNotification::Paused => state.playback.is_playing = false,
+                    PlayerNotification::AudioOutputLost => {
+                        state.playback.is_playing = false;
+                        debug_overlay.log(LogLevel::Audio, "Audio output device lost".to_string());
+                        state.status_msg = Some(
+                            "Audio output device lost. Reconnect the speaker, then press Play to resume."
+                                .to_string(),
+                        );
+                    }
+                    PlayerNotification::AudioOutputRestored => {
+                        state.playback.is_playing = true;
+                        debug_overlay.log(LogLevel::Audio, "Audio output restored".to_string());
+                        if state
+                            .status_msg
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with("Audio output device lost"))
+                        {
+                            state.status_msg = None;
+                        }
+                    }
                     PlayerNotification::TrackUnavailable => {
-                        self.consecutive_unavailable += 1;
                         state.status_msg = Some("Track unavailable, skipping...".to_string());
                         if player.next() {
                             result.needs_sync = true;
@@ -251,21 +365,17 @@ impl PlayerManager {
                         }
                     }
                     PlayerNotification::FreeAccountDetected => {
-                        if !self.spotify_streaming_disabled {
-                            tracing::warn!("Free account detected - switching to local-only mode");
-                            self.spotify_streaming_disabled = true;
-                            self.consecutive_unavailable = 0;
-
-                            debug_overlay.log(
-                                LogLevel::Warn,
-                                "Free account detected - switching to local-only mode".to_string(),
+                        if !self.spotify_streaming_disabled && !self.product_check_pending {
+                            tracing::warn!(
+                                "Consecutive unavailable tracks - verifying account product"
                             );
-                            state.status_msg = Some(
-                                "Spotify Premium required. Switched to local-only mode."
+                            debug_overlay.log(
+                                LogLevel::Api,
+                                "Consecutive unavailable tracks - verifying account product"
                                     .to_string(),
                             );
-
-                            result.needs_player_swap = true;
+                            self.product_check_pending = true;
+                            result.needs_product_check = true;
                         }
                     }
                     PlayerNotification::PreloadNextTrack => {
@@ -273,22 +383,30 @@ impl PlayerManager {
                     }
                 }
             }
-
-            if result.needs_player_swap {
-                self.player = None;
-                self.band_energies = None;
-                if self.parked_player.is_some() {
-                    std::mem::swap(&mut self.player, &mut self.parked_player);
-                    self.local_active = true;
-                    self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
-                    result.needs_sync = true;
-                } else {
-                    result.needs_sync = false;
-                }
-            }
         }
 
         result
+    }
+
+    pub fn disable_streaming(&mut self, state: &mut UiState, debug_overlay: &DebugOverlay) {
+        if self.spotify_streaming_disabled {
+            return;
+        }
+        tracing::warn!("Spotify free account confirmed - switching to local-only mode");
+        self.spotify_streaming_disabled = true;
+        debug_overlay.log(
+            LogLevel::Api,
+            "Free account confirmed - switched to local-only mode".to_string(),
+        );
+        state.status_msg =
+            Some("Spotify Premium required. Switched to local-only mode.".to_string());
+        self.player = None;
+        self.band_energies = None;
+        if self.parked_player.is_some() {
+            std::mem::swap(&mut self.player, &mut self.parked_player);
+            self.local_active = true;
+            self.band_energies = self.player.as_ref().and_then(|p| p.band_energies());
+        }
     }
 }
 
@@ -298,5 +416,9 @@ pub struct NotificationResult {
     pub needs_reconnect: bool,
     pub needs_crossover: bool,
     pub needs_radio_refill: bool,
-    pub needs_player_swap: bool,
+    pub needs_product_check: bool,
 }
+
+#[cfg(test)]
+#[path = "../../tests/app/player_mgr.rs"]
+mod tests;

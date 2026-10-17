@@ -63,18 +63,26 @@ impl ThemeManager {
                 preserve_reactive_transition,
                 self.reactive_start.is_some()
             );
-            self.theme = new_theme.clone();
-            if !preserve_reactive_transition {
+            let applied = {
                 #[cfg(all(feature = "palette", feature = "album-art"))]
-                let skip_apply = self.theme.reactive_theme
-                    && self.reactive_start.is_none()
-                    && self.reactive_target.is_none();
-                #[cfg(not(all(feature = "palette", feature = "album-art")))]
-                let skip_apply = false;
-
-                if !skip_apply {
-                    change = ThemeChange::Apply { theme: new_theme };
+                {
+                    let reactive_idle = self.theme.reactive_theme
+                        && self.reactive_start.is_none()
+                        && self.reactive_target.is_none();
+                    if reactive_idle {
+                        new_theme.with_reactive_colors_from(&self.theme)
+                    } else {
+                        new_theme
+                    }
                 }
+                #[cfg(not(all(feature = "palette", feature = "album-art")))]
+                {
+                    new_theme
+                }
+            };
+            self.theme = applied.clone();
+            if !preserve_reactive_transition {
+                change = ThemeChange::Apply { theme: applied };
             }
         }
         change
@@ -100,6 +108,32 @@ impl ThemeManager {
             Some(blended)
         } else {
             None
+        }
+    }
+
+    pub fn set_ascii_art(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.persist_theme_flag(|t| t.show_ascii_art = enabled)
+    }
+
+    pub fn set_transparent_background(&mut self, enabled: bool) -> anyhow::Result<()> {
+        self.persist_theme_flag(|t| t.transparent_background = enabled)
+    }
+
+    fn persist_theme_flag(&mut self, edit: impl FnOnce(&mut Theme)) -> anyhow::Result<()> {
+        #[cfg(test)]
+        {
+            let _ = edit;
+            Ok(())
+        }
+        #[cfg(not(test))]
+        {
+            let path = Theme::get_path().unwrap_or_else(|| std::path::PathBuf::from("theme.toml"));
+            let content = std::fs::read_to_string(&path)?;
+            let mut theme: Theme = toml::from_str(&content).unwrap_or_default();
+            edit(&mut theme);
+            let new_content = toml::to_string_pretty(&theme)?;
+            crate::config::write_atomic(&path, &new_content)?;
+            Ok(())
         }
     }
 

@@ -4,7 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use crate::player::{AudioPlayer, QueuedTrack, RepeatMode};
+use crate::player::{AudioPlayer, PlayerNotification, QueuedTrack, RepeatMode};
 
 pub struct MockPlayer {
     pub is_playing: bool,
@@ -16,10 +16,14 @@ pub struct MockPlayer {
     pub queue: Vec<String>,
     pub user_queue: Vec<QueuedTrack>,
     pub playing_queued: Option<QueuedTrack>,
+    pub notifications: std::collections::VecDeque<PlayerNotification>,
     pub current_index: Option<usize>,
+    pub mono_enabled: Arc<AtomicBool>,
+    pub eq_gains: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl MockPlayer {
+    #[allow(dead_code)]
     pub fn new(next_called: Arc<AtomicBool>, prev_called: Arc<AtomicBool>) -> Self {
         Self {
             is_playing: false,
@@ -31,7 +35,10 @@ impl MockPlayer {
             queue: Vec::new(),
             user_queue: Vec::new(),
             playing_queued: None,
+            notifications: std::collections::VecDeque::new(),
             current_index: None,
+            mono_enabled: Arc::new(AtomicBool::new(false)),
+            eq_gains: Arc::default(),
         }
     }
 
@@ -47,8 +54,16 @@ impl MockPlayer {
             queue: Vec::new(),
             user_queue: queue,
             playing_queued: None,
+            notifications: std::collections::VecDeque::new(),
             current_index: None,
+            mono_enabled: Arc::new(AtomicBool::new(false)),
+            eq_gains: Arc::default(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn push_notification(&mut self, notification: PlayerNotification) {
+        self.notifications.push_back(notification);
     }
 }
 
@@ -98,9 +113,9 @@ impl AudioPlayer for MockPlayer {
     }
     fn cycle_repeat(&mut self) {
         self.repeat = match self.repeat {
-            RepeatMode::Off => RepeatMode::Track,
-            RepeatMode::Track => RepeatMode::Queue,
-            RepeatMode::Queue => RepeatMode::Off,
+            RepeatMode::Off => RepeatMode::Queue,
+            RepeatMode::Queue => RepeatMode::Track,
+            RepeatMode::Track => RepeatMode::Off,
         };
     }
     fn set_queue(&mut self, uris: Vec<String>, start_index: usize) {
@@ -148,6 +163,12 @@ impl AudioPlayer for MockPlayer {
     fn current_index(&self) -> Option<usize> {
         self.current_index
     }
+    fn snapshot_queue(&self) -> (Vec<String>, Option<usize>) {
+        (self.queue.clone(), self.current_index)
+    }
+    fn snapshot_user_queue(&self) -> Vec<QueuedTrack> {
+        self.user_queue.clone()
+    }
     fn current_track_summary(&self) -> Option<crate::spotify::TrackSummary> {
         self.queue
             .get(self.current_index?)
@@ -162,7 +183,14 @@ impl AudioPlayer for MockPlayer {
             })
     }
     fn try_recv_event(&mut self) -> Option<crate::player::PlayerNotification> {
-        None
+        self.notifications.pop_front()
+    }
+    fn set_mono_enabled(&mut self, enabled: bool) {
+        self.mono_enabled.store(enabled, Ordering::Relaxed);
+    }
+    fn set_eq_gains(&mut self, gains: [i8; crate::audio::eq::EQ_BANDS]) {
+        self.eq_gains
+            .store(crate::audio::eq::pack_gains(&gains), Ordering::Relaxed);
     }
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
         None

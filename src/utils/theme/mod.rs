@@ -125,7 +125,7 @@ fn default_fullscreen_layout() -> LayoutNode {
     use SerializableConstraint::*;
     LayoutNode {
         direction: Some(SerializableDirection::Vertical),
-        constraints: Some(vec![Length(18), Length(8), Min(0)]),
+        constraints: Some(vec![Length(18), Min(0), Length(12)]),
         widget: None,
         children: Some(vec![
             LayoutNode {
@@ -227,6 +227,8 @@ pub struct Theme {
     #[serde(default = "default_cross_fade_ms")]
     pub reactive_cross_fade_ms: u64,
     #[serde(default)]
+    pub transparent_background: bool,
+    #[serde(default)]
     pub visualizer: VisualizerConfig,
     #[serde(default)]
     pub borders: HashMap<UiWidget, BorderConfig>,
@@ -264,6 +266,7 @@ impl Default for Theme {
             info: default_info(),
             reactive_theme: false,
             reactive_cross_fade_ms: default_cross_fade_ms(),
+            transparent_background: false,
             visualizer: VisualizerConfig::default(),
             borders: HashMap::new(),
         }
@@ -294,6 +297,28 @@ impl Theme {
         out
     }
 
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    pub fn with_reactive_colors_from(mut self, from: &Theme) -> Theme {
+        self.background = from.background;
+        self.background_panel = from.background_panel;
+        self.background_element = from.background_element;
+        self.border_active = from.border_active;
+        self.border_inactive = from.border_inactive;
+        self.border_subtle = from.border_subtle;
+        self.border_dimmest = from.border_dimmest;
+        self.text_primary = from.text_primary;
+        self.text_secondary = from.text_secondary;
+        self.status_bar = from.status_bar;
+        self.highlight_bg = from.highlight_bg;
+        self.accent_color = from.accent_color;
+        self.success = from.success;
+        self.error = from.error;
+        self.warning = from.warning;
+        self.info = from.info;
+        self.primary = from.primary;
+        self
+    }
+
     pub fn get_path() -> Option<PathBuf> {
         dirs::config_dir().map(|mut p| {
             p.push("isi-music/theme.toml");
@@ -309,7 +334,7 @@ impl Theme {
             }
             let default_theme = Self::default();
             if let Ok(toml_str) = toml::to_string_pretty(&default_theme) {
-                let _ = fs::write(&path, toml_str);
+                let _ = crate::config::write_atomic(&path, &toml_str);
             }
             return default_theme;
         }
@@ -328,7 +353,7 @@ impl Theme {
                 if !has_new_fields {
                     let migrated = Self::migrate_from_legacy(&theme);
                     if let Ok(toml_str) = toml::to_string_pretty(&migrated) {
-                        let _ = fs::write(&path, toml_str);
+                        let _ = crate::config::write_atomic(&path, &toml_str);
                     }
                     return migrated;
                 }
@@ -351,6 +376,7 @@ impl Theme {
             ascii_art_inline: legacy.ascii_art_inline.clone(),
             ascii_art_path: legacy.ascii_art_path.clone(),
             show_ascii_art: legacy.show_ascii_art,
+            transparent_background: legacy.transparent_background,
             highlight_symbol: legacy.highlight_symbol.clone(),
             options_panel_symbol: legacy.options_panel_symbol.clone(),
             ..Default::default()

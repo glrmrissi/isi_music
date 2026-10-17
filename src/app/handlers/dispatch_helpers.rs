@@ -28,19 +28,25 @@ impl App {
                 self.state.status_msg = Some("Like failed: no token".to_string());
                 return;
             };
-            let track_id = self
-                .current_track_uri
-                .rsplit(':')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            if track_id.is_empty() {
-                self.state.status_msg = Some("Like failed: empty track ID".to_string());
+            let uri = self.current_track_uri.clone();
+            if !uri.starts_with("spotify:") {
+                self.state.status_msg = Some("Like failed: invalid URI".to_string());
                 return;
             }
-            match crate::spotify::save_track_http(&self.spotify.http, &token, &track_id).await {
+            let is_episode = uri.starts_with("spotify:episode:");
+            match crate::spotify::save_uri_http(&self.spotify.http, &token, &uri).await {
                 Ok(_) => {
-                    self.state.status_msg = Some("Liked".to_string());
+                    self.state.status_msg = Some(
+                        if is_episode {
+                            "Saved to Your Episodes"
+                        } else {
+                            "Liked"
+                        }
+                        .to_string(),
+                    );
+                    if is_episode {
+                        return;
+                    }
                     let new_track = crate::spotify::TrackSummary {
                         name: self.state.playback.title.clone(),
                         artist: self.state.playback.artist.clone(),
@@ -78,74 +84,26 @@ impl App {
             .current_track_uri
             .strip_prefix("spotify:track:")
             .map(|id| format!("https://open.spotify.com/track/{id}"))
+            .or_else(|| {
+                self.current_track_uri
+                    .strip_prefix("spotify:episode:")
+                    .map(|id| format!("https://open.spotify.com/episode/{id}"))
+            })
             .unwrap_or_default();
         if url.is_empty() {
             self.state.status_msg = Some("No track playing".to_string());
             self.debug_overlay
                 .log(LogLevel::Warn, "CopyTrackLink: no track playing");
+        } else if clipboard_copy(&url) {
+            self.state.status_msg = Some(format!("Link copied: {url}"));
+            self.debug_overlay
+                .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
         } else {
-            // Try arboard (cross-platform) first, fall back to xclip/wl-copy on Linux
-            let copied = match arboard::Clipboard::new() {
-                Ok(mut cb) => cb.set_text(&url).is_ok(),
-                Err(_) => false,
-            };
-            if !copied {
-                // Fallback: xclip (X11) / wl-copy (Wayland)
-                let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-                let cmd = if wayland { "wl-copy" } else { "xclip" };
-                let args: &[&str] = if wayland {
-                    &[]
-                } else {
-                    &["-selection", "clipboard"]
-                };
-                let mut child = match std::process::Command::new(cmd)
-                    .args(args)
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        self.state.status_msg = Some(format!("Copy failed: {cmd} not found ({e})"));
-                        self.debug_overlay.log(
-                            LogLevel::Error,
-                            format!("CopyTrackLink: failed to spawn {cmd}: {e}"),
-                        );
-                        return;
-                    }
-                };
-                if let Some(mut stdin) = child.stdin.take() {
-                    use std::io::Write;
-                    let _ = stdin.write_all(url.as_bytes());
-                }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        self.state.status_msg = Some(format!("Link copied: {url}"));
-                        self.debug_overlay
-                            .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
-                    }
-                    Ok(status) => {
-                        self.state.status_msg =
-                            Some(format!("Copy failed: {cmd} exited with {status}"));
-                        self.debug_overlay.log(
-                            LogLevel::Error,
-                            format!("CopyTrackLink: {cmd} exited with {status}"),
-                        );
-                    }
-                    Err(e) => {
-                        self.state.status_msg = Some(format!("Copy failed: {cmd} error ({e})"));
-                        self.debug_overlay.log(
-                            LogLevel::Error,
-                            format!("CopyTrackLink: {cmd} wait error: {e}"),
-                        );
-                    }
-                }
-            } else {
-                self.state.status_msg = Some(format!("Link copied: {url}"));
-                self.debug_overlay
-                    .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
-            }
+            self.state.status_msg = Some("Copy failed: install wl-copy/xclip/xsel".to_string());
+            self.debug_overlay.log(
+                LogLevel::Error,
+                "CopyTrackLink: all clipboard methods failed".to_string(),
+            );
         }
     }
 
@@ -217,37 +175,30 @@ impl App {
                 self.state.status_msg = Some("No track playing".to_string());
             } else {
                 // Not a playlist — check if track is liked
-                let track_id = self
-                    .current_track_uri
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                if track_id.is_empty() {
+                let uri = self.current_track_uri.clone();
+                if !uri.starts_with("spotify:") {
                     self.state.status_msg = Some("Invalid track".to_string());
                     return;
                 }
 
                 self.state.status_msg = Some("Checking...".to_string());
-                match self.spotify.check_track_saved(&track_id).await {
+                match self.spotify.check_uri_saved(&uri).await {
                     Ok(true) => {
                         let Some(token) = self.spotify.get_access_token().await else {
                             self.state.status_msg = Some("Unlike failed: no token".to_string());
                             return;
                         };
-                        match crate::spotify::unlike_track_http(
-                            &self.spotify.http,
-                            &token,
-                            &track_id,
-                        )
-                        .await
+                        match crate::spotify::remove_uri_http(&self.spotify.http, &token, &uri)
+                            .await
                         {
                             Ok(_) => {
                                 self.state.status_msg = Some("Unliked".to_string());
                                 let uri = self.current_track_uri.clone();
-                                if self.state.active_playlist_id.as_deref() == Some("liked_songs")
-                                    && let Some(pos) =
-                                        self.state.tracks.iter().position(|t| t.uri == uri)
+                                if matches!(
+                                    self.state.active_playlist_id.as_deref(),
+                                    Some("liked_songs") | Some("saved_episodes")
+                                ) && let Some(pos) =
+                                    self.state.tracks.iter().position(|t| t.uri == uri)
                                 {
                                     self.state.tracks.remove(pos);
                                     self.state.tracks_offset =
@@ -278,5 +229,167 @@ impl App {
                 }
             }
         }
+    }
+
+    pub(crate) async fn handle_remote_play_error(
+        &mut self,
+        e: &anyhow::Error,
+        player_error: Option<&str>,
+    ) {
+        if self.report_remote_play_error(e, player_error) {
+            self.reconnect_player().await;
+        }
+    }
+
+    pub(crate) async fn remote_toggle_playback(&mut self, player_error: Option<String>) {
+        let result = self.spotify.toggle_playback().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    pub(crate) async fn remote_next_track(&mut self, player_error: Option<String>) {
+        let result = self.spotify.next_track().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    pub(crate) async fn remote_prev_track(&mut self, player_error: Option<String>) {
+        let result = self.spotify.prev_track().await;
+        self.report_remote_control_result(result, player_error)
+            .await;
+    }
+
+    async fn report_remote_control_result(
+        &mut self,
+        result: anyhow::Result<()>,
+        player_error: Option<String>,
+    ) {
+        match result {
+            Ok(()) if player_error.is_some() => {
+                self.state.status_msg =
+                    Some("Playback command sent to an active Spotify Connect device".to_string());
+            }
+            Err(e) => {
+                self.handle_remote_play_error(&e, player_error.as_deref())
+                    .await
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn report_remote_play_error(
+        &mut self,
+        e: &anyhow::Error,
+        player_error: Option<&str>,
+    ) -> bool {
+        let err_str = e.to_string();
+        if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
+            tracing::warn!("Got 401 - triggering reconnect");
+            self.state.status_msg = Some("Authorization expired, reconnecting...".to_string());
+            true
+        } else if err_str.contains("no_active_device") || err_str.contains("No active device") {
+            let status = "Spotify Connect has no active device";
+            self.state.status_msg = Some(match player_error {
+                Some(player_error) => format!("{player_error}; {status}"),
+                None => "No active Spotify device — streaming player unavailable or start Spotify on a device"
+                    .to_string(),
+            });
+            false
+        } else {
+            self.state.status_msg = Some(match player_error {
+                Some(player_error) => format!("{player_error}; remote playback failed: {e}"),
+                None => format!("Error: {e}"),
+            });
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_via_command(cmd: &str, args: &[&str], text: &str) -> bool {
+    use std::io::Write;
+    let mut child = match std::process::Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    child.wait().map(|s| s.success()).unwrap_or(false)
+}
+
+/// Emit the OSC 52 escape so terminals with clipboard support (foot, kitty,
+/// wezterm, tmux with set-clipboard, many ssh setups) can copy without any
+/// external tool.
+#[cfg(target_os = "linux")]
+fn copy_via_osc52(text: &str) -> bool {
+    use base64::Engine as _;
+    use std::io::Write;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .and_then(|mut tty| write!(tty, "\x1b]52;c;{b64}\x07").and_then(|()| tty.flush()))
+        .is_ok()
+}
+
+fn clipboard_copy(text: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // Native tools first: under XWayland, arboard's X11 path can report
+        // success while the selection never reaches the Wayland clipboard.
+        let tools: &[(&str, &[&str])] = if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            &[
+                ("wl-copy", &[]),
+                ("xclip", &["-selection", "clipboard"]),
+                ("xsel", &["--clipboard", "--input"]),
+            ]
+        } else {
+            &[
+                ("xclip", &["-selection", "clipboard"]),
+                ("xsel", &["--clipboard", "--input"]),
+                ("wl-copy", &[]),
+            ]
+        };
+        for (cmd, args) in tools {
+            if copy_via_command(cmd, args, text) {
+                return true;
+            }
+        }
+        if copy_via_osc52(text) {
+            return true;
+        }
+    }
+    match arboard::Clipboard::new() {
+        Ok(mut cb) => cb.set_text(text).is_ok(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_via_command_pipes_text_to_wl_copy() {
+        if std::env::var("WAYLAND_DISPLAY").is_err()
+            || std::process::Command::new("wl-copy")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| !s.success())
+                .unwrap_or(true)
+        {
+            return;
+        }
+        let payload = format!("isi-music-test-{}", std::process::id());
+        assert!(copy_via_command("wl-copy", &[], &payload));
     }
 }

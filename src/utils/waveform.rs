@@ -45,7 +45,14 @@ pub fn save(uri: &str, data: &[u8]) {
 
 /// Generates the waveform envelope and measures the actual duration of the
 /// file. Returns `(duration_ms, envelope)`. Duration is 0 when served from cache.
-pub fn generate_for_file(path: &Path) -> Option<(u64, Vec<u8>)> {
+pub(crate) fn generate_for_file_with_cancel(
+    path: &Path,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> Option<(u64, Vec<u8>)> {
+    if is_cancelled() {
+        return None;
+    }
+
     // Fast path: use cache if available.
     let uri = format!("file://{}", path.display());
     if let Some(cached) = load(&uri) {
@@ -69,7 +76,10 @@ pub fn generate_for_file(path: &Path) -> Option<(u64, Vec<u8>)> {
     let mut window: Vec<f32> = Vec::with_capacity(window_samples);
     let mut total_samples: u64 = 0;
 
-    for sample in decoder.by_ref() {
+    for (index, sample) in decoder.by_ref().enumerate() {
+        if index % 4096 == 0 && is_cancelled() {
+            return None;
+        }
         total_samples += 1;
         window.push(sample);
         if window.len() >= window_samples {
@@ -77,6 +87,10 @@ pub fn generate_for_file(path: &Path) -> Option<(u64, Vec<u8>)> {
             envelope.push(rms);
             window.clear();
         }
+    }
+
+    if is_cancelled() {
+        return None;
     }
 
     if !window.is_empty() {
@@ -117,4 +131,42 @@ pub fn generate_for_file(path: &Path) -> Option<(u64, Vec<u8>)> {
 
     save(&uri, &quantized);
     Some((duration_ms, quantized))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn resource_regression_waveform_generation_stops_when_cancelled_during_decode() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let sample_count = 16_384u32;
+        let data_size = sample_count * 2;
+        let mut wav = Vec::with_capacity(44 + data_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&44_100u32.to_le_bytes());
+        wav.extend_from_slice(&88_200u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.resize(44 + data_size as usize, 0);
+        std::fs::write(file.path(), wav).unwrap();
+
+        let checks = Cell::new(0);
+        let result = generate_for_file_with_cancel(file.path(), || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            next == 3
+        });
+
+        assert!(result.is_none());
+        assert_eq!(checks.get(), 3);
+    }
 }

@@ -6,18 +6,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::search_cache::{CachedAlbum, CachedArtist, CachedTrack};
 use super::types::{AlbumSummary, ArtistSummary, TrackSummary};
 
+pub(crate) const LIBRARY_CACHE_TTL_SECS: i64 = 3600;
+
 #[derive(Clone)]
 pub struct LibraryCache {
     pub(super) conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
 }
 
 impl LibraryCache {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(enabled: bool) -> anyhow::Result<Self> {
         let conn = tokio::task::spawn_blocking(move || {
-            #[cfg(test)]
-            let conn = rusqlite::Connection::open_in_memory()?;
-            #[cfg(not(test))]
-            let conn = {
+            let in_memory = cfg!(test) || !enabled;
+            let conn = if in_memory {
+                rusqlite::Connection::open_in_memory()?
+            } else {
                 let db_path = crate::config::get_local_db_path();
                 let conn = rusqlite::Connection::open(&db_path)?;
                 conn.execute_batch(
@@ -56,7 +58,7 @@ impl LibraryCache {
         })
     }
 
-    const CACHE_TTL_SECS: i64 = 3600;
+    const CACHE_TTL_SECS: i64 = LIBRARY_CACHE_TTL_SECS;
 
     fn unix_now() -> i64 {
         SystemTime::now()
@@ -66,14 +68,16 @@ impl LibraryCache {
     }
 
     pub fn get_tracks(&self, key: &str) -> Option<(Vec<TrackSummary>, u32)> {
-        let conn = self.conn.lock().ok()?;
-        let (data, total, saved_at): (String, u32, i64) = conn
-            .query_row(
+        // Release the lock before JSON parsing so large payloads don't block.
+        let (data, total, saved_at): (String, u32, i64) = {
+            let conn = self.conn.lock().ok()?;
+            conn.query_row(
                 "SELECT data, total, saved_at FROM library_cache WHERE key = ?1",
                 params![key],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .ok()?;
+            .ok()?
+        };
         if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
             return None;
         }
@@ -122,14 +126,15 @@ impl LibraryCache {
     }
 
     pub fn get_albums(&self) -> Option<(Vec<AlbumSummary>, u32)> {
-        let conn = self.conn.lock().ok()?;
-        let (data, total, saved_at): (String, u32, i64) = conn
-            .query_row(
+        let (data, total, saved_at): (String, u32, i64) = {
+            let conn = self.conn.lock().ok()?;
+            conn.query_row(
                 "SELECT data, total, saved_at FROM library_cache WHERE key = 'albums'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .ok()?;
+            .ok()?
+        };
         if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
             return None;
         }
@@ -170,14 +175,15 @@ impl LibraryCache {
     }
 
     pub fn get_artists(&self) -> Option<Vec<ArtistSummary>> {
-        let conn = self.conn.lock().ok()?;
-        let (data, saved_at): (String, i64) = conn
-            .query_row(
+        let (data, saved_at): (String, i64) = {
+            let conn = self.conn.lock().ok()?;
+            conn.query_row(
                 "SELECT data, saved_at FROM library_cache WHERE key = 'artists'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .ok()?;
+            .ok()?
+        };
         if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
             return None;
         }
@@ -225,16 +231,6 @@ impl LibraryCache {
             "DELETE FROM liked_tracks_cache WHERE uri = ?1",
             params![track_uri],
         );
-    }
-
-    #[allow(dead_code)]
-    pub fn has_liked_tracks_cache(&self) -> bool {
-        let Ok(conn) = self.conn.lock() else {
-            return false;
-        };
-        conn.query_row("SELECT COUNT(*) FROM liked_tracks_cache", [], |r| r.get(0))
-            .unwrap_or(0)
-            > 0
     }
 
     pub fn get_liked_tracks_page(

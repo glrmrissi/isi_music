@@ -220,6 +220,54 @@ mod tests {
     }
 
     #[test]
+    fn reactive_idle_file_change_applies_and_preserves_derived_colors() {
+        let (watcher, tx) = ThemeWatcher::with_sender();
+        let mut theme = Theme {
+            reactive_theme: true,
+            ..Default::default()
+        };
+        theme.background = ratatui::style::Color::Rgb(1, 2, 3);
+        let mut mgr = ThemeManager::new(theme, watcher);
+
+        let mut new_theme = mgr.theme.clone();
+        new_theme.background = ratatui::style::Color::Rgb(200, 200, 200);
+        new_theme.highlight_symbol = "!! ".to_string();
+        tx.send(new_theme).unwrap();
+
+        match mgr.poll_theme_changes() {
+            ThemeChange::Apply { theme } => {
+                assert_eq!(
+                    theme.background,
+                    ratatui::style::Color::Rgb(1, 2, 3),
+                    "derived palette colors should survive a file edit"
+                );
+                assert_eq!(
+                    theme.highlight_symbol, "!! ",
+                    "structural fields should apply while reactive is idle"
+                );
+            }
+            ThemeChange::None => panic!("file change should apply while reactive is idle"),
+        }
+    }
+
+    #[test]
+    fn non_reactive_file_change_applies_new_colors() {
+        let (watcher, tx) = ThemeWatcher::with_sender();
+        let mut mgr = ThemeManager::new(Theme::default(), watcher);
+
+        let mut new_theme = mgr.theme.clone();
+        new_theme.background = ratatui::style::Color::Rgb(9, 9, 9);
+        tx.send(new_theme).unwrap();
+
+        match mgr.poll_theme_changes() {
+            ThemeChange::Apply { theme } => {
+                assert_eq!(theme.background, ratatui::style::Color::Rgb(9, 9, 9));
+            }
+            ThemeChange::None => panic!("file change should apply when reactive is off"),
+        }
+    }
+
+    #[test]
     fn reactive_theme_disable_clears_state() {
         let mut mgr = make_reactive_theme_mgr();
         let debug = std::sync::Arc::new(DebugOverlay::new());

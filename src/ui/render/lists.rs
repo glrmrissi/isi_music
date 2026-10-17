@@ -106,7 +106,11 @@ impl Ui {
             }
         };
 
-        let background = Style::default().bg(self.theme.background_panel);
+        let background = if self.theme.transparent_background {
+            Style::default()
+        } else {
+            Style::default().bg(self.theme.background_panel)
+        };
         if area.height < 2 {
             frame.render_widget(Paragraph::new(content).style(background), area);
             return;

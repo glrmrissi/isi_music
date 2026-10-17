@@ -25,7 +25,11 @@ pub struct IntegrationManager {
     pub discord: Option<DiscordRpc>,
     discord_last_title: String,
     discord_last_playing: bool,
+    discord_last_art: Option<String>,
+    discord_last_progress_ms: u64,
     discord_pending_since: Option<Instant>,
+    discord_last_send: Instant,
+    discord_dirty: bool,
     #[cfg(all(feature = "mpris", target_os = "linux"))]
     pub mpris: Option<MprisHandle>,
     #[cfg(feature = "mpris")]
@@ -61,7 +65,11 @@ impl IntegrationManager {
             discord: None,
             discord_last_title: String::new(),
             discord_last_playing: false,
+            discord_last_art: None,
+            discord_last_progress_ms: 0,
             discord_pending_since: None,
+            discord_last_send: Instant::now() - Duration::from_secs(60),
+            discord_dirty: false,
             #[cfg(all(feature = "mpris", target_os = "linux"))]
             mpris: None,
             #[cfg(feature = "mpris")]
@@ -91,45 +99,78 @@ impl IntegrationManager {
         self.track_start_unix = ts;
     }
 
-    pub fn update_discord(&mut self, state: &UiState) {
+    pub fn update_discord(&mut self, state: &UiState, track_uri: &str) {
         let Some(discord) = &self.discord else {
             return;
         };
         let pb = &state.playback;
         let title_changed = pb.title != self.discord_last_title;
         let playing_changed = pb.is_playing != self.discord_last_playing;
+        let art_changed = pb.art_url != self.discord_last_art;
+
+        let prev_progress = self.discord_last_progress_ms;
+        self.discord_last_progress_ms = pb.progress_ms;
+        let seeked = !title_changed
+            && pb.is_playing
+            && (pb.progress_ms.saturating_add(1500) < prev_progress
+                || pb.progress_ms > prev_progress.saturating_add(10_000));
 
         if title_changed {
             self.discord_pending_since = Some(Instant::now());
             self.discord_last_title = pb.title.clone();
             self.discord_last_playing = pb.is_playing;
-        } else if playing_changed {
+        } else if playing_changed || self.discord_pending_since.is_none() && (art_changed || seeked)
+        {
             self.discord_last_playing = pb.is_playing;
             self.discord_pending_since = None;
-            if pb.title.is_empty() {
-                discord.clear();
-            } else if pb.is_playing {
-                discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
-            } else {
-                discord.update_paused(&pb.title, &pb.artist);
-            }
+            self.discord_dirty = true;
         }
 
         if let Some(since) = self.discord_pending_since {
             let art_ready = pb.art_url.is_some() || pb.is_local;
+            let progress_ready = pb.progress_ms > 0 || !pb.is_playing || pb.is_local;
             let timeout_secs = if pb.is_local { 1 } else { 5 };
             let timed_out = since.elapsed() >= Duration::from_secs(timeout_secs);
-            if art_ready || timed_out {
+            if (art_ready && progress_ready) || timed_out {
                 self.discord_pending_since = None;
-                if pb.title.is_empty() {
-                    discord.clear();
-                } else if pb.is_playing {
-                    discord.update_playing(&pb.title, &pb.artist, &pb.album, pb.art_url.as_deref());
-                } else {
-                    discord.update_paused(&pb.title, &pb.artist);
-                }
+                self.discord_dirty = true;
             }
         }
+
+        if self.discord_dirty && self.discord_last_send.elapsed() >= Duration::from_secs(2) {
+            self.discord_dirty = false;
+            self.discord_last_send = Instant::now();
+            Self::send_discord(discord, pb, track_uri);
+            self.discord_last_art = pb.art_url.clone();
+        }
+    }
+
+    fn send_discord(discord: &DiscordRpc, pb: &crate::ui::PlaybackState, track_uri: &str) {
+        if pb.title.is_empty() || !pb.is_playing {
+            discord.clear();
+            return;
+        }
+        let track_url = track_uri
+            .strip_prefix("spotify:track:")
+            .map(|id| format!("https://open.spotify.com/track/{id}"))
+            .or_else(|| {
+                track_uri
+                    .strip_prefix("spotify:episode:")
+                    .map(|id| format!("https://open.spotify.com/episode/{id}"))
+            });
+        let now = crate::app::metadata::unix_now() as i64;
+        let start_unix = now - (pb.progress_ms / 1000) as i64;
+        let duration_secs = (pb.duration_ms / 1000) as i64;
+        let end_unix = (duration_secs > 0).then_some(start_unix + duration_secs);
+        discord.update_playing(
+            &pb.title,
+            &pb.artist,
+            &pb.album,
+            pb.art_url.as_deref(),
+            track_url.as_deref(),
+            start_unix,
+            end_unix,
+        );
     }
 
     #[cfg(all(feature = "mpris", target_os = "linux"))]

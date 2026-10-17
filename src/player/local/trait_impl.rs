@@ -108,13 +108,14 @@ impl AudioPlayer for LocalPlayer {
             duration_ms: track.duration_ms,
             cover_path: track.cover_path.clone(),
         };
-        self.temp_queue.push(lt);
-        let temp_idx = self.temp_queue.len() - 1;
-        if self.load_temp_track(temp_idx) {
+        let previous_temp_queue = super::queue::replace_temp_track(&mut self.temp_queue, lt);
+        let previous_temp_playing = self.temp_playing;
+        if self.load_temp_track(0) {
             self.playing_queued = Some(track);
             return true;
         }
-        self.temp_queue.pop();
+        self.temp_queue = previous_temp_queue;
+        self.temp_playing = previous_temp_playing;
         false
     }
 
@@ -238,6 +239,15 @@ impl AudioPlayer for LocalPlayer {
 
     fn set_visualizer_enabled(&mut self, enabled: bool) {
         self.analyzer.set_enabled(enabled);
+    }
+
+    fn set_mono_enabled(&mut self, enabled: bool) {
+        self.mono_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    fn set_eq_gains(&mut self, gains: [i8; crate::audio::eq::EQ_BANDS]) {
+        self.eq_gains
+            .store(crate::audio::eq::pack_gains(&gains), Ordering::Relaxed);
     }
 
     fn band_energies(&self) -> Option<Arc<Mutex<Vec<f32>>>> {
