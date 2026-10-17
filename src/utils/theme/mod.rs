@@ -125,7 +125,7 @@ fn default_fullscreen_layout() -> LayoutNode {
     use SerializableConstraint::*;
     LayoutNode {
         direction: Some(SerializableDirection::Vertical),
-        constraints: Some(vec![Length(18), Length(8), Min(0)]),
+        constraints: Some(vec![Length(18), Min(0), Length(12)]),
         widget: None,
         children: Some(vec![
             LayoutNode {

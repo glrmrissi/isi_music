@@ -112,13 +112,22 @@ impl Ui {
         let mut tree = self.theme.fullscreen_layout.clone();
         if !state.show_lyrics
             && let Some(children) = &mut tree.children
-            && let Some(constraints) = &mut tree.constraints
             && let Some(idx) = children.iter().position(|c| {
                 c.widget == Some(UiWidget::FullscreenLyrics) || c.widget == Some(UiWidget::Lyrics)
             })
         {
-            children.remove(idx);
-            constraints.remove(idx);
+            children[idx].widget = Some(UiWidget::Spacer);
+        }
+        if let Some(viz_h) = self.theme.visualizer.height {
+            let viz_idx = tree.children.as_ref().and_then(|c| {
+                c.iter()
+                    .position(|n| n.widget == Some(UiWidget::Visualizer))
+            });
+            if let (Some(idx), Some(constraints)) = (viz_idx, &mut tree.constraints)
+                && idx < constraints.len()
+            {
+                constraints[idx] = SerializableConstraint::Length(viz_h);
+            }
         }
         if !state.show_album_art
             && let Some(constraints) = &mut tree.constraints
