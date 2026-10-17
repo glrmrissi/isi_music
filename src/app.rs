@@ -36,7 +36,7 @@ use crate::utils::smtc::SmtcCmd;
 use crate::utils::theme::Theme;
 
 #[cfg(target_os = "linux")]
-use libc;
+use libc::malloc_trim;
 
 pub use fetcher::FetchResult;
 
@@ -232,7 +232,7 @@ impl App {
         #[cfg(all(feature = "mpris", target_os = "linux"))]
         let mpris = match crate::utils::mpris::spawn().await {
             Ok(h) => {
-                debug_overlay.log(LogLevel::Info, format!("MPRIS D-Bus server started"));
+                debug_overlay.log(LogLevel::Info, "MPRIS D-Bus server started".to_string());
                 Some(h)
             }
             Err(e) => {
@@ -1149,9 +1149,9 @@ impl App {
             #[cfg(target_os = "linux")]
             {
                 self.trim_counter += 1;
-                if self.trim_counter % 300 == 0 {
+                if self.trim_counter.is_multiple_of(300) {
                     unsafe {
-                        libc::malloc_trim(0);
+                        malloc_trim(0);
                     }
                 }
             }

@@ -55,15 +55,11 @@ pub(crate) async fn run_lastfm_setup(cfg: &mut crate::config::AppConfig) -> Resu
     println!("{RED}├───────────────────────────────────────────────────────────────┤{RESET}");
     println!(
         "{}",
-        bl!(format!(
-            "  isi-music will open Last.fm authorization in your browser"
-        ))
+        bl!("  isi-music will open Last.fm authorization in your browser")
     );
     println!(
         "{}",
-        bl!(format!(
-            "  Just log in to your Last.fm account and authorize the app"
-        ))
+        bl!("  Just log in to your Last.fm account and authorize the app")
     );
     println!("{}", bl!(""));
     println!(
