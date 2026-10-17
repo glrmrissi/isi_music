@@ -94,69 +94,16 @@ impl App {
             self.state.status_msg = Some("No track playing".to_string());
             self.debug_overlay
                 .log(LogLevel::Warn, "CopyTrackLink: no track playing");
+        } else if clipboard_copy(&url) {
+            self.state.status_msg = Some(format!("Link copied: {url}"));
+            self.debug_overlay
+                .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
         } else {
-            // Try arboard (cross-platform) first, fall back to xclip/wl-copy on Linux
-            let copied = match arboard::Clipboard::new() {
-                Ok(mut cb) => cb.set_text(&url).is_ok(),
-                Err(_) => false,
-            };
-            if !copied {
-                // Fallback: xclip (X11) / wl-copy (Wayland)
-                let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-                let cmd = if wayland { "wl-copy" } else { "xclip" };
-                let args: &[&str] = if wayland {
-                    &[]
-                } else {
-                    &["-selection", "clipboard"]
-                };
-                let mut child = match std::process::Command::new(cmd)
-                    .args(args)
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        self.state.status_msg = Some(format!("Copy failed: {cmd} not found ({e})"));
-                        self.debug_overlay.log(
-                            LogLevel::Error,
-                            format!("CopyTrackLink: failed to spawn {cmd}: {e}"),
-                        );
-                        return;
-                    }
-                };
-                if let Some(mut stdin) = child.stdin.take() {
-                    use std::io::Write;
-                    let _ = stdin.write_all(url.as_bytes());
-                }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        self.state.status_msg = Some(format!("Link copied: {url}"));
-                        self.debug_overlay
-                            .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
-                    }
-                    Ok(status) => {
-                        self.state.status_msg =
-                            Some(format!("Copy failed: {cmd} exited with {status}"));
-                        self.debug_overlay.log(
-                            LogLevel::Error,
-                            format!("CopyTrackLink: {cmd} exited with {status}"),
-                        );
-                    }
-                    Err(e) => {
-                        self.state.status_msg = Some(format!("Copy failed: {cmd} error ({e})"));
-                        self.debug_overlay.log(
-                            LogLevel::Error,
-                            format!("CopyTrackLink: {cmd} wait error: {e}"),
-                        );
-                    }
-                }
-            } else {
-                self.state.status_msg = Some(format!("Link copied: {url}"));
-                self.debug_overlay
-                    .log(LogLevel::Info, format!("CopyTrackLink: copied {url}"));
-            }
+            self.state.status_msg = Some("Copy failed: install wl-copy/xclip/xsel".to_string());
+            self.debug_overlay.log(
+                LogLevel::Error,
+                "CopyTrackLink: all clipboard methods failed".to_string(),
+            );
         }
     }
 
@@ -355,5 +302,94 @@ impl App {
             });
             false
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_via_command(cmd: &str, args: &[&str], text: &str) -> bool {
+    use std::io::Write;
+    let mut child = match std::process::Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    child.wait().map(|s| s.success()).unwrap_or(false)
+}
+
+/// Emit the OSC 52 escape so terminals with clipboard support (foot, kitty,
+/// wezterm, tmux with set-clipboard, many ssh setups) can copy without any
+/// external tool.
+#[cfg(target_os = "linux")]
+fn copy_via_osc52(text: &str) -> bool {
+    use base64::Engine as _;
+    use std::io::Write;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .and_then(|mut tty| write!(tty, "\x1b]52;c;{b64}\x07").and_then(|()| tty.flush()))
+        .is_ok()
+}
+
+fn clipboard_copy(text: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // Native tools first: under XWayland, arboard's X11 path can report
+        // success while the selection never reaches the Wayland clipboard.
+        let tools: &[(&str, &[&str])] = if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            &[
+                ("wl-copy", &[]),
+                ("xclip", &["-selection", "clipboard"]),
+                ("xsel", &["--clipboard", "--input"]),
+            ]
+        } else {
+            &[
+                ("xclip", &["-selection", "clipboard"]),
+                ("xsel", &["--clipboard", "--input"]),
+                ("wl-copy", &[]),
+            ]
+        };
+        for (cmd, args) in tools {
+            if copy_via_command(cmd, args, text) {
+                return true;
+            }
+        }
+        if copy_via_osc52(text) {
+            return true;
+        }
+    }
+    match arboard::Clipboard::new() {
+        Ok(mut cb) => cb.set_text(text).is_ok(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_via_command_pipes_text_to_wl_copy() {
+        if std::env::var("WAYLAND_DISPLAY").is_err()
+            || std::process::Command::new("wl-copy")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| !s.success())
+                .unwrap_or(true)
+        {
+            return;
+        }
+        let payload = format!("isi-music-test-{}", std::process::id());
+        assert!(copy_via_command("wl-copy", &[], &payload));
     }
 }
