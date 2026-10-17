@@ -63,18 +63,26 @@ impl ThemeManager {
                 preserve_reactive_transition,
                 self.reactive_start.is_some()
             );
-            self.theme = new_theme.clone();
-            if !preserve_reactive_transition {
+            let applied = {
                 #[cfg(all(feature = "palette", feature = "album-art"))]
-                let skip_apply = self.theme.reactive_theme
-                    && self.reactive_start.is_none()
-                    && self.reactive_target.is_none();
-                #[cfg(not(all(feature = "palette", feature = "album-art")))]
-                let skip_apply = false;
-
-                if !skip_apply {
-                    change = ThemeChange::Apply { theme: new_theme };
+                {
+                    let reactive_idle = self.theme.reactive_theme
+                        && self.reactive_start.is_none()
+                        && self.reactive_target.is_none();
+                    if reactive_idle {
+                        new_theme.with_reactive_colors_from(&self.theme)
+                    } else {
+                        new_theme
+                    }
                 }
+                #[cfg(not(all(feature = "palette", feature = "album-art")))]
+                {
+                    new_theme
+                }
+            };
+            self.theme = applied.clone();
+            if !preserve_reactive_transition {
+                change = ThemeChange::Apply { theme: applied };
             }
         }
         change

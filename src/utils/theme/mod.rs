@@ -297,6 +297,28 @@ impl Theme {
         out
     }
 
+    #[cfg(all(feature = "palette", feature = "album-art"))]
+    pub fn with_reactive_colors_from(mut self, from: &Theme) -> Theme {
+        self.background = from.background;
+        self.background_panel = from.background_panel;
+        self.background_element = from.background_element;
+        self.border_active = from.border_active;
+        self.border_inactive = from.border_inactive;
+        self.border_subtle = from.border_subtle;
+        self.border_dimmest = from.border_dimmest;
+        self.text_primary = from.text_primary;
+        self.text_secondary = from.text_secondary;
+        self.status_bar = from.status_bar;
+        self.highlight_bg = from.highlight_bg;
+        self.accent_color = from.accent_color;
+        self.success = from.success;
+        self.error = from.error;
+        self.warning = from.warning;
+        self.info = from.info;
+        self.primary = from.primary;
+        self
+    }
+
     pub fn get_path() -> Option<PathBuf> {
         dirs::config_dir().map(|mut p| {
             p.push("isi-music/theme.toml");
