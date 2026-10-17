@@ -43,10 +43,19 @@ fn scan_local_files_with_cancel(
     }
 
     let mut nodes = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     let transaction_started = conn
         .as_ref()
         .is_some_and(|c| c.execute_batch("BEGIN TRANSACTION;").is_ok());
-    let complete = scan_dir(dir, 0, &mut nodes, extensions, &conn, &mut is_cancelled);
+    let complete = scan_dir(
+        dir,
+        0,
+        &mut nodes,
+        extensions,
+        &conn,
+        &mut is_cancelled,
+        &mut visited,
+    );
     if !complete || is_cancelled() {
         if transaction_started && let Some(conn) = &conn {
             let _ = conn.execute_batch("ROLLBACK;");
@@ -59,6 +68,16 @@ fn scan_local_files_with_cancel(
     Some(nodes)
 }
 
+/// Hard bound on directory recursion depth. Together with the `visited`
+/// canonical-path set this prevents symlink cycles (e.g. `a -> ..` or
+/// `a -> b -> a`) from recursing forever and overflowing the stack.
+const MAX_SCAN_DEPTH: usize = 128;
+
+fn mark_visited(dir: &Path, visited: &mut std::collections::HashSet<PathBuf>) -> bool {
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    visited.insert(key)
+}
+
 fn scan_dir(
     dir: &Path,
     depth: usize,
@@ -66,9 +85,13 @@ fn scan_dir(
     extensions: &[&str],
     conn: &Option<rusqlite::Connection>,
     is_cancelled: &mut impl FnMut() -> bool,
+    visited: &mut std::collections::HashSet<PathBuf>,
 ) -> bool {
     if is_cancelled() {
         return false;
+    }
+    if depth > MAX_SCAN_DEPTH || !mark_visited(dir, visited) {
+        return true;
     }
     let mut subdirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
@@ -121,7 +144,15 @@ fn scan_dir(
             children_count: 0,
         });
         let before = nodes.len();
-        if !scan_dir(&subdir, depth + 1, nodes, extensions, conn, is_cancelled) {
+        if !scan_dir(
+            &subdir,
+            depth + 1,
+            nodes,
+            extensions,
+            conn,
+            is_cancelled,
+            visited,
+        ) {
             return false;
         }
         let added = nodes.len() - before;
@@ -393,13 +424,20 @@ fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn count_audio_files_recursive(dir: &Path) -> u32 {
+fn count_audio_files_recursive(
+    dir: &Path,
+    depth: usize,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> u32 {
+    if depth > MAX_SCAN_DEPTH || !mark_visited(dir, visited) {
+        return 0;
+    }
     let mut count = 0u32;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                count += count_audio_files_recursive(&path);
+                count += count_audio_files_recursive(&path, depth + 1, visited);
             } else if is_audio_file(&path) {
                 count += 1;
             }
@@ -452,7 +490,8 @@ pub fn scan_local_folder_playlists(music_dir: &Path) -> Vec<PlaylistSummary> {
     }
 
     for subdir in subdirs {
-        let count = count_audio_files_recursive(&subdir);
+        let mut visited = std::collections::HashSet::new();
+        let count = count_audio_files_recursive(&subdir, 0, &mut visited);
         if count == 0 {
             continue;
         }
@@ -492,15 +531,21 @@ pub fn scan_folder_tracks_flat(folder: &Path) -> anyhow::Result<Vec<TrackSummary
     });
 
     let mut tracks = Vec::new();
-    collect_tracks_recursive(folder, &mut tracks, &conn);
+    let mut visited = std::collections::HashSet::new();
+    collect_tracks_recursive(folder, 0, &mut tracks, &conn, &mut visited);
     Ok(tracks)
 }
 
 fn collect_tracks_recursive(
     dir: &Path,
+    depth: usize,
     tracks: &mut Vec<TrackSummary>,
     conn: &Option<rusqlite::Connection>,
+    visited: &mut std::collections::HashSet<PathBuf>,
 ) {
+    if depth > MAX_SCAN_DEPTH || !mark_visited(dir, visited) {
+        return;
+    }
     let mut subdirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
 
@@ -517,7 +562,7 @@ fn collect_tracks_recursive(
     }
 
     for subdir in subdirs {
-        collect_tracks_recursive(&subdir, tracks, conn);
+        collect_tracks_recursive(&subdir, depth + 1, tracks, conn, visited);
     }
     for path in files {
         let uri = format!("file://{}", path.display());
@@ -633,6 +678,7 @@ mod tests {
             checks == 3
         };
 
+        let mut visited = std::collections::HashSet::new();
         let complete = scan_dir(
             dir.path(),
             0,
@@ -640,11 +686,32 @@ mod tests {
             AUDIO_EXTENSIONS,
             &conn,
             &mut is_cancelled,
+            &mut visited,
         );
 
         assert!(!complete);
         assert!(nodes.is_empty());
         assert_eq!(checks, 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_scan_terminates_on_symlink_cycle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sub = dir.path().join("music");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("song.mp3"), b"fixture").unwrap();
+        // music/loop -> .. creates a cycle back to the temp dir root.
+        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
+
+        let mut visited = std::collections::HashSet::new();
+        let mut tracks = Vec::new();
+        let conn = None;
+        collect_tracks_recursive(dir.path(), 0, &mut tracks, &conn, &mut visited);
+        assert_eq!(tracks.len(), 1);
+
+        let mut visited = std::collections::HashSet::new();
+        assert_eq!(count_audio_files_recursive(dir.path(), 0, &mut visited), 1);
     }
 
     #[test]

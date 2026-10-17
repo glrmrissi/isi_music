@@ -123,7 +123,15 @@ fn http_client() -> &'static reqwest::blocking::Client {
 /// MD5 hash.  Because the filename is hash-based, the same cover is written
 /// once and reused without comparing bytes on every update.
 fn cover_temp_path_from_url(url: &str) -> Option<PathBuf> {
-    let bytes = http_client().get(url).send().ok()?.bytes().ok()?.to_vec();
+    const MAX_COVER_BYTES: u64 = 16 * 1024 * 1024;
+    let resp = http_client().get(url).send().ok()?;
+    if resp.content_length().is_some_and(|l| l > MAX_COVER_BYTES) {
+        return None;
+    }
+    let bytes = resp.bytes().ok()?.to_vec();
+    if bytes.len() as u64 > MAX_COVER_BYTES {
+        return None;
+    }
     cache_cover_bytes(&bytes)
 }
 

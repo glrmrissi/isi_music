@@ -70,7 +70,38 @@ impl<W: Write> Backend for StableCrosstermBackend<W> {
                     queue!(writer, SetAttribute(attribute))?;
                 }
             }
-            queue!(writer, Print(cell.symbol()))?;
+            // Sanitize remote-controlled strings at the sink: a cell must
+            // never emit control chars (ANSI/OSC injection). Cells with
+            // CellDiffOption::ForcedWidth are exempt: ratatui-image smuggles
+            // sixel/kitty/iterm2 sequences through one cell's symbol, and
+            // diff_option can only be set by render code, never by string data.
+            let symbol = cell.symbol();
+            if matches!(
+                cell.diff_option,
+                ratatui::buffer::CellDiffOption::ForcedWidth(_)
+            ) {
+                queue!(writer, Print(symbol))?;
+                continue;
+            }
+            if symbol.chars().any(|c| {
+                let code = c as u32;
+                code < 0x20 || code == 0x7f || (0x80..0xa0).contains(&code)
+            }) {
+                let clean: String = symbol
+                    .chars()
+                    .map(|c| {
+                        let code = c as u32;
+                        if code < 0x20 || code == 0x7f || (0x80..0xa0).contains(&code) {
+                            ' '
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+                queue!(writer, Print(clean))?;
+            } else {
+                queue!(writer, Print(symbol))?;
+            }
         }
 
         queue!(
@@ -118,5 +149,46 @@ impl<W: Write> Backend for StableCrosstermBackend<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         Backend::flush(&mut self.inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::CellDiffOption;
+    use std::num::NonZeroU16;
+
+    fn draw_cells(cells: Vec<(u16, u16, Cell)>) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        {
+            let mut backend = StableCrosstermBackend::new(&mut out);
+            let refs: Vec<(u16, u16, &Cell)> = cells.iter().map(|(x, y, c)| (*x, *y, c)).collect();
+            backend.draw(refs.into_iter()).unwrap();
+            Backend::flush(&mut backend).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn draw_sanitizes_control_chars_in_normal_cells() {
+        let mut cell = Cell::default();
+        cell.set_symbol("hi\x1b]52;c;AAAA\x07\nthere");
+        let out = draw_cells(vec![(0, 0, cell)]);
+        let out = String::from_utf8_lossy(&out);
+        assert!(!out.contains("\x1b]"), "OSC sequence must be stripped");
+        assert!(out.contains("hi ]52;c;AAAA  there"), "got: {out:?}");
+    }
+
+    #[test]
+    fn draw_passes_through_image_protocol_cells() {
+        let mut cell = Cell::default();
+        cell.set_symbol("\x1bPq#0;2;0;0;0~\x1b\\");
+        cell.set_diff_option(CellDiffOption::ForcedWidth(NonZeroU16::new(1).unwrap()));
+        let out = draw_cells(vec![(0, 0, cell)]);
+        let out = String::from_utf8_lossy(&out);
+        assert!(
+            out.contains("\x1bPq#0;2;0;0;0~\x1b\\"),
+            "sixel payload must reach the terminal intact, got: {out:?}"
+        );
     }
 }

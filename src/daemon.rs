@@ -305,7 +305,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                                 if player.prev() { progress_ms = 0; scrobble_sent = false; track_start_unix = unix_now(); }
                             }
                             MprisCmd::Seek(us) => {
-                                progress_ms = (us / 1000) as u64;
+                                progress_ms = (us / 1000).max(0) as u64;
                                 player.seek(progress_ms as u32);
                             }
                             MprisCmd::SetVolume(v) => {
@@ -757,7 +757,12 @@ async fn list_devices(spotify: &mut SpotifyClient) -> Result<String> {
         .iter()
         .map(|d: &crate::spotify::Device| {
             let marker = if d.is_active { "*" } else { " " };
-            format!("{} {}  ({})", marker, d.name, d.device_type)
+            format!(
+                "{} {}  ({})",
+                marker,
+                crate::app::metadata::sanitize_control_chars(&d.name),
+                d.device_type
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");

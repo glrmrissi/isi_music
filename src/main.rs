@@ -33,10 +33,11 @@ fn main() -> Result<()> {
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
 
+    // Load only the config dir .env; dotenvy::dotenv() would also read the
+    // cwd's .env, letting an untrusted directory inject vars like HTTPS_PROXY.
     if let Ok(env_path) = config::env_path() {
         dotenvy::from_path(&env_path).ok();
     }
-    dotenvy::dotenv().ok();
 
     #[cfg(target_os = "linux")]
     unsafe {
@@ -368,6 +369,14 @@ fn main() -> Result<()> {
             let backend = backend::StableCrosstermBackend::new(stdout);
             let mut terminal = Terminal::new(backend)?;
             terminal.clear()?;
+
+            // Panic hook: restore the terminal before unwinding.
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let _ = disable_raw_mode();
+                let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+                default_hook(info);
+            }));
 
             let mut app = match App::new(
                 #[cfg(feature = "album-art")]

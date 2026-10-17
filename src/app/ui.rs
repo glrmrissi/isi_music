@@ -366,8 +366,13 @@ impl App {
             else {
                 return;
             };
+            const MAX_COVER_BYTES: usize = 16 * 1024 * 1024;
             if let Ok(resp) = http.get(&url).send().await
+                && resp
+                    .content_length()
+                    .is_none_or(|l| l as usize <= MAX_COVER_BYTES)
                 && let Ok(bytes) = resp.bytes().await
+                && bytes.len() <= MAX_COVER_BYTES
             {
                 let _ = tx.send((Some(url), bytes.to_vec()));
             }
@@ -390,7 +395,12 @@ impl App {
                 self.fetcher.album_art_pending = Some(rx);
 
                 tokio::spawn(async move {
-                    if let Ok(bytes) = tokio::fs::read(&path).await {
+                    const MAX_COVER_BYTES: u64 = 16 * 1024 * 1024;
+                    let size_ok = tokio::fs::metadata(&path)
+                        .await
+                        .map(|m| m.len() <= MAX_COVER_BYTES)
+                        .unwrap_or(false);
+                    if size_ok && let Ok(bytes) = tokio::fs::read(&path).await {
                         let _ = tx.send((None, bytes));
                     }
                 });

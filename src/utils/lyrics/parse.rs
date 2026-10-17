@@ -76,7 +76,10 @@ fn parse_timestamp(s: &str) -> Option<u64> {
         2 => {
             let min: u64 = parts[0].parse().ok()?;
             let sec: u64 = parts[1].parse().ok()?;
-            Some(min * 60_000 + sec * 1_000)
+            Some(
+                min.saturating_mul(60_000)
+                    .saturating_add(sec.saturating_mul(1_000)),
+            )
         }
         3 => {
             let min: u64 = parts[0].parse().ok()?;
@@ -84,12 +87,16 @@ fn parse_timestamp(s: &str) -> Option<u64> {
             let frac_str = parts[2];
             let frac_val: u64 = frac_str.parse().ok()?;
             let ms = match frac_str.len() {
-                1 => frac_val * 100,
-                2 => frac_val * 10,
+                1 => frac_val.saturating_mul(100),
+                2 => frac_val.saturating_mul(10),
                 3 => frac_val,
                 _ => frac_str[..3].parse().ok()?,
             };
-            Some(min * 60_000 + sec * 1_000 + ms)
+            Some(
+                min.saturating_mul(60_000)
+                    .saturating_add(sec.saturating_mul(1_000))
+                    .saturating_add(ms),
+            )
         }
         _ => None,
     }

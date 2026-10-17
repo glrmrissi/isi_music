@@ -68,14 +68,16 @@ impl LibraryCache {
     }
 
     pub fn get_tracks(&self, key: &str) -> Option<(Vec<TrackSummary>, u32)> {
-        let conn = self.conn.lock().ok()?;
-        let (data, total, saved_at): (String, u32, i64) = conn
-            .query_row(
+        // Release the lock before JSON parsing so large payloads don't block.
+        let (data, total, saved_at): (String, u32, i64) = {
+            let conn = self.conn.lock().ok()?;
+            conn.query_row(
                 "SELECT data, total, saved_at FROM library_cache WHERE key = ?1",
                 params![key],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .ok()?;
+            .ok()?
+        };
         if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
             return None;
         }
@@ -124,14 +126,15 @@ impl LibraryCache {
     }
 
     pub fn get_albums(&self) -> Option<(Vec<AlbumSummary>, u32)> {
-        let conn = self.conn.lock().ok()?;
-        let (data, total, saved_at): (String, u32, i64) = conn
-            .query_row(
+        let (data, total, saved_at): (String, u32, i64) = {
+            let conn = self.conn.lock().ok()?;
+            conn.query_row(
                 "SELECT data, total, saved_at FROM library_cache WHERE key = 'albums'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .ok()?;
+            .ok()?
+        };
         if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
             return None;
         }
@@ -172,14 +175,15 @@ impl LibraryCache {
     }
 
     pub fn get_artists(&self) -> Option<Vec<ArtistSummary>> {
-        let conn = self.conn.lock().ok()?;
-        let (data, saved_at): (String, i64) = conn
-            .query_row(
+        let (data, saved_at): (String, i64) = {
+            let conn = self.conn.lock().ok()?;
+            conn.query_row(
                 "SELECT data, saved_at FROM library_cache WHERE key = 'artists'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .ok()?;
+            .ok()?
+        };
         if Self::unix_now() - saved_at > Self::CACHE_TTL_SECS {
             return None;
         }

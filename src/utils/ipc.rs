@@ -13,9 +13,22 @@ pub use windows::IpcListener;
 
 #[cfg(unix)]
 pub fn socket_path() -> std::path::PathBuf {
-    dirs::runtime_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("isi-music.sock")
+    if let Some(runtime_dir) = dirs::runtime_dir() {
+        return runtime_dir.join("isi-music.sock");
+    }
+    // No XDG_RUNTIME_DIR: /tmp is shared between users, use a private dir.
+    let dir = dirs::cache_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".cache")))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("isi-music")
+        .join("run");
+    let _ = std::fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    dir.join("isi-music.sock")
 }
 
 #[cfg(windows)]
@@ -80,9 +93,11 @@ mod unix {
             if path.exists() {
                 std::fs::remove_file(&path).ok();
             }
-            Ok(Self {
-                inner: TokioListener::bind(&path)?,
-            })
+            let listener = TokioListener::bind(&path)?;
+            // Socket perms come from umask and can be world-connectable.
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+            Ok(Self { inner: listener })
         }
 
         pub async fn accept(&mut self) -> io::Result<UnixStream> {

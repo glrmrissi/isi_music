@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const OFFICIAL_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 pub const OFFICIAL_REDIRECT_URI: &str = "http://127.0.0.1:8898/login";
@@ -242,10 +242,12 @@ impl AppConfig {
         self.options.hot_reload.unwrap_or(true)
     }
 
+    #[cfg(windows)]
     pub fn smtc_enabled(&self) -> bool {
         self.options.smtc_enabled.unwrap_or(true)
     }
 
+    #[cfg(windows)]
     pub fn media_keys_enabled(&self) -> bool {
         self.options.media_keys_enabled.unwrap_or(true)
     }
@@ -296,6 +298,38 @@ pub fn write_atomic(path: &std::path::Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
+/// Like `write_atomic`, but forces owner-only permissions (0600) on the
+/// resulting file. Use for credentials and other secrets on disk.
+pub fn write_atomic_private(path: &std::path::Path, contents: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .with_context(|| format!("Failed to write {}", tmp.display()))?;
+        std::io::Write::write_all(&mut file, contents.as_bytes())
+            .with_context(|| format!("Failed to write {}", tmp.display()))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&tmp, contents).with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("Failed to replace {}", path.display()))?;
+    // Post-rename chmod also repairs files written 0644 by older versions.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 pub fn config_path() -> Result<PathBuf> {
     let base = dirs::config_dir().context("Could not determine config directory")?;
     Ok(base.join("isi-music").join("config.toml"))
@@ -306,65 +340,116 @@ pub fn env_path() -> Result<PathBuf> {
     Ok(base.join("isi-music").join(".env"))
 }
 
-pub fn refresh_token_path() -> Result<PathBuf> {
-    let base = dirs::cache_dir().context("Could not determine cache directory")?;
+/// Credentials live in the platform *data* directory (`~/.local/share` on
+/// Linux), not cache: cache cleaners legitimately wipe `~/.cache` and would
+/// silently log the user out. Files are written owner-only (0600) and the
+/// directory itself is 0700.
+fn credentials_dir() -> Result<PathBuf> {
+    let base = dirs::data_local_dir()
+        .or_else(dirs::data_dir)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("share")))
+        .context("Could not determine data directory")?;
     let dir = base.join("isi-music");
     std::fs::create_dir_all(&dir)?;
-    Ok(dir.join("refresh_token"))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(dir)
+}
+
+/// Pre-migration directory (`~/.cache/isi-music`).
+fn legacy_token_dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|b| b.join("isi-music"))
+}
+
+fn load_credential_in(dir: &Path, legacy_dir: Option<&Path>, name: &str) -> Option<String> {
+    let path = dir.join(name);
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let trimmed = contents.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    // Legacy ~/.cache location: read it, move it to the data dir, remove the
+    // old file so the secret doesn't linger in a wipeable directory.
+    let legacy = legacy_dir?.join(name);
+    let contents = std::fs::read_to_string(&legacy).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        let _ = std::fs::remove_file(&legacy);
+        return None;
+    }
+    if write_atomic_private(&path, trimmed).is_ok() {
+        let _ = std::fs::remove_file(&legacy);
+    }
+    Some(trimmed.to_string())
+}
+
+fn load_credential(name: &str) -> Option<String> {
+    let dir = credentials_dir().ok()?;
+    load_credential_in(&dir, legacy_token_dir().as_deref(), name)
+}
+
+fn save_credential_in(dir: &Path, legacy_dir: Option<&Path>, name: &str, value: &str) {
+    let path = dir.join(name);
+    if let Err(e) = write_atomic_private(&path, value) {
+        tracing::warn!("failed to persist {name} to {}: {e}", path.display());
+        return;
+    }
+    if let Some(legacy_dir) = legacy_dir {
+        let _ = std::fs::remove_file(legacy_dir.join(name));
+    }
+}
+
+fn save_credential(name: &str, value: &str) {
+    match credentials_dir() {
+        Ok(dir) => save_credential_in(&dir, legacy_token_dir().as_deref(), name, value),
+        Err(e) => tracing::warn!("cannot resolve credentials dir, {name} not saved: {e:#}"),
+    }
+}
+
+fn clear_credential_in(dir: &Path, legacy_dir: Option<&Path>, name: &str) {
+    let _ = std::fs::remove_file(dir.join(name));
+    if let Some(legacy_dir) = legacy_dir {
+        let _ = std::fs::remove_file(legacy_dir.join(name));
+    }
+}
+
+fn clear_credential(name: &str) {
+    match credentials_dir() {
+        Ok(dir) => clear_credential_in(&dir, legacy_token_dir().as_deref(), name),
+        Err(_) => {
+            if let Some(legacy_dir) = legacy_token_dir() {
+                let _ = std::fs::remove_file(legacy_dir.join(name));
+            }
+        }
+    }
 }
 
 pub fn save_refresh_token(rt: &str) {
-    if let Ok(p) = refresh_token_path()
-        && let Err(e) = write_atomic(&p, rt)
-    {
-        tracing::warn!("failed to persist refresh token to {}: {e}", p.display());
-    }
+    save_credential("refresh_token", rt);
 }
 
 pub fn load_refresh_token() -> Option<String> {
-    refresh_token_path()
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    load_credential("refresh_token")
 }
 
 pub fn clear_refresh_token() {
-    if let Ok(p) = refresh_token_path() {
-        let _ = std::fs::remove_file(p);
-    }
-}
-
-pub fn streaming_refresh_token_path() -> Result<PathBuf> {
-    let base = dirs::cache_dir().context("Could not determine cache directory")?;
-    let dir = base.join("isi-music");
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir.join("streaming_refresh_token"))
+    clear_credential("refresh_token");
 }
 
 pub fn save_streaming_refresh_token(rt: &str) {
-    if let Ok(p) = streaming_refresh_token_path()
-        && let Err(e) = write_atomic(&p, rt)
-    {
-        tracing::warn!(
-            "failed to persist streaming refresh token to {}: {e}",
-            p.display()
-        );
-    }
+    save_credential("streaming_refresh_token", rt);
 }
 
 pub fn load_streaming_refresh_token() -> Option<String> {
-    streaming_refresh_token_path()
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    load_credential("streaming_refresh_token")
 }
 
 pub fn clear_streaming_refresh_token() {
-    if let Ok(p) = streaming_refresh_token_path() {
-        let _ = std::fs::remove_file(p);
-    }
+    clear_credential("streaming_refresh_token");
 }
 
 pub fn get_local_db_path() -> String {
@@ -473,6 +558,63 @@ mod tests {
         assert!(!dir.path().join("config.tmp").exists());
         let loaded: AppConfig = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(loaded.local.music_dir.as_deref(), Some("/music"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_private_forces_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("refresh_token");
+
+        write_atomic_private(&path, "secret").unwrap();
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_atomic_private(&path, "secret2").unwrap();
+        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret2");
+    }
+
+    #[test]
+    fn credential_migrates_from_legacy_cache() {
+        let data = tempfile::TempDir::new().unwrap();
+        let cache = tempfile::TempDir::new().unwrap();
+        let legacy = cache.path().join("tok");
+        std::fs::write(&legacy, "legtok").unwrap();
+
+        assert_eq!(
+            load_credential_in(data.path(), Some(cache.path()), "tok").as_deref(),
+            Some("legtok")
+        );
+        assert!(!legacy.exists());
+        assert_eq!(
+            std::fs::read_to_string(data.path().join("tok")).unwrap(),
+            "legtok"
+        );
+    }
+
+    #[test]
+    fn credential_roundtrip_and_clear() {
+        let data = tempfile::TempDir::new().unwrap();
+        save_credential_in(data.path(), None, "tok", "tok123");
+        assert_eq!(
+            load_credential_in(data.path(), None, "tok").as_deref(),
+            Some("tok123")
+        );
+        clear_credential_in(data.path(), None, "tok");
+        assert_eq!(load_credential_in(data.path(), None, "tok"), None);
+    }
+
+    #[test]
+    fn clear_credential_removes_both_locations() {
+        let data = tempfile::TempDir::new().unwrap();
+        let cache = tempfile::TempDir::new().unwrap();
+        std::fs::write(data.path().join("tok"), "new").unwrap();
+        std::fs::write(cache.path().join("tok"), "old").unwrap();
+        clear_credential_in(data.path(), Some(cache.path()), "tok");
+        assert!(!data.path().join("tok").exists());
+        assert!(!cache.path().join("tok").exists());
     }
 
     #[test]

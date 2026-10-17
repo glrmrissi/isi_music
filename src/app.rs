@@ -817,7 +817,8 @@ impl App {
                             self.sync_track_selection();
                         }
                         MprisCmd::Seek(us) => {
-                            let ms = (us / 1000) as u64;
+                            // Negative seek positions would wrap to huge u64.
+                            let ms = (us / 1000).max(0) as u64;
                             self.state.playback.progress_ms = ms;
                             self.player_mgr.progress_at_play_start = ms;
                             if self.state.playback.is_playing {
