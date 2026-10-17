@@ -4,7 +4,8 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use crate::App;
 
 fn smtc_toggle_index() -> usize {
-    let base = {
+    #[cfg(windows)]
+    {
         #[cfg(all(feature = "album-art", feature = "palette"))]
         {
             11
@@ -17,10 +18,6 @@ fn smtc_toggle_index() -> usize {
         {
             10
         }
-    };
-    #[cfg(windows)]
-    {
-        base
     }
     #[cfg(not(windows))]
     {

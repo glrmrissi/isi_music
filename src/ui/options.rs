@@ -141,15 +141,15 @@ impl SettingsPanel {
                 let count = {
                     #[cfg(all(feature = "album-art", feature = "palette"))]
                     {
-                        10
+                        12
                     }
                     #[cfg(all(feature = "album-art", not(feature = "palette")))]
                     {
-                        9
+                        11
                     }
                     #[cfg(not(feature = "album-art"))]
                     {
-                        8
+                        10
                     }
                 };
                 #[cfg(windows)]
