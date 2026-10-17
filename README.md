@@ -61,6 +61,10 @@ brew tap glrmrissi/isi-music
 brew install isi-music
 ```
 
+### AUR (Arch Linux)
+
+AUR is not supported for now due to external reasons. Install with the script or the release binaries shown here.
+
 ### Manual download
 
 **Linux**
