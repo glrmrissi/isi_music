@@ -2,7 +2,7 @@ use crate::spotify::TrackSummary;
 use anyhow::{Context, Result};
 use librespot_core::spotify_uri::SpotifyUri;
 use librespot_metadata::{
-    Metadata, Playlist as MercuryPlaylist, Track as MercuryTrack,
+    Episode as MercuryEpisode, Metadata, Playlist as MercuryPlaylist, Track as MercuryTrack,
     playlist::list::SelectedListContent,
 };
 use librespot_protocol::playlist4_external::SelectedListContent as SelectedListContentMsg;
@@ -42,7 +42,7 @@ impl NativePlayer {
 
         let mut all_track_uris: Vec<SpotifyUri> = initial
             .tracks()
-            .filter(|u| matches!(u, SpotifyUri::Track { .. }))
+            .filter(|u| matches!(u, SpotifyUri::Track { .. } | SpotifyUri::Episode { .. }))
             .cloned()
             .collect();
 
@@ -72,7 +72,10 @@ impl NativePlayer {
                 .with_context(|| "failed to convert playlist protobuf")?;
             let page_count = selected.contents.items.len();
             for item in selected.contents.items.iter() {
-                if matches!(item.id, SpotifyUri::Track { .. }) {
+                if matches!(
+                    item.id,
+                    SpotifyUri::Track { .. } | SpotifyUri::Episode { .. }
+                ) {
                     all_track_uris.push(item.id.clone());
                 }
             }
@@ -90,7 +93,7 @@ impl NativePlayer {
         }
 
         info!(
-            "Mercury playlist has {} track URIs total (episodes filtered)",
+            "Mercury playlist has {} track/episode URIs total",
             all_track_uris.len()
         );
 
@@ -104,6 +107,47 @@ impl NativePlayer {
                     let session = session.clone();
                     async move {
                         let uri_str = track_uri.to_uri().unwrap_or_default();
+                        if matches!(track_uri, SpotifyUri::Episode { .. }) {
+                            return match MercuryEpisode::get(&session, &track_uri).await {
+                                Ok(e) => Some((
+                                    idx,
+                                    TrackSummary {
+                                        name: if e.name.is_empty() {
+                                            "Unknown".to_string()
+                                        } else {
+                                            e.name
+                                        },
+                                        artist: if e.show_name.is_empty() {
+                                            "Unknown".to_string()
+                                        } else {
+                                            e.show_name
+                                        },
+                                        album: "Podcast".to_string(),
+                                        duration_ms: e.duration.max(0) as u64,
+                                        uri: uri_str,
+                                        cover_path: None,
+                                        added_at: None,
+                                    },
+                                )),
+                                Err(err) => {
+                                    warn!(
+                                        "Mercury episode metadata failed for {uri_str}: {err}; using URI fallback"
+                                    );
+                                    Some((
+                                        idx,
+                                        TrackSummary {
+                                            name: "Unknown".to_string(),
+                                            artist: "Unknown".to_string(),
+                                            album: "Unknown".to_string(),
+                                            duration_ms: 0,
+                                            uri: uri_str,
+                                            cover_path: None,
+                                            added_at: None,
+                                        },
+                                    ))
+                                }
+                            };
+                        }
                         match MercuryTrack::get(&session, &track_uri).await {
                             Ok(t) => {
                                 let artist = t
