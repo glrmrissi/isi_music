@@ -233,9 +233,9 @@ impl AppConfig {
         self.ui.show_breadcrumb.unwrap_or(false)
     }
 
-    /// Autoplay is enabled by default; only disabled if explicitly set to false.
+    /// Autoplay is opt-in: disabled by default, enabled only if explicitly set.
     pub fn autoplay_enabled(&self) -> bool {
-        self.ui.autoplay.or(self.options.autoplay).unwrap_or(true)
+        self.ui.autoplay.or(self.options.autoplay).unwrap_or(false)
     }
 
     pub fn hot_reload(&self) -> bool {
