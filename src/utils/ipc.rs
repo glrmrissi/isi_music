@@ -90,13 +90,18 @@ mod unix {
     impl IpcListener {
         pub fn bind() -> io::Result<Self> {
             let path = super::socket_path();
-            if path.exists() {
-                std::fs::remove_file(&path).ok();
+            if path.exists()
+                && let Err(e) = std::fs::remove_file(&path)
+            {
+                tracing::warn!("failed to remove stale socket {}: {e}", path.display());
             }
             let listener = TokioListener::bind(&path)?;
             // Socket perms come from umask and can be world-connectable.
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                tracing::warn!("failed to tighten socket perms on {}: {e}", path.display());
+            }
             Ok(Self { inner: listener })
         }
 
@@ -107,7 +112,12 @@ mod unix {
 
         /// Remove the socket file on shutdown (Unix leaves it behind).
         pub fn cleanup() {
-            std::fs::remove_file(super::socket_path()).ok();
+            let path = super::socket_path();
+            if let Err(e) = std::fs::remove_file(&path)
+                && e.kind() != io::ErrorKind::NotFound
+            {
+                tracing::warn!("failed to remove socket {}: {e}", path.display());
+            }
         }
 
         pub fn describe(&self) -> String {

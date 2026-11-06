@@ -23,7 +23,13 @@ fn scan_local_files_with_cancel(
     }
     let extensions = AUDIO_EXTENSIONS;
     let db_path = crate::config::get_local_db_path();
-    let conn = rusqlite::Connection::open(&db_path).ok();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!("local scan cache disabled, cannot open {db_path}: {e}");
+            None
+        }
+    };
     if let Some(ref c) = conn {
         let _ = c.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=1000;",
