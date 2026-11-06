@@ -99,7 +99,7 @@ async fn exchange_code(
     Ok((access_token, refresh_token, expires_in))
 }
 
-fn open_browser(url: &str) {
+fn open_browser(url: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
         let is_wsl = std::fs::read_to_string("/proc/version")
@@ -107,18 +107,30 @@ fn open_browser(url: &str) {
             .unwrap_or(false);
         if is_wsl {
             let quoted_url = format!("\"{url}\"");
-            let _ = std::process::Command::new("cmd.exe")
+            return std::process::Command::new("cmd.exe")
                 .args(["/c", "start", "", &quoted_url])
-                .spawn();
-        } else {
-            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                .spawn()
+                .is_ok();
         }
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .is_ok()
     }
 
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("powershell")
-        .args(["-Command", &format!("Start-Process '{}'", url)])
-        .spawn();
+    {
+        std::process::Command::new("powershell")
+            .args(["-Command", &format!("Start-Process '{}'", url)])
+            .spawn()
+            .is_ok()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = url;
+        false
+    }
 }
 
 fn extract_code_from_request(request: &str, expected_state: &str) -> Result<String> {
@@ -150,11 +162,7 @@ fn extract_code_from_request(request: &str, expected_state: &str) -> Result<Stri
     code.context("'code' parameter not found in callback")
 }
 
-async fn run_oauth_flow(
-    authorize_url: &str,
-    expected_state: &str,
-    callback_port: u16,
-) -> Result<String> {
+async fn bind_oauth_listener(callback_port: u16) -> Result<TcpListener> {
     #[cfg(target_os = "linux")]
     let bind_addr: &str = {
         let is_wsl = std::fs::read_to_string("/proc/version")
@@ -165,7 +173,7 @@ async fn run_oauth_flow(
     #[cfg(not(target_os = "linux"))]
     let bind_addr: &str = "127.0.0.1";
 
-    let listener = TcpListener::bind((bind_addr, callback_port))
+    TcpListener::bind((bind_addr, callback_port))
         .await
         .map_err(|e| {
             let pid_info = find_port_owner(callback_port);
@@ -181,9 +189,61 @@ async fn run_oauth_flow(
                 )
             };
             anyhow::anyhow!("{hint} (bind error: {e})")
-        })?;
+        })
+}
 
-    open_browser(authorize_url);
+const OAUTH_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+    <html><body><h2>isi-music authorized!</h2>\
+    <p>You can close this tab.</p>\
+    <script>window.close();</script></body></html>";
+
+/// Console-free OAuth wait for the TUI: no prints, no stdin, no ctrl_c hook.
+/// Times out after 5 minutes waiting for the browser callback.
+async fn run_oauth_flow_tui(
+    authorize_url: &str,
+    expected_state: &str,
+    callback_port: u16,
+) -> Result<String> {
+    let listener = bind_oauth_listener(callback_port).await?;
+
+    if open_browser(authorize_url) {
+        tracing::info!("Spotify OAuth: opened authorization page in the browser");
+    } else {
+        // The URL embeds the CSRF `state`, so it is only logged when it is
+        // the user's sole path to authorize.
+        tracing::warn!(
+            "Spotify OAuth: could not open the browser; authorize manually: {authorize_url}"
+        );
+    }
+
+    let accept = async {
+        loop {
+            let (mut stream, _) = listener.accept().await?;
+            let mut buf = vec![0u8; 4096];
+            let n = stream.read(&mut buf).await?;
+            let request = String::from_utf8_lossy(&buf[..n]);
+            stream.write_all(OAUTH_RESPONSE.as_bytes()).await?;
+
+            match extract_code_from_request(&request, expected_state) {
+                Ok(code) => return Ok(code),
+                Err(_) => continue,
+            }
+        }
+    };
+
+    tokio::time::timeout(Duration::from_secs(300), accept)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for Spotify authorization"))?
+}
+
+async fn run_oauth_flow(
+    authorize_url: &str,
+    expected_state: &str,
+    callback_port: u16,
+) -> Result<String> {
+    let listener = bind_oauth_listener(callback_port).await?;
+
+    let _ = open_browser(authorize_url);
 
     println!("Waiting for authorization in browser... (port {callback_port})");
     println!("If the browser doesn't open, visit:");
@@ -205,13 +265,9 @@ async fn run_oauth_flow(
         };
         let request = String::from_utf8_lossy(&buf[..n]);
 
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-            <html><body><h2>isi-music authorized!</h2>\
-            <p>You can close this tab.</p>\
-            <script>window.close();</script></body></html>";
         tokio::select! {
             _ = &mut ctrl_c => bail!("Authentication cancelled by user"),
-            result = stream.write_all(response.as_bytes()) => result?,
+            result = stream.write_all(OAUTH_RESPONSE.as_bytes()) => result?,
         }
 
         match extract_code_from_request(&request, expected_state) {
@@ -296,6 +352,24 @@ impl SpotifyAuth {
             anyhow::anyhow!("Spotify Web API Client ID is not configured; run setup-spotify first")
         })?;
         Self::authenticate_with_client_id(&client_id).await
+    }
+
+    /// Console-free OAuth for the TUI: no prints, no stdin retry, no ctrl_c
+    /// cancellation. Errors (including port-in-use) are returned to the caller.
+    pub async fn authenticate_with_client_id_tui(client_id: &str) -> Result<(String, String, u64)> {
+        let (redirect_uri, callback_port) = if client_id == config::OFFICIAL_CLIENT_ID {
+            (config::OFFICIAL_REDIRECT_URI, 8898)
+        } else {
+            (config::CUSTOM_REDIRECT_URI, 8888)
+        };
+
+        let verifier = generate_code_verifier();
+        let challenge = generate_code_challenge(&verifier);
+        let state = generate_code_verifier();
+
+        let url = build_authorize_url(client_id, &challenge, redirect_uri, &state);
+        let code = run_oauth_flow_tui(&url, &state, callback_port).await?;
+        exchange_code(&code, &verifier, client_id, redirect_uri).await
     }
 
     pub async fn authenticate_with_client_id(client_id: &str) -> Result<(String, String, u64)> {

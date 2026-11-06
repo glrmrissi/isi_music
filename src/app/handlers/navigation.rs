@@ -38,7 +38,11 @@ impl App {
                 self.state.status_msg = Some("Jumped to playing track".to_string());
                 return;
             }
-        } else if self.spotify.authenticated {
+        } else if self
+            .spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg = Some("Searching...".to_string());
             self.needs_redraw = true;
 

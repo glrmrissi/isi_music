@@ -57,7 +57,11 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
+                        } else if self
+                            .spotify
+                            .authenticated
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             match self.spotify.play_track_uri(&track_uri).await {
                                 Ok(()) if !player_ready => {
                                     self.state.status_msg = Some(
@@ -229,7 +233,11 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
+                        } else if self
+                            .spotify
+                            .authenticated
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             match self.spotify.play_track_uri(&episode_uri).await {
                                 Ok(()) if !player_ready => {
                                     self.state.status_msg = Some(

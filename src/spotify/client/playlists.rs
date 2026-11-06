@@ -49,7 +49,10 @@ pub(crate) fn playlist_item_to_track(item_wrapper: &serde_json::Value) -> Option
 
 impl SpotifyClient {
     pub async fn fetch_playlists(&self) -> Result<Vec<PlaylistSummary>> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             warn!("fetch_playlists: not authenticated");
             return Ok(Vec::new());
         }
@@ -140,7 +143,10 @@ impl SpotifyClient {
         &self,
         tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
     ) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
             return Ok(());
         }
@@ -291,7 +297,10 @@ impl SpotifyClient {
         playlist_id: &str,
         offset: u32,
     ) -> Result<(Vec<TrackSummary>, u32, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0, 0));
         }
         let key = format!("playlist:{playlist_id}:{offset}");

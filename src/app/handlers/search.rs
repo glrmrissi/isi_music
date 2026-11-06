@@ -31,7 +31,11 @@ impl App {
                     self.state.cancel_search();
                 } else if !self.state.spotify_enabled {
                     self.search_local_files(&query).await;
-                } else if !self.spotify.authenticated {
+                } else if !self
+                    .spotify
+                    .authenticated
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     self.state.status_msg = Some("Search requires Spotify".to_string());
                     self.state.search_active = false;
                 } else {

@@ -10,7 +10,10 @@ impl SpotifyClient {
         album_id: &str,
         offset: u32,
     ) -> Result<(Vec<TrackSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
         let key = format!("album:{album_id}:{offset}");
@@ -151,7 +154,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_saved_albums(&self, offset: u32) -> Result<(Vec<AlbumSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
         if offset == 0
@@ -293,7 +299,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_followed_artists(&self) -> Result<Vec<ArtistSummary>> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(Vec::new());
         }
         if let Some(cached) = self.library_cache.get_artists() {
@@ -397,7 +406,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_artist_name(&self, artist_id: &str) -> Option<String> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return None;
         }
         let token = self.get_access_token().await?;
@@ -416,7 +428,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_show_name(&self, show_id: &str) -> Option<String> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return None;
         }
         let token = self.get_access_token().await?;
@@ -440,7 +455,10 @@ impl SpotifyClient {
         artist_name: &str,
         offset: u32,
     ) -> Result<(Vec<TrackSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
         let key = format!("artist:{artist_name}:{offset}");
@@ -630,7 +648,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_saved_shows(&self, offset: u32) -> Result<(Vec<ShowSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
         let token = self
@@ -707,7 +728,10 @@ impl SpotifyClient {
         show_name: &str,
         offset: u32,
     ) -> Result<(Vec<TrackSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
         let token = self
@@ -842,7 +866,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_saved_episodes(&self, offset: u32) -> Result<(Vec<TrackSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
         let token = self

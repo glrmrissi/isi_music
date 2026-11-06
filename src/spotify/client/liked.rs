@@ -10,7 +10,10 @@ impl SpotifyClient {
         offset: u32,
         force_refresh: bool,
     ) -> Result<(Vec<TrackSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
 
@@ -106,7 +109,10 @@ impl SpotifyClient {
         after: Option<&str>,
         fallback_offset: u32,
     ) -> Result<(Vec<TrackSummary>, u32, Option<String>)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0, None));
         }
 
@@ -126,7 +132,10 @@ impl SpotifyClient {
     }
 
     pub async fn sync_liked_tracks(&self) -> Result<(Vec<TrackSummary>, u32)> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok((Vec::new(), 0));
         }
 
@@ -292,7 +301,10 @@ impl SpotifyClient {
         &self,
         tx: tokio::sync::mpsc::UnboundedSender<crate::app::fetcher::StreamEvent>,
     ) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let _ = tx.send(crate::app::fetcher::StreamEvent::Done);
             return Ok(());
         }

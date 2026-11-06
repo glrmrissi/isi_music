@@ -8,7 +8,10 @@ use super::SpotifyClient;
 
 impl SpotifyClient {
     pub async fn search_all(&self, query: &str) -> Result<FullSearchResults> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(FullSearchResults::empty());
         }
         self.search_internal(query, "track,artist,album,playlist,show,episode", 0, 10)
@@ -21,7 +24,10 @@ impl SpotifyClient {
         search_type: &str,
         offset: u32,
     ) -> Result<FullSearchResults> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(FullSearchResults::empty());
         }
         self.search_internal(query, search_type, offset, 10).await

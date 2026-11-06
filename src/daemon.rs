@@ -56,17 +56,12 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     }
     info!("daemon starting");
 
-    let lastfm = match &cfg.lastfm.session_key {
-        Some(sk) => {
-            use crate::utils::lastfm::{get_api_key, get_api_secret};
-            Some(Arc::new(LastfmClient::new(
-                get_api_key(),
-                get_api_secret(),
-                sk.clone(),
-            )))
-        }
-        _ => None,
-    };
+    let lastfm_session_key =
+        crate::config::load_lastfm_session_key().or_else(|| cfg.lastfm.session_key.clone());
+    let lastfm = lastfm_session_key.map(|sk| {
+        use crate::utils::lastfm::{get_api_key, get_api_secret};
+        Arc::new(LastfmClient::new(get_api_key(), get_api_secret(), sk))
+    });
 
     let mut spotify = crate::spotify::SpotifyClient::new().await?;
     let access_token = spotify.get_access_token().await;

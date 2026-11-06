@@ -1,4 +1,4 @@
-// TODO: modularize this file (~560 lines) into smaller modules
+// TODO: modularize this file (~1042 lines) into smaller modules
 use crate::config::AppConfig;
 use crate::settings::Settings;
 use crate::utils::cache::{CacheManager, CacheStats};
@@ -434,12 +434,19 @@ impl SettingsPanel {
         frame.render_widget(Clear, footer_area);
         frame.render_widget(Paragraph::new("").style(bg), footer_area);
 
-        let footer_text = Line::from(vec![
-            Span::styled(" Arrows: Navigate ", Style::default().fg(muted_color)),
-            Span::styled(" Tab: Sections ", Style::default().fg(muted_color)),
-            Span::styled(" Enter: Select ", Style::default().fg(accent_color)),
-            Span::styled(" Esc: Close ", Style::default().fg(muted_color)),
-        ]);
+        let footer_text = if let Some(msg) = &state.status_msg {
+            Line::from(Span::styled(
+                format!(" {msg} "),
+                Style::default().fg(theme.info),
+            ))
+        } else {
+            Line::from(vec![
+                Span::styled(" Arrows: Navigate ", Style::default().fg(muted_color)),
+                Span::styled(" Tab: Sections ", Style::default().fg(muted_color)),
+                Span::styled(" Enter: Select ", Style::default().fg(accent_color)),
+                Span::styled(" Esc: Close ", Style::default().fg(muted_color)),
+            ])
+        };
 
         frame.render_widget(
             Paragraph::new(footer_text)
@@ -607,7 +614,7 @@ impl SettingsPanel {
         let lastfm_text = if state.lastfm_connected {
             "Connected"
         } else if state.lastfm_pending {
-            "Pending (Press Enter)"
+            "Pending (check browser)"
         } else {
             "Not Configured"
         };
@@ -733,6 +740,8 @@ impl SettingsPanel {
 
         let spotify_status = if state.spotify_authenticated {
             ("Connected", enabled_color)
+        } else if state.spotify_pending {
+            ("Pending", theme.warning)
         } else {
             ("Not configured", disabled_color)
         };

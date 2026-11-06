@@ -185,7 +185,12 @@ impl App {
             self.load_local_files().await;
             return false;
         }
-        if idx != 5 && !self.spotify.authenticated {
+        if idx != 5
+            && !self
+                .spotify
+                .authenticated
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg = Some(
                 "Spotify not connected - only Local Files available. Run: isi-music setup-spotify"
                     .to_string(),

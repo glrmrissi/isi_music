@@ -52,7 +52,11 @@ impl App {
             self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
             return;
         }
-        if !self.spotify.authenticated {
+        if !self
+            .spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
             return;
@@ -102,7 +106,11 @@ impl App {
             self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
             return;
         }
-        if !self.spotify.authenticated {
+        if !self
+            .spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
             return;
@@ -185,7 +193,11 @@ impl App {
             self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
             return;
         }
-        if !self.spotify.authenticated {
+        if !self
+            .spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
             return;
@@ -265,7 +277,11 @@ impl App {
             self.state.status_msg = Some("Spotify is disabled in config.toml".to_string());
             return;
         }
-        if !self.spotify.authenticated {
+        if !self
+            .spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg =
                 Some("Spotify not connected - run: isi-music setup-spotify".to_string());
             return;

@@ -205,7 +205,7 @@ impl App {
                                 }
                             }
                             8 => {
-                                self.toggle_lastfm_scrobbling().await;
+                                self.toggle_lastfm_scrobbling();
                             }
                             9 => {
                                 let v = !panel.config.autoplay_enabled();
@@ -334,7 +334,11 @@ impl App {
                     if !self.spotify_enabled {
                         self.state.status_msg =
                             Some("Spotify is disabled in config.toml".to_string());
-                    } else if self.spotify.authenticated {
+                    } else if self
+                        .spotify
+                        .authenticated
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         match self.spotify.fetch_playlists().await {
                             Ok(playlists) => {
                                 self.state.playlists = playlists;
@@ -355,12 +359,10 @@ impl App {
                     }
                 }
                 SettingsAction::SetupSpotify => {
-                    self.state.status_msg =
-                        Some("Exit isi-music and run: isi-music setup-spotify".to_string());
+                    self.toggle_spotify_auth();
                 }
                 SettingsAction::SetupLastfm => {
-                    self.state.status_msg =
-                        Some("Exit isi-music and run: isi-music setup-lastfm".to_string());
+                    self.toggle_lastfm_scrobbling();
                 }
                 SettingsAction::EditMusicDir => {
                     self.state.status_msg =

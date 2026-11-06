@@ -22,7 +22,7 @@ impl SpotifyClient {
             shuffle_state: std::sync::atomic::AtomicBool::new(false),
             is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::super::RepeatState::Off),
-            authenticated: false,
+            authenticated: std::sync::atomic::AtomicBool::new(false),
             search_cache: SearchCache::new(600, cache_enabled)?,
             library_cache: LibraryCache::new(cache_enabled).await?,
         })
@@ -54,7 +54,7 @@ impl SpotifyClient {
                         shuffle_state: std::sync::atomic::AtomicBool::new(false),
                         is_playing: std::sync::atomic::AtomicBool::new(false),
                         repeat_state: std::sync::RwLock::new(super::super::RepeatState::Off),
-                        authenticated: true,
+                        authenticated: std::sync::atomic::AtomicBool::new(true),
                         search_cache: SearchCache::new(600, cache_enabled)?,
                         library_cache: LibraryCache::new(cache_enabled).await?,
                     });
@@ -77,17 +77,37 @@ impl SpotifyClient {
             shuffle_state: std::sync::atomic::AtomicBool::new(false),
             is_playing: std::sync::atomic::AtomicBool::new(false),
             repeat_state: std::sync::RwLock::new(super::super::RepeatState::Off),
-            authenticated: true,
+            authenticated: std::sync::atomic::AtomicBool::new(true),
             search_cache: SearchCache::new(600, cache_enabled)?,
             library_cache: LibraryCache::new(cache_enabled).await?,
         })
     }
 
     pub async fn get_access_token(&self) -> Option<String> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return None;
         }
         self.token_manager.get_access_token().await
+    }
+
+    /// Adopts a token set obtained from an in-app OAuth flow so the client
+    /// serves Web API calls without a restart. `client_id` is stored so the
+    /// refresh flow keeps working (an unauthenticated client had none).
+    pub fn adopt_token(
+        &self,
+        client_id: &str,
+        access_token: &str,
+        refresh_token: &str,
+        expires_in_secs: u64,
+    ) {
+        self.token_manager.set_client_id(client_id);
+        self.token_manager
+            .set_token(access_token, Some(refresh_token), expires_in_secs);
+        self.authenticated
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     async fn exchange_refresh_token(
