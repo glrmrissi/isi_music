@@ -7,7 +7,10 @@ use crate::ui::PlaybackState;
 
 impl SpotifyClient {
     pub async fn play_track_uri(&self, track_uri: &str) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
         let token = self
@@ -34,7 +37,10 @@ impl SpotifyClient {
     }
 
     pub async fn play_in_context(&self, playlist_uri: &str, track_uri: &str) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
         let token = self
@@ -64,7 +70,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_playback(&self) -> Result<PlaybackState> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(PlaybackState::default());
         }
         let token = match self.get_access_token().await {
@@ -207,7 +216,10 @@ impl SpotifyClient {
     }
 
     pub async fn toggle_playback(&self) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
         let token = self
@@ -238,7 +250,10 @@ impl SpotifyClient {
     }
 
     pub async fn next_track(&self) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
         let token = self
@@ -264,7 +279,10 @@ impl SpotifyClient {
     }
 
     pub async fn prev_track(&self) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
         let token = self
@@ -290,7 +308,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_devices(&self) -> Result<Vec<Device>> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(Vec::new());
         }
         let token = self
@@ -330,7 +351,10 @@ impl SpotifyClient {
     }
 
     pub async fn transfer_playback(&self, device_id: &str) -> Result<()> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             anyhow::bail!("not authenticated");
         }
         let token = self

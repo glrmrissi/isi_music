@@ -177,7 +177,8 @@ impl CacheManager {
                     warn!("Failed to clear search cache: {e}");
                     0
                 });
-        });
+        })
+        .await?;
 
         info!("Search cache cleared");
         Ok(())
@@ -193,7 +194,8 @@ impl CacheManager {
                     warn!("Failed to clear library cache: {e}");
                     0
                 });
-        });
+        })
+        .await?;
 
         info!("Library cache cleared");
         Ok(())
@@ -209,7 +211,8 @@ impl CacheManager {
                     warn!("Failed to clear lyrics cache: {e}");
                     0
                 });
-        });
+        })
+        .await?;
 
         info!("Lyrics cache cleared");
         Ok(())

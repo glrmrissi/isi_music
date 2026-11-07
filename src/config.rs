@@ -392,21 +392,25 @@ fn load_credential(name: &str) -> Option<String> {
     load_credential_in(&dir, legacy_token_dir().as_deref(), name)
 }
 
-fn save_credential_in(dir: &Path, legacy_dir: Option<&Path>, name: &str, value: &str) {
+fn save_credential_in(dir: &Path, legacy_dir: Option<&Path>, name: &str, value: &str) -> bool {
     let path = dir.join(name);
     if let Err(e) = write_atomic_private(&path, value) {
         tracing::warn!("failed to persist {name} to {}: {e}", path.display());
-        return;
+        return false;
     }
     if let Some(legacy_dir) = legacy_dir {
         let _ = std::fs::remove_file(legacy_dir.join(name));
     }
+    true
 }
 
-fn save_credential(name: &str, value: &str) {
+fn save_credential(name: &str, value: &str) -> bool {
     match credentials_dir() {
         Ok(dir) => save_credential_in(&dir, legacy_token_dir().as_deref(), name, value),
-        Err(e) => tracing::warn!("cannot resolve credentials dir, {name} not saved: {e:#}"),
+        Err(e) => {
+            tracing::warn!("cannot resolve credentials dir, {name} not saved: {e:#}");
+            false
+        }
     }
 }
 
@@ -428,8 +432,8 @@ fn clear_credential(name: &str) {
     }
 }
 
-pub fn save_refresh_token(rt: &str) {
-    save_credential("refresh_token", rt);
+pub fn save_refresh_token(rt: &str) -> bool {
+    save_credential("refresh_token", rt)
 }
 
 pub fn load_refresh_token() -> Option<String> {
@@ -440,8 +444,8 @@ pub fn clear_refresh_token() {
     clear_credential("refresh_token");
 }
 
-pub fn save_streaming_refresh_token(rt: &str) {
-    save_credential("streaming_refresh_token", rt);
+pub fn save_streaming_refresh_token(rt: &str) -> bool {
+    save_credential("streaming_refresh_token", rt)
 }
 
 pub fn load_streaming_refresh_token() -> Option<String> {
@@ -450,6 +454,23 @@ pub fn load_streaming_refresh_token() -> Option<String> {
 
 pub fn clear_streaming_refresh_token() {
     clear_credential("streaming_refresh_token");
+}
+
+/// Last.fm session key: LASTFM_SESSION_KEY env var > credential store (0600).
+/// The legacy config.toml `[lastfm] session_key` is migrated by callers.
+pub fn load_lastfm_session_key() -> Option<String> {
+    std::env::var("LASTFM_SESSION_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| load_credential("lastfm_session_key"))
+}
+
+pub fn save_lastfm_session_key(session_key: &str) -> bool {
+    save_credential("lastfm_session_key", session_key)
+}
+
+pub fn clear_lastfm_session_key() {
+    clear_credential("lastfm_session_key");
 }
 
 pub fn get_local_db_path() -> String {

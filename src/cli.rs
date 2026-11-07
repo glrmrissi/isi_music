@@ -74,10 +74,16 @@ pub(crate) async fn run_lastfm_setup(cfg: &mut crate::config::AppConfig) -> Resu
 
     match crate::utils::lastfm::LastfmClient::authenticate_with_default().await {
         Ok(session_key) => {
-            cfg.lastfm.session_key = Some(session_key);
-            cfg.save()?;
-            println!("Last.fm authentication successful!");
-            println!("Last.fm scrobbling enabled!");
+            if crate::config::save_lastfm_session_key(&session_key) {
+                if cfg.lastfm.session_key.is_some() {
+                    cfg.lastfm.session_key = None;
+                }
+                cfg.save()?;
+                println!("Last.fm authentication successful!");
+                println!("Last.fm scrobbling enabled!");
+            } else {
+                println!("Authenticated, but the session key could not be saved to disk.");
+            }
             println!();
         }
         Err(e) => {

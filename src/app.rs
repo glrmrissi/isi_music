@@ -1,4 +1,4 @@
-// TODO: modularize this file (~970 lines) into smaller modules
+// TODO: modularize this file (~1171 lines) into smaller modules
 pub mod fetcher;
 pub mod handlers;
 pub mod integrations;
@@ -99,17 +99,26 @@ impl App {
         let autoplay_enabled = cfg.autoplay_enabled();
         let spotify_enabled = cfg.spotify_enabled();
         let enable_lyrics = cfg.enable_lyrics();
-        let lastfm = match &cfg.lastfm.session_key {
-            Some(sk) => {
-                use crate::utils::lastfm::{get_api_key, get_api_secret};
-                Some(Arc::new(LastfmClient::new(
-                    get_api_key(),
-                    get_api_secret(),
-                    sk.clone(),
-                )))
+        // Migrate a legacy session_key from config.toml into the credential
+        // store (0600). The plaintext copy is only removed once the write is
+        // confirmed; if it fails, the key stays usable in config.toml and the
+        // migration is retried on the next start.
+        let lastfm_session_key =
+            crate::config::load_lastfm_session_key().or_else(|| cfg.lastfm.session_key.clone());
+        if let Some(sk) = cfg.lastfm.session_key.clone()
+            && crate::config::save_lastfm_session_key(&sk)
+        {
+            if let Ok(mut guard) = settings.lock() {
+                guard.config.lastfm.session_key = None;
             }
-            _ => None,
-        };
+            let mut persisted = cfg.clone();
+            persisted.lastfm.session_key = None;
+            let _ = persisted.save();
+        }
+        let lastfm = lastfm_session_key.map(|sk| {
+            use crate::utils::lastfm::{get_api_key, get_api_secret};
+            Arc::new(LastfmClient::new(get_api_key(), get_api_secret(), sk))
+        });
 
         let debug_overlay = Arc::new(DebugOverlay::new());
 
@@ -158,7 +167,10 @@ impl App {
         let spotify = Arc::new(spotify);
 
         if spotify_enabled
-            && (spotify.authenticated || crate::config::load_streaming_refresh_token().is_some())
+            && (spotify
+                .authenticated
+                .load(std::sync::atomic::Ordering::Relaxed)
+                || crate::config::load_streaming_refresh_token().is_some())
             && crate::player::ensure_streaming_auth().await.is_err()
         {
             let warning = "Spotify streaming authentication failed. Local playback remains available; run `isi-music setup-spotify` to retry.".to_string();
@@ -184,7 +196,9 @@ impl App {
         state.reactive_theme_enabled = theme.reactive_theme;
         state.show_ascii_art = theme.show_ascii_art;
         state.first_run = std::env::var("ISI_MUSIC_FIRST_RUN").is_ok();
-        state.spotify_authenticated = spotify.authenticated;
+        state.spotify_authenticated = spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed);
         state.spotify_enabled = spotify_enabled;
         state.library_items = crate::ui::library_items(spotify_enabled);
 
@@ -193,7 +207,11 @@ impl App {
         }
 
         let mut initial_stream_rx = None;
-        if spotify_enabled && spotify.authenticated {
+        if spotify_enabled
+            && spotify
+                .authenticated
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             initial_stream_rx = Some(rx);
             let spotify_clone = Arc::clone(&spotify);
@@ -389,7 +407,9 @@ impl App {
             state.compact_mode = cfg.compact_mode_default();
         }
 
-        if spotify.authenticated
+        if spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
             && let Ok(playlists) = spotify.fetch_playlists().await
         {
             state.playlists = playlists;
@@ -529,6 +549,19 @@ impl App {
             }
 
             self.poll_local_scan();
+            self.integrations.poll_lastfm(&mut self.state);
+            let web_api_connected = self
+                .integrations
+                .poll_spotify_auth(&mut self.state, &self.spotify);
+            if self.spotify_enabled && web_api_connected {
+                self.fetcher.cancel_all_pending(&mut self.state);
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.fetcher.stream_rx = Some(rx);
+                let spotify = Arc::clone(&self.spotify);
+                tokio::spawn(async move {
+                    let _ = spotify.stream_playlists(tx).await;
+                });
+            }
             {
                 let (redraw, reconnect) = self
                     .fetcher
@@ -879,7 +912,11 @@ impl App {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
-                            } else if self.spotify.authenticated {
+                            } else if self
+                                .spotify
+                                .authenticated
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                            {
                                 self.remote_next_track(player_error).await;
                             }
                         }
@@ -896,7 +933,11 @@ impl App {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
-                            } else if self.spotify.authenticated {
+                            } else if self
+                                .spotify
+                                .authenticated
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                            {
                                 self.remote_prev_track(player_error).await;
                             }
                         }
@@ -941,7 +982,11 @@ impl App {
                                         p.play();
                                     }
                                     self.state.playback.is_playing = true;
-                                } else if self.spotify.authenticated {
+                                } else if self
+                                    .spotify
+                                    .authenticated
+                                    .load(std::sync::atomic::Ordering::Relaxed)
+                                {
                                     self.remote_toggle_playback(player_error).await;
                                 }
                             }
@@ -959,7 +1004,11 @@ impl App {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
-                            } else if self.spotify.authenticated {
+                            } else if self
+                                .spotify
+                                .authenticated
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                            {
                                 self.remote_next_track(player_error).await;
                             }
                         }
@@ -976,7 +1025,11 @@ impl App {
                                     self.sync_track_selection();
                                     self.sync_queue_display();
                                 }
-                            } else if self.spotify.authenticated {
+                            } else if self
+                                .spotify
+                                .authenticated
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                            {
                                 self.remote_prev_track(player_error).await;
                             }
                         }
@@ -1165,7 +1218,11 @@ impl App {
         Ok(())
     }
 
-    pub async fn toggle_lastfm_scrobbling(&mut self) {
-        self.integrations.toggle_lastfm(&mut self.state).await;
+    pub fn toggle_lastfm_scrobbling(&mut self) {
+        self.integrations.toggle_lastfm(&mut self.state);
+    }
+
+    pub fn toggle_spotify_auth(&mut self) {
+        self.integrations.toggle_spotify_auth(&mut self.state);
     }
 }

@@ -263,7 +263,11 @@ impl App {
                                 self.current_track_uri = track.uri.clone();
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
+                        } else if self
+                            .spotify
+                            .authenticated
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             let track_uri = self.state.tracks[actual_idx].uri.clone();
                             let context_uri =
                                 self.state.active_playlist_uri.as_deref().and_then(|u| {

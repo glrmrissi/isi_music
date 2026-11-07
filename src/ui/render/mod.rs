@@ -21,6 +21,18 @@ use super::{Focus, LocalNode, PlaybackState, SearchPanel, Ui, UiState};
 pub(super) fn clamp_text(text: &str, max_width: usize) -> Cow<'_, str> {
     if text.width() <= max_width {
         Cow::Borrowed(text)
+    } else if max_width <= 3 {
+        let mut result = String::new();
+        let mut w = 0;
+        for ch in text.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+            if w + cw > max_width {
+                break;
+            }
+            result.push(ch);
+            w += cw;
+        }
+        Cow::Owned(result)
     } else {
         let mut result = String::new();
         let mut w = 0;

@@ -320,7 +320,11 @@ impl App {
             return;
         }
 
-        if !self.spotify.authenticated {
+        if !self
+            .spotify
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return;
         }
 

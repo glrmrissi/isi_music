@@ -95,7 +95,7 @@ pub struct SpotifyClient {
     pub(super) shuffle_state: std::sync::atomic::AtomicBool,
     pub(super) is_playing: std::sync::atomic::AtomicBool,
     pub(super) repeat_state: std::sync::RwLock<super::RepeatState>,
-    pub authenticated: bool,
+    pub authenticated: std::sync::atomic::AtomicBool,
     pub(super) search_cache: SearchCache,
     pub library_cache: LibraryCache,
 }
@@ -106,7 +106,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_track_art_url(&self, track_uri: &str) -> Option<String> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return None;
         }
         let track_id = track_uri.strip_prefix("spotify:track:")?;
@@ -129,7 +132,10 @@ impl SpotifyClient {
     }
 
     pub async fn fetch_track_summary(&self, track_id: &str) -> Result<TrackSummary> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             anyhow::bail!("Not authenticated");
         }
         let token = self

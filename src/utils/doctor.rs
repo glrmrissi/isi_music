@@ -82,6 +82,8 @@ pub async fn run() -> anyhow::Result<()> {
         check_lastfm(),
     ];
 
+    results.push(check_lastfm_api().await);
+
     #[cfg(target_os = "linux")]
     {
         results.push(check_audio_deps_linux());
@@ -149,10 +151,12 @@ fn check_config() -> CheckResult {
             }
             match config::AppConfig::load() {
                 Ok(cfg) => {
+                    let lastfm_set = config::load_lastfm_session_key().is_some()
+                        || cfg.lastfm.session_key.is_some();
                     let sections: Vec<&str> = [
                         Some("spotify"),
                         cfg.local.music_dir.is_some().then_some("local"),
-                        cfg.lastfm.session_key.is_some().then_some("lastfm"),
+                        lastfm_set.then_some("lastfm"),
                         cfg.discord.enabled.unwrap_or(false).then_some("discord"),
                     ]
                     .into_iter()
@@ -252,17 +256,32 @@ fn check_local_music_dir() -> CheckResult {
 fn check_lastfm() -> CheckResult {
     match config::AppConfig::load() {
         Ok(cfg) => {
-            if cfg.lastfm.session_key.is_some() {
+            if config::load_lastfm_session_key().is_some() || cfg.lastfm.session_key.is_some() {
                 CheckResult::ok("Last.fm", "scrobbling enabled")
             } else {
                 CheckResult::warn(
                     "Last.fm",
                     "not configured (optional)",
-                    "Run: isi-music setup-lastfm to enable scrobbling",
+                    "Run: isi-music setup-lastfm or enable it in the TUI options",
                 )
             }
         }
         Err(_) => CheckResult::warn("Last.fm", "could not load config", "Run: isi-music setup"),
+    }
+}
+
+/// Live check: probes auth.getToken once (short timeout, no retries) so a
+/// revoked/expired API key is caught without hanging doctor when offline.
+async fn check_lastfm_api() -> CheckResult {
+    use crate::utils::lastfm::{LastfmClient, get_api_key};
+
+    match LastfmClient::validate_api_key(&get_api_key()).await {
+        Ok(()) => CheckResult::ok("Last.fm API key", "valid (auth.getToken succeeded)"),
+        Err(e) => CheckResult::fail(
+            "Last.fm API key",
+            &format!("{e}"),
+            "The compiled-in key is invalid/expired. Create a new app at https://www.last.fm/api/account/create and set LASTFM_API_KEY + LASTFM_API_SECRET in ~/.config/isi-music/.env",
+        ),
     }
 }
 

@@ -51,7 +51,7 @@ fn default_fullscreen_layout_structure() {
     assert_eq!(constraints.len(), 3);
     assert_eq!(constraints[0], SerializableConstraint::Length(18));
     assert_eq!(constraints[1], SerializableConstraint::Min(0));
-    assert_eq!(constraints[2], SerializableConstraint::Length(12));
+    assert_eq!(constraints[2], SerializableConstraint::Length(30));
 
     let children = layout.children.as_ref().unwrap();
     assert_eq!(children.len(), 3);

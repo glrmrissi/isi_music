@@ -795,7 +795,9 @@ async fn dispatch_seek_forward_and_backward() {
 async fn liked_songs_claims_context_when_reentered_from_artist() {
     let mut app = App::new_for_test().await;
     if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
-        spotify.authenticated = true;
+        spotify
+            .authenticated
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     app.spotify_enabled = true;
     app.state.spotify_enabled = true;
@@ -819,7 +821,9 @@ async fn liked_songs_claims_context_when_reentered_from_artist() {
 async fn spotify_search_submit_clears_stale_playlist_context() {
     let mut app = App::new_for_test().await;
     if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
-        spotify.authenticated = true;
+        spotify
+            .authenticated
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     app.spotify_enabled = true;
     app.state.spotify_enabled = true;
@@ -870,7 +874,9 @@ fn episode_track(id: &str, name: &str) -> TrackSummary {
 async fn library_item_podcasts_streams_saved_shows() {
     let mut app = App::new_for_test().await;
     if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
-        spotify.authenticated = true;
+        spotify
+            .authenticated
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     app.spotify_enabled = true;
     app.state.spotify_enabled = true;
@@ -1005,7 +1011,9 @@ async fn enter_on_episode_track_queues_all_tracks() {
 async fn library_item_your_episodes_streams_saved_episodes() {
     let mut app = App::new_for_test().await;
     if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
-        spotify.authenticated = true;
+        spotify
+            .authenticated
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     app.spotify_enabled = true;
     app.state.spotify_enabled = true;
@@ -1236,7 +1244,9 @@ async fn maybe_load_more_podcasts_fetches_when_items_remain() {
 
     let mut app = App::new_for_test().await;
     if let Some(spotify) = Arc::get_mut(&mut app.spotify) {
-        spotify.authenticated = true;
+        spotify
+            .authenticated
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     app.spotify_enabled = true;
     app.state.spotify_enabled = true;

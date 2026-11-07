@@ -10,7 +10,10 @@ impl SpotifyClient {
         seed_uris: &[String],
         limit: u8,
     ) -> Result<Vec<TrackSummary>> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(Vec::new());
         }
 
@@ -153,7 +156,10 @@ impl SpotifyClient {
         seed_uris: &[String],
         limit: u8,
     ) -> Result<Vec<TrackSummary>> {
-        if !self.authenticated {
+        if !self
+            .authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(Vec::new());
         }
         let token = self

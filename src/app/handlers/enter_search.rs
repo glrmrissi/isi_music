@@ -57,7 +57,11 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
+                        } else if self
+                            .spotify
+                            .authenticated
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             match self.spotify.play_track_uri(&track_uri).await {
                                 Ok(()) if !player_ready => {
                                     self.state.status_msg = Some(
@@ -84,7 +88,6 @@ impl App {
                     .map(|a| (a.id.clone(), a.name.clone(), a.uri.clone()));
                 if let Some((id, name, uri)) = album {
                     self.state.status_msg = Some(format!("Loading {name}…"));
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                     match self.spotify.fetch_album_tracks(&id, 0).await {
                         Ok((tracks, total)) => {
                             self.state.push_nav();
@@ -129,10 +132,13 @@ impl App {
                     .map(|p| (p.id.clone(), p.name.clone(), p.uri.clone()));
                 if let Some((id, name, uri)) = playlist {
                     self.state.status_msg = Some(format!("Loading {name}…"));
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                     let web_result = self.spotify.fetch_playlist_tracks(&id, 0).await;
                     let loaded = match web_result {
                         Ok((t, total, pi)) if !t.is_empty() => Some((t, total, pi)),
+                        Ok((_, 0, _)) => {
+                            self.state.status_msg = Some("Playlist is empty".to_string());
+                            None
+                        }
                         Err(e) => {
                             let err_str = e.to_string();
                             if err_str.contains("SPOTIFY_UNAUTHORIZED") || err_str.contains("401") {
@@ -229,7 +235,11 @@ impl App {
                                     }];
                                 self.on_track_started();
                             }
-                        } else if self.spotify.authenticated {
+                        } else if self
+                            .spotify
+                            .authenticated
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             match self.spotify.play_track_uri(&episode_uri).await {
                                 Ok(()) if !player_ready => {
                                     self.state.status_msg = Some(
@@ -257,7 +267,6 @@ impl App {
                     .map(|a| (a.id.clone(), a.name.clone()));
                 if let Some((id, name)) = artist {
                     self.state.status_msg = Some(format!("Loading top tracks for {name}…"));
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                     match self.spotify.fetch_artist_tracks(&name, 0).await {
                         Ok((tracks, total)) => {
                             self.state.push_nav();

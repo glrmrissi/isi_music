@@ -7,12 +7,21 @@ use tracing::{info, warn};
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
+/// API credentials: runtime env vars (loaded from ~/.config/isi-music/.env at
+/// startup) take precedence over the secrets compiled in at build time. This
+/// lets a revoked/expired key be replaced without rebuilding the binary.
 pub fn get_api_key() -> String {
-    reveal_secret(LASTFM_API_KEY)
+    std::env::var("LASTFM_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| reveal_secret(LASTFM_API_KEY))
 }
 
 pub fn get_api_secret() -> String {
-    reveal_secret(LASTFM_API_SECRET)
+    std::env::var("LASTFM_API_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| reveal_secret(LASTFM_API_SECRET))
 }
 
 #[derive(Clone)]
@@ -21,6 +30,45 @@ pub struct LastfmClient {
     api_secret: String,
     session_key: String,
     http: Client,
+}
+
+#[derive(Debug)]
+pub enum SessionError {
+    /// Last.fm error 14: the token is valid but the user has not authorized
+    /// it in the browser yet. Retryable while the auth flow is pending.
+    UnauthorizedToken,
+    /// Transport errors, timeouts and non-API HTTP failures: retryable
+    /// within the authorization window, like an unauthorized token.
+    Transient(anyhow::Error),
+    /// Deterministic Last.fm API errors: retrying cannot help.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnauthorizedToken => write!(f, "Last.fm token not yet authorized"),
+            Self::Transient(e) | Self::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {}
+
+#[derive(Deserialize)]
+struct ApiErrorBody {
+    error: i64,
+    message: String,
+}
+
+fn api_error(text: &str) -> Option<ApiErrorBody> {
+    serde_json::from_str::<ApiErrorBody>(text)
+        .ok()
+        .filter(|e| e.error != 0)
+}
+
+pub fn auth_url(api_key: &str, token: &str) -> String {
+    format!("https://www.last.fm/api/auth/?api_key={api_key}&token={token}")
 }
 
 impl LastfmClient {
@@ -71,11 +119,23 @@ impl LastfmClient {
                     ])
                     .send()
                     .await?;
-                resp.json::<TokenResp>().await
+                resp.text().await
             })
             .await;
             match result {
-                Ok(Ok(resp)) => return Ok(resp.token),
+                Ok(Ok(text)) => {
+                    if let Some(err) = api_error(&text) {
+                        return Err(anyhow::anyhow!(
+                            "Last.fm error {}: {}",
+                            err.error,
+                            err.message
+                        ));
+                    }
+                    match serde_json::from_str::<TokenResp>(&text) {
+                        Ok(resp) => return Ok(resp.token),
+                        Err(e) => last_err = Some(e.into()),
+                    }
+                }
                 Ok(Err(e)) => last_err = Some(e.into()),
                 Err(_) => last_err = Some(anyhow::anyhow!("Last.fm auth token request timed out")),
             }
@@ -86,7 +146,11 @@ impl LastfmClient {
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Last.fm auth token failed")))
     }
 
-    pub async fn get_session(api_key: &str, api_secret: &str, token: &str) -> Result<String> {
+    pub async fn get_session(
+        api_key: &str,
+        api_secret: &str,
+        token: &str,
+    ) -> std::result::Result<String, SessionError> {
         let mut params: BTreeMap<&str, String> = BTreeMap::new();
         params.insert("api_key", api_key.to_string());
         params.insert("method", "auth.getSession".to_string());
@@ -98,7 +162,8 @@ impl LastfmClient {
 
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            .build()?;
+            .build()
+            .map_err(|e| SessionError::Other(e.into()))?;
 
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 0..3u32 {
@@ -111,6 +176,7 @@ impl LastfmClient {
             .await;
             match result {
                 Ok(Ok(resp)) => {
+                    let status = resp.status();
                     let text = match resp.text().await {
                         Ok(t) => t,
                         Err(e) => {
@@ -124,8 +190,29 @@ impl LastfmClient {
                             continue;
                         }
                     };
-                    if text.contains("\"error\":") {
-                        return Err(anyhow::anyhow!("Last.fm API returned error"));
+                    if let Some(err) = api_error(&text) {
+                        // 14 = "Unauthorized token": valid token, user has not
+                        // approved it yet. Deterministic — do not retry here.
+                        return Err(if err.error == 14 {
+                            SessionError::UnauthorizedToken
+                        } else {
+                            SessionError::Other(anyhow::anyhow!(
+                                "Last.fm error {}: {}",
+                                err.error,
+                                err.message
+                            ))
+                        });
+                    }
+                    if !status.is_success() {
+                        // A 5xx page without an API error body is a blip, not
+                        // a verdict: retry within the request and keep the
+                        // outer auth poll alive via `Transient`.
+                        last_err = Some(anyhow::anyhow!("Last.fm HTTP {status}"));
+                        if attempt < 2 {
+                            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt)))
+                                .await;
+                        }
+                        continue;
                     }
                     #[derive(Deserialize)]
                     struct SessionResp {
@@ -136,7 +223,8 @@ impl LastfmClient {
                         key: String,
                     }
                     let session_resp: SessionResp = serde_json::from_str(&text)
-                        .with_context(|| "Failed to parse Last.fm session response")?;
+                        .with_context(|| "Failed to parse Last.fm session response")
+                        .map_err(SessionError::Other)?;
                     return Ok(session_resp.session.key);
                 }
                 Ok(Err(e)) => last_err = Some(e.into()),
@@ -146,17 +234,43 @@ impl LastfmClient {
                 tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Last.fm session failed")))
+        Err(SessionError::Transient(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("Last.fm session failed")
+        })))
+    }
+
+    /// Single-shot key probe for diagnostics (doctor): one request, short
+    /// timeout, no retries. Distinguishes a rejected/expired key (Last.fm
+    /// API error body) from plain network failure.
+    pub async fn validate_api_key(api_key: &str) -> Result<()> {
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()?;
+        let text = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            http.get("https://ws.audioscrobbler.com/2.0/")
+                .query(&[
+                    ("method", "auth.getToken"),
+                    ("api_key", api_key),
+                    ("format", "json"),
+                ])
+                .send()
+                .await?
+                .text()
+                .await
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("Last.fm API probe timed out"))??;
+        if let Some(err) = api_error(&text) {
+            anyhow::bail!("Last.fm error {}: {}", err.error, err.message);
+        }
+        Ok(())
     }
 
     pub async fn authenticate_with_browser(api_key: &str, api_secret: &str) -> Result<String> {
         println!("Getting auth token from Last.fm...");
         let token = Self::get_auth_token(api_key).await?;
 
-        let auth_url = format!(
-            "https://www.last.fm/api/auth/?api_key={}&token={}",
-            api_key, token
-        );
+        let auth_url = auth_url(api_key, &token);
 
         Self::open_browser(&auth_url);
 
@@ -270,8 +384,8 @@ impl LastfmClient {
                         return Err(format!("Last.fm HTTP {}", resp.status().as_u16()));
                     }
                     let text = resp.text().await.unwrap_or_default();
-                    if text.contains("\"error\":") {
-                        return Err("Last.fm API error response".to_string());
+                    if let Some(err) = api_error(&text) {
+                        return Err(format!("Last.fm error {}: {}", err.error, err.message));
                     }
                     return Ok(());
                 }

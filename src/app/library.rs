@@ -23,7 +23,13 @@ fn scan_local_files_with_cancel(
     }
     let extensions = AUDIO_EXTENSIONS;
     let db_path = crate::config::get_local_db_path();
-    let conn = rusqlite::Connection::open(&db_path).ok();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!("local scan cache disabled, cannot open {db_path}: {e}");
+            None
+        }
+    };
     if let Some(ref c) = conn {
         let _ = c.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=1000;",
@@ -185,7 +191,12 @@ impl App {
             self.load_local_files().await;
             return false;
         }
-        if idx != 5 && !self.spotify.authenticated {
+        if idx != 5
+            && !self
+                .spotify
+                .authenticated
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             self.state.status_msg = Some(
                 "Spotify not connected - only Local Files available. Run: isi-music setup-spotify"
                     .to_string(),

@@ -31,7 +31,11 @@ impl App {
                         }
                         self.state.playback.is_playing = true;
                         self.state.status_msg = None;
-                    } else if self.spotify.authenticated {
+                    } else if self
+                        .spotify
+                        .authenticated
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         self.remote_toggle_playback(player_error).await;
                     } else if self.state.status_msg.is_none() {
                         self.state.status_msg = Some("No audio player available".to_string());
@@ -49,7 +53,11 @@ impl App {
                         self.sync_track_selection();
                         self.sync_queue_display();
                     }
-                } else if self.spotify.authenticated {
+                } else if self
+                    .spotify
+                    .authenticated
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     self.remote_next_track(player_error).await;
                 } else if self.state.status_msg.is_none() {
                     self.state.status_msg = Some("No audio player available".to_string());
@@ -66,7 +74,11 @@ impl App {
                         self.sync_track_selection();
                         self.sync_queue_display();
                     }
-                } else if self.spotify.authenticated {
+                } else if self
+                    .spotify
+                    .authenticated
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     self.remote_prev_track(player_error).await;
                 } else if self.state.status_msg.is_none() {
                     self.state.status_msg = Some("No audio player available".to_string());
@@ -514,7 +526,11 @@ impl App {
                     if !self.spotify_enabled {
                         self.state.status_msg =
                             Some("Spotify is disabled in config.toml".to_string());
-                    } else if !self.spotify.authenticated {
+                    } else if !self
+                        .spotify
+                        .authenticated
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         self.state.status_msg = Some(
                             "Spotify not connected - run: isi-music setup-spotify".to_string(),
                         );
