@@ -738,10 +738,17 @@ impl SettingsPanel {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let spotify_status = if state.spotify_authenticated {
+        let spotify_status = if state.spotify_pending {
+            (
+                if state.spotify_authenticated {
+                    "Re-authorizing..."
+                } else {
+                    "Pending"
+                },
+                theme.warning,
+            )
+        } else if state.spotify_authenticated {
             ("Connected", enabled_color)
-        } else if state.spotify_pending {
-            ("Pending", theme.warning)
         } else {
             ("Not configured", disabled_color)
         };
